@@ -10,8 +10,9 @@ import (
 // GenerateID returns an ID with format: 'prefix/<random-4-bytes-hex>'.
 func GenerateID(prefix string) string {
 	idBuf := make([]byte, 4)
-	rand.Read(idBuf)
-
+	if _, err := rand.Read(idBuf); err != nil {
+		panic(err)
+	}
 	return sanitizePrefix(prefix) + "-" + hex.EncodeToString(idBuf)
 }
 

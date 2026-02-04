@@ -6,15 +6,59 @@ import (
 	"sync"
 	"time"
 
-	"whatever/domains/provider"
-	"whatever/domains/strategy"
-	"whatever/types"
-	"whatever/utils/logger"
-	"whatever/utils/pipeline"
-	"whatever/utils/timing"
+	"whatever/internal/idgen"
+	"whatever/internal/logger"
+	"whatever/internal/pipeline"
+	proto "whatever/internal/protocol"
+	reg "whatever/internal/registry"
+	"whatever/internal/timing"
 )
 
 const SignalLoggerID = "signal_logger"
+
+func init() {
+	reg.Engines.Register(SignalLoggerID, func(opts map[string]any) (reg.Runnable, error) {
+		id := idgen.GenerateID(SignalLoggerID)
+		log := logger.NewLogger(logger.DefaultLoggerConfig()).
+			With("domain", "core").
+			With("engine", id)
+
+		prov, ok := opts["_provider"].(proto.DataProvider)
+		if !ok {
+			return nil, fmt.Errorf("missing or invalid _provider")
+		}
+
+		strats, ok := opts["_strategies"].([]proto.Strategy)
+		if !ok {
+			return nil, fmt.Errorf("missing or invalid _strategies")
+		}
+
+		cfg, err := parseSignalLoggerConfig(opts)
+		if err != nil {
+			return nil, err
+		}
+
+		var ticker timing.Ticker[proto.MarketData]
+		switch cfg.Ticker.Type {
+		case FixedInterval:
+			ticker = timing.FixedInterval[proto.MarketData](cfg.Ticker.TickInterval)
+		case Realtime:
+			ticker = timing.Realtime[proto.MarketData]()
+		default:
+			ticker = timing.Realtime[proto.MarketData]()
+		}
+
+		return &SignalLogger{
+			id:         id,
+			provider:   prov,
+			strategies: strats,
+			ticker:     ticker,
+			logger:     log,
+			cfg:        cfg,
+			done:       make(chan struct{}),
+		}, nil
+	})
+}
 
 func parseSignalLoggerConfig(opts map[string]any) (SignalLoggerConfig, error) {
 	cfg := SignalLoggerConfig{}
@@ -22,9 +66,9 @@ func parseSignalLoggerConfig(opts map[string]any) (SignalLoggerConfig, error) {
 	if sub, ok := opts["subscription"].(map[string]any); ok {
 		symbol, _ := sub["symbol"].(string)
 		timeframe, _ := sub["timeframe"].(string)
-		cfg.Subscription = types.Subscription{
+		cfg.Subscription = proto.Subscription{
 			Symbol:    symbol,
-			Timeframe: types.Timeframe(timeframe),
+			Timeframe: proto.Timeframe(timeframe),
 		}
 	}
 
@@ -57,9 +101,9 @@ func parseSignalLoggerConfig(opts map[string]any) (SignalLoggerConfig, error) {
 
 type SignalLogger struct {
 	id         string
-	provider   provider.DataProvider
-	strategies []strategy.Strategy
-	ticker     timing.Ticker[types.MarketData]
+	provider   proto.DataProvider
+	strategies []proto.Strategy
+	ticker     timing.Ticker[proto.MarketData]
 	logger     *logger.Logger
 	cfg        SignalLoggerConfig
 
@@ -68,7 +112,7 @@ type SignalLogger struct {
 }
 
 type SignalLoggerConfig struct {
-	Subscription types.Subscription
+	Subscription proto.Subscription
 	Limit        int // 0 = unlimited
 	Ticker       TickerConfig
 	BufferSize   int
@@ -80,10 +124,10 @@ func (e *SignalLogger) Run(ctx context.Context) error {
 	}
 	data, dataErrs := e.provider.Streams()
 	// gate data through ticker
-	gatedData := e.ticker.Gate(data)
+	gatedData := e.ticker.Gate(ctx, data)
 
 	// init strats
-	signals := make([]<-chan types.Signal, len(e.strategies))
+	signals := make([]<-chan proto.Signal, len(e.strategies))
 	stratErrs := make([]<-chan error, len(e.strategies))
 	for i, strategy := range e.strategies {
 		if err := strategy.Init(gatedData); err != nil {

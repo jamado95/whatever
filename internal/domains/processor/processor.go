@@ -2,14 +2,14 @@ package processor
 
 import (
 	"fmt"
-	"whatever/types"
+	proto "whatever/internal/protocol"
 )
 
 type Chain struct {
-	processors []Processor
+	processors []proto.Processor
 }
 
-func NewChain(processors []Processor) (*Chain, error) {
+func NewChain(processors []proto.Processor) (*Chain, error) {
 	sorted, err := topologicalSort(processors)
 	if err != nil {
 		return nil, err
@@ -17,22 +17,22 @@ func NewChain(processors []Processor) (*Chain, error) {
 	return &Chain{processors: sorted}, nil
 }
 
-func (c *Chain) Process(in <-chan types.MarketData) <-chan EnrichedMarketData {
-	out := make(chan EnrichedMarketData)
+func (c *Chain) Process(in <-chan proto.MarketData) <-chan proto.EnrichedMarketData {
+	out := make(chan proto.EnrichedMarketData)
 
 	go func() {
 		defer close(out)
 
 		for candle := range in {
-			snap := NewSnapshot()
+			snap := proto.Snapshot{}
 
 			for _, proc := range c.processors {
-				proc.Update(candle, snap)
+				proc.Update(candle, &snap)
 			}
 
-			out <- EnrichedMarketData{
+			out <- proto.EnrichedMarketData{
 				MarketData: candle,
-				Indicators: snap,
+				Indicators: &snap,
 			}
 		}
 	}()
@@ -40,16 +40,16 @@ func (c *Chain) Process(in <-chan types.MarketData) <-chan EnrichedMarketData {
 	return out
 }
 
-func (c *Chain) AvailableKeys() []KeyRef {
-	keys := make([]KeyRef, len(c.processors))
+func (c *Chain) AvailableKeys() []proto.KeyRef {
+	keys := make([]proto.KeyRef, len(c.processors))
 	for i, proc := range c.processors {
-		keys[i] = KeyRef{Name: proc.ID()}
+		keys[i] = proto.KeyRef{Name: proc.ID()}
 	}
 	return keys
 }
 
-func topologicalSort(processors []Processor) ([]Processor, error) {
-	idToProcessor := make(map[string]Processor)
+func topologicalSort(processors []proto.Processor) ([]proto.Processor, error) {
+	idToProcessor := make(map[string]proto.Processor)
 	for _, p := range processors {
 		idToProcessor[p.ID()] = p
 	}
@@ -64,14 +64,14 @@ func topologicalSort(processors []Processor) ([]Processor, error) {
 		}
 	}
 
-	var queue []Processor
+	var queue []proto.Processor
 	for _, p := range processors {
 		if inDegree[p.ID()] == 0 {
 			queue = append(queue, p)
 		}
 	}
 
-	var sorted []Processor
+	var sorted []proto.Processor
 	for len(queue) > 0 {
 		proc := queue[0]
 		queue = queue[1:]

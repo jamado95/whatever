@@ -6,15 +6,45 @@ import (
 	"sync"
 	"time"
 
-	"whatever/domains/execution"
-	"whatever/domains/provider"
-	"whatever/domains/risk"
-	"whatever/domains/strategy"
-	"whatever/types"
-	"whatever/utils/logger"
-	"whatever/utils/pipeline"
-	"whatever/utils/timing"
+	"whatever/internal/logger"
+	"whatever/internal/pipeline"
+	proto "whatever/internal/protocol"
+	reg "whatever/internal/registry"
+	"whatever/internal/timing"
 )
+
+const FullEngineID = "full"
+
+func init() {
+	reg.Engines.Register(FullEngineID, func(opts map[string]any) (reg.Runnable, error) {
+		prov, ok := opts["_provider"].(proto.DataProvider)
+		if !ok {
+			return nil, fmt.Errorf("missing or invalid _provider")
+		}
+
+		strats, ok := opts["_strategies"].([]proto.Strategy)
+		if !ok {
+			return nil, fmt.Errorf("missing or invalid _strategies")
+		}
+
+		riskMgr, ok := opts["_risk"].(proto.RiskManager)
+		if !ok {
+			return nil, fmt.Errorf("missing or invalid _risk")
+		}
+
+		execs, ok := opts["_executors"].([]proto.Executor)
+		if !ok {
+			return nil, fmt.Errorf("missing or invalid _executors")
+		}
+
+		cfg, err := parseFullEngineConfig(opts)
+		if err != nil {
+			return nil, err
+		}
+
+		return NewEngine(prov, riskMgr, strats, execs, cfg)
+	})
+}
 
 type TickerType int
 
@@ -29,11 +59,11 @@ type TickerConfig struct {
 }
 
 type Engine struct {
-	provider   provider.DataProvider
-	strategies []strategy.Strategy
-	risk       risk.RiskManager
-	executors  []execution.Executor
-	ticker     timing.Ticker[types.MarketData]
+	provider   proto.DataProvider
+	strategies []proto.Strategy
+	risk       proto.RiskManager
+	executors  []proto.Executor
+	ticker     timing.Ticker[proto.MarketData]
 	logger     *logger.Logger
 	cfg        Config
 
@@ -42,18 +72,90 @@ type Engine struct {
 }
 
 type Config struct {
-	Subscription   types.Subscription
+	Subscription   proto.Subscription
 	Limit          int // 0 = unlimited
 	Ticker         TickerConfig
 	BufferSize     int // channel buffer size
 	ErrorThreshold int // number of errors to log before shutting down
 }
 
+func NewFullEngine(opts map[string]any) (*Engine, error) {
+	prov, ok := opts["_provider"].(proto.DataProvider)
+	if !ok {
+		return nil, fmt.Errorf("missing or invalid _provider")
+	}
+
+	strats, ok := opts["_strategies"].([]proto.Strategy)
+	if !ok {
+		return nil, fmt.Errorf("missing or invalid _strategies")
+	}
+
+	riskMgr, ok := opts["_risk"].(proto.RiskManager)
+	if !ok {
+		return nil, fmt.Errorf("missing or invalid _risk")
+	}
+
+	execs, ok := opts["_executors"].([]proto.Executor)
+	if !ok {
+		return nil, fmt.Errorf("missing or invalid _executors")
+	}
+
+	cfg, err := parseFullEngineConfig(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return NewEngine(prov, riskMgr, strats, execs, cfg)
+}
+
+func parseFullEngineConfig(opts map[string]any) (Config, error) {
+	cfg := Config{}
+
+	if sub, ok := opts["subscription"].(map[string]any); ok {
+		symbol, _ := sub["symbol"].(string)
+		timeframe, _ := sub["timeframe"].(string)
+		cfg.Subscription = proto.Subscription{
+			Symbol:    symbol,
+			Timeframe: proto.Timeframe(timeframe),
+		}
+	}
+
+	if limit, ok := opts["limit"].(float64); ok {
+		cfg.Limit = int(limit)
+	}
+
+	if bufferSize, ok := opts["bufferSize"].(float64); ok {
+		cfg.BufferSize = int(bufferSize)
+	}
+
+	if errorThreshold, ok := opts["errorThreshold"].(float64); ok {
+		cfg.ErrorThreshold = int(errorThreshold)
+	}
+
+	if ticker, ok := opts["ticker"].(map[string]any); ok {
+		tickerType, _ := ticker["type"].(string)
+		if tickerType == "fixed" {
+			cfg.Ticker.Type = FixedInterval
+		} else {
+			cfg.Ticker.Type = Realtime
+		}
+		if interval, ok := ticker["interval"].(string); ok {
+			dur, err := time.ParseDuration(interval)
+			if err != nil {
+				return cfg, fmt.Errorf("invalid ticker interval: %w", err)
+			}
+			cfg.Ticker.TickInterval = dur
+		}
+	}
+
+	return cfg, nil
+}
+
 func NewEngine(
-	prov provider.DataProvider,
-	riskMgr risk.RiskManager,
-	strats []strategy.Strategy,
-	execs []execution.Executor,
+	prov proto.DataProvider,
+	riskMgr proto.RiskManager,
+	strats []proto.Strategy,
+	execs []proto.Executor,
 	cfg Config,
 ) (*Engine, error) {
 	if prov == nil {
@@ -70,12 +172,12 @@ func NewEngine(
 	}
 
 	// initiate ticker based on engine config
-	var ticker timing.Ticker[types.MarketData]
+	var ticker timing.Ticker[proto.MarketData]
 	switch cfg.Ticker.Type {
 	case FixedInterval:
-		ticker = timing.FixedInterval[types.MarketData](cfg.Ticker.TickInterval)
+		ticker = timing.FixedInterval[proto.MarketData](cfg.Ticker.TickInterval)
 	case Realtime:
-		ticker = timing.Realtime[types.MarketData]()
+		ticker = timing.Realtime[proto.MarketData]()
 	default:
 		return nil, fmt.Errorf("unsupported ticker type: %d", cfg.Ticker.Type)
 	}
@@ -110,12 +212,12 @@ func (e *Engine) Run(ctx context.Context) error {
 	data, providerErrs := e.provider.Streams()
 	eErrors = append(eErrors, providerErrs)
 	// gate data through e.ticker and broadcast to strats and riskmgr
-	dataOuts := pipeline.FanOut(e.ticker.Gate(data), len(e.strategies)+1, e.cfg.BufferSize)
+	dataOuts := pipeline.FanOut(e.ticker.Gate(ctx, data), len(e.strategies)+1, e.cfg.BufferSize)
 
 	/*
 		Init strategy modules
 	*/
-	stratSignals := make([]<-chan types.Signal, len(e.strategies))
+	stratSignals := make([]<-chan proto.Signal, len(e.strategies))
 	stratErrs := make([]<-chan error, len(e.strategies))
 	for i, strat := range e.strategies {
 		if err := strat.Init(dataOuts[i]); err != nil {
@@ -133,7 +235,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	/*
 		Init risk manager
 	*/
-	fillsRelay := make(chan types.Fill, e.cfg.BufferSize)
+	fillsRelay := make(chan proto.Fill, e.cfg.BufferSize)
 	if err := e.risk.Init(dataOuts[len(e.strategies)], signalsIn, fillsRelay); err != nil {
 		e.Close()
 		return fmt.Errorf("failed to init risk manager: %w", err)
@@ -147,7 +249,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	/*
 		Init execution layer
 	*/
-	fills := make([]<-chan types.Fill, len(e.executors))
+	fills := make([]<-chan proto.Fill, len(e.executors))
 	fillErrs := make([]<-chan error, len(e.executors))
 	for i, exec := range e.executors {
 		if err := exec.Init(orderOuts[i]); err != nil {

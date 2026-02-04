@@ -1,7 +1,5 @@
 package proto
 
-import proto "whatever/internal/protocol"
-
 type Side string
 
 const (
@@ -67,8 +65,8 @@ func (e DataError) Error() string {
 
 type DataProvider interface {
 	ID() string
-	Init(sub proto.Subscription, limit int) error
-	Streams() (<-chan proto.MarketData, <-chan error)
+	Init(sub Subscription, limit int) error
+	Streams() (<-chan MarketData, <-chan error)
 	Start() error
 	Close()
 }

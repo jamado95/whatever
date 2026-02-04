@@ -1,6 +1,7 @@
 package timing
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -9,7 +10,7 @@ import (
 type Ticker[T any] interface {
 	// Gate wraps a channel with timing control.
 	// Returns a channel that emits values according to the ticker's timing rules.
-	Gate(in <-chan T) <-chan T
+	Gate(ctx context.Context, in <-chan T) <-chan T
 
 	// Tick manually releases the next value (for Manual ticker or step-through).
 	Tick()
@@ -32,7 +33,7 @@ func Realtime[T any]() Ticker[T] {
 	return &realtime[T]{}
 }
 
-func (r *realtime[T]) Gate(in <-chan T) <-chan T {
+func (r *realtime[T]) Gate(ctx context.Context, in <-chan T) <-chan T {
 	return in
 }
 
@@ -60,15 +61,18 @@ func FixedInterval[T any](interval time.Duration) Ticker[T] {
 Timed gate that allows values to pass through at a fixed interval.
 Creates controlled backpressure that propagates upstream
 */
-func (f *fixedInterval[T]) Gate(in <-chan T) <-chan T {
+func (f *fixedInterval[T]) Gate(ctx context.Context, in <-chan T) <-chan T {
 	out := make(chan T)
 
 	go func() {
 		defer close(out)
 		for val := range in {
-			// ticker sync point
-			<-f.tick
-			out <- val
+			select {
+			case <-ctx.Done():
+				return
+			case <-f.tick:
+				out <- val
+			}
 		}
 	}()
 

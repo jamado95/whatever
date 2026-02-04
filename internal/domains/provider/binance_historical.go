@@ -8,15 +8,16 @@ import (
 	"strconv"
 	"sync"
 
-	"whatever/types"
-	"whatever/utils/idgen"
-	"whatever/utils/logger"
+	"whatever/internal/idgen"
+	"whatever/internal/logger"
+	proto "whatever/internal/protocol"
+	reg "whatever/internal/registry"
 )
 
 const BinanceHistoricalID = "binance_historical"
 
 func init() {
-	Register(BinanceHistoricalID, func(opts map[string]any) (DataProvider, error) {
+	reg.Providers.Register(BinanceHistoricalID, func(opts map[string]any) (proto.DataProvider, error) {
 		id := idgen.GenerateID(BinanceHistoricalID)
 		logger := logger.NewLogger(logger.DefaultLoggerConfig()).
 			With("domain", "provider").
@@ -46,12 +47,12 @@ const (
 	binanceMaxLimit = 1000
 )
 
-var timeframeMap = map[types.Timeframe]string{
-	types.Timeframe1m:  "1m",
-	types.Timeframe5m:  "5m",
-	types.Timeframe15m: "15m",
-	types.Timeframe1h:  "1h",
-	types.Timeframe1d:  "1d",
+var timeframeMap = map[proto.Timeframe]string{
+	proto.Timeframe1m:  "1m",
+	proto.Timeframe5m:  "5m",
+	proto.Timeframe15m: "15m",
+	proto.Timeframe1h:  "1h",
+	proto.Timeframe1d:  "1d",
 }
 
 type BinanceHistoricalConfig struct {
@@ -61,11 +62,11 @@ type BinanceHistoricalConfig struct {
 
 type BinanceHistoricalProvider struct {
 	id        string
-	sub       types.Subscription
+	sub       proto.Subscription
 	startTime int64
 	endTime   int64
 	limit     int
-	data      chan types.MarketData
+	data      chan proto.MarketData
 	errs      chan error
 	done      chan struct{}
 	started   bool
@@ -78,7 +79,7 @@ func (p *BinanceHistoricalProvider) ID() string {
 	return p.id
 }
 
-func (p *BinanceHistoricalProvider) Init(sub types.Subscription, limit int) error {
+func (p *BinanceHistoricalProvider) Init(sub proto.Subscription, limit int) error {
 	p.sub = sub
 	p.limit = limit
 
@@ -89,14 +90,14 @@ func (p *BinanceHistoricalProvider) Init(sub types.Subscription, limit int) erro
 		return fmt.Errorf("unsupported timeframe for Binance: %s", sub.Timeframe)
 	}
 
-	p.data = make(chan types.MarketData, 100)
+	p.data = make(chan proto.MarketData, 100)
 	p.errs = make(chan error, 10)
 	p.done = make(chan struct{})
 
 	return nil
 }
 
-func (p *BinanceHistoricalProvider) Streams() (<-chan types.MarketData, <-chan error) {
+func (p *BinanceHistoricalProvider) Streams() (<-chan proto.MarketData, <-chan error) {
 	return p.data, p.errs
 }
 
@@ -166,7 +167,7 @@ func (p *BinanceHistoricalProvider) run() {
 				return
 			}
 
-			md := types.MarketData{
+			md := proto.MarketData{
 				Symbol:    p.sub.Symbol,
 				Source:    p.ID(),
 				Timeframe: string(p.sub.Timeframe),
@@ -199,12 +200,16 @@ func (p *BinanceHistoricalProvider) buildURL(symbol, interval string, startTime 
 		binanceBaseURL, symbol, interval, startTime, binanceMaxLimit)
 }
 
-func (p *BinanceHistoricalProvider) fetchCandlesFromBinanceAPI(url string) ([]types.Candle, error) {
+func (p *BinanceHistoricalProvider) fetchCandlesFromBinanceAPI(url string) ([]proto.Candle, error) {
 	resp, err := p.http.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Printf("Failed to close response body: %v\n", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -221,7 +226,7 @@ func (p *BinanceHistoricalProvider) fetchCandlesFromBinanceAPI(url string) ([]ty
 		return nil, fmt.Errorf("failed to parse JSON response: %w", err)
 	}
 
-	candles := make([]types.Candle, 0, len(rawKlines))
+	candles := make([]proto.Candle, 0, len(rawKlines))
 	for _, raw := range rawKlines {
 		candle, err := parseKlineResponse(raw)
 		if err != nil {
@@ -234,7 +239,7 @@ func (p *BinanceHistoricalProvider) fetchCandlesFromBinanceAPI(url string) ([]ty
 	return candles, nil
 }
 
-func parseKlineResponse(raw []interface{}) (candle types.Candle, err error) {
+func parseKlineResponse(raw []interface{}) (candle proto.Candle, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("failed to parse kline: %v", r)
@@ -242,7 +247,7 @@ func parseKlineResponse(raw []interface{}) (candle types.Candle, err error) {
 	}()
 
 	if len(raw) < 7 {
-		return types.Candle{}, fmt.Errorf("invalid kline data: expected at least 7 elements, got %d", len(raw))
+		return proto.Candle{}, fmt.Errorf("invalid kline data: expected at least 7 elements, got %d", len(raw))
 	}
 
 	open, _ := strconv.ParseFloat(raw[1].(string), 64)
@@ -251,7 +256,7 @@ func parseKlineResponse(raw []interface{}) (candle types.Candle, err error) {
 	closePrice, _ := strconv.ParseFloat(raw[4].(string), 64)
 	volume, _ := strconv.ParseFloat(raw[5].(string), 64)
 
-	return types.Candle{
+	return proto.Candle{
 		OpenTs:  int64(raw[0].(float64)),
 		CloseTs: int64(raw[6].(float64)),
 		Open:    open,

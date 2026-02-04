@@ -1,24 +1,35 @@
-package proto
+package reg
 
 import (
+	"context"
 	"fmt"
 	"sync"
+
+	proto "whatever/internal/protocol"
 )
 
 var (
-	ProvidersRegistry = &registry[DataProvider]{
-		factories: make(map[string]Factory[DataProvider]),
+	Providers = &registry[proto.DataProvider]{
+		factories: make(map[string]Factory[proto.DataProvider]),
 	}
-	StrategiesRegistry = &registry[Strategy]{
-		factories: make(map[string]Factory[Strategy]),
+	Strategies = &registry[proto.Strategy]{
+		factories: make(map[string]Factory[proto.Strategy]),
 	}
-	ProcessorsRegistry = &registry[Processor]{
-		factories: make(map[string]Factory[Processor]),
+	Processors = &registry[proto.Processor]{
+		factories: make(map[string]Factory[proto.Processor]),
 	}
-	ExecutionRegistry = &registry[Executor]{
-		factories: make(map[string]Factory[Executor]),
+	Execution = &registry[proto.Executor]{
+		factories: make(map[string]Factory[proto.Executor]),
+	}
+	Engines = &registry[Runnable]{
+		factories: make(map[string]Factory[Runnable]),
 	}
 )
+
+type Runnable interface {
+	Run(ctx context.Context) error
+	Close()
+}
 
 // Factory creates a component from options
 type Factory[T any] func(opts map[string]any) (T, error)

@@ -3,14 +3,15 @@ package strategy
 import (
 	"fmt"
 
-	"whatever/types"
-	"whatever/utils/idgen"
+	"whatever/internal/idgen"
+	proto "whatever/internal/protocol"
+	reg "whatever/internal/registry"
 )
 
 const BuyTheDipID = "buy_the_dip"
 
 func init() {
-	Register(BuyTheDipID, func(opts map[string]any) (Strategy, error) {
+	reg.Strategies.Register(BuyTheDipID, func(opts map[string]any) (proto.Strategy, error) {
 		id := idgen.GenerateID(BuyTheDipID)
 
 		cfg := DefaultBuyTheDipConfig()
@@ -74,7 +75,7 @@ type swingPoint struct {
 
 // symbolState tracks trend and pullback state for a single symbol
 type symbolState struct {
-	candles       []types.Candle
+	candles       []proto.Candle
 	swingHighs    []swingPoint // ordered by time, oldest first
 	swingLows     []swingPoint
 	recentHigh    float64
@@ -86,8 +87,8 @@ type BuyTheDip struct {
 	id  string
 	cfg BuyTheDipConfig
 
-	data    <-chan types.MarketData
-	signals chan types.Signal
+	data    <-chan proto.MarketData
+	signals chan proto.Signal
 	errs    chan error
 	done    chan struct{}
 
@@ -98,18 +99,18 @@ func (s *BuyTheDip) ID() string {
 	return s.id
 }
 
-func (s *BuyTheDip) Init(data <-chan types.MarketData) error {
+func (s *BuyTheDip) Init(data <-chan proto.MarketData) error {
 	if data == nil {
 		return fmt.Errorf("data channel is required")
 	}
 	s.data = data
-	s.signals = make(chan types.Signal, 100)
+	s.signals = make(chan proto.Signal, 100)
 	s.errs = make(chan error, 10)
 	s.done = make(chan struct{})
 	return nil
 }
 
-func (s *BuyTheDip) Streams() (<-chan types.Signal, <-chan error) {
+func (s *BuyTheDip) Streams() (<-chan proto.Signal, <-chan error) {
 	return s.signals, s.errs
 }
 
@@ -141,7 +142,7 @@ func (s *BuyTheDip) Close() {
 	}
 }
 
-func (s *BuyTheDip) processCandle(md types.MarketData) {
+func (s *BuyTheDip) processCandle(md proto.MarketData) {
 	state := s.getOrCreateState(md.Symbol)
 	candle := md.Candle
 
@@ -183,12 +184,12 @@ func (s *BuyTheDip) processCandle(md types.MarketData) {
 	if maturity != NoTrend && state.inPullback {
 		pullbackDepth := (state.recentHigh - candle.Close) / state.recentHigh
 
-		signal := types.Signal{
+		signal := proto.Signal{
 			Symbol:    md.Symbol,
 			Side:      "BUY",
 			Timestamp: candle.CloseTs,
 			Source:    s.id,
-			Metadata: types.Metadata{
+			Metadata: map[string]any{
 				"trend_maturity":   maturity,
 				"pullback_depth":   pullbackDepth,
 				"recent_high":      state.recentHigh,
@@ -212,7 +213,7 @@ func (s *BuyTheDip) getOrCreateState(symbol string) *symbolState {
 	state, ok := s.states[symbol]
 	if !ok {
 		state = &symbolState{
-			candles:    make([]types.Candle, 0, s.cfg.MaxCandles),
+			candles:    make([]proto.Candle, 0, s.cfg.MaxCandles),
 			swingHighs: make([]swingPoint, 0),
 			swingLows:  make([]swingPoint, 0),
 		}

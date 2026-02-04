@@ -7,7 +7,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"whatever/types"
+	proto "whatever/internal/protocol"
 )
 
 type Logger struct {
@@ -40,7 +40,7 @@ func NewLogger(cfg LoggerConfig) *Logger {
 
 	zerolog.TimeFieldFormat = cfg.TimeFormat
 
-	var output io.Writer = cfg.Output
+	output := cfg.Output
 	if cfg.Pretty {
 		output = zerolog.ConsoleWriter{
 			Out:        cfg.Output,
@@ -51,7 +51,7 @@ func NewLogger(cfg LoggerConfig) *Logger {
 				"open", "high", "low", "close", "volume",
 				"size", "price", "fill_price", "fill_size",
 				"count", "timestamp", "open_ts", "close_ts", "filled_at", "expires_at",
-				"domain", "engine", "provider", "strategy", "executor", "source",
+				"domain", "engine", "provider", "strategy", "executor",
 			},
 		}
 	}
@@ -66,11 +66,11 @@ func NewLogger(cfg LoggerConfig) *Logger {
 	return &Logger{zl: zl}
 }
 
-func (l *Logger) MarketData(data types.MarketData) {
+func (l *Logger) MarketData(data proto.MarketData) {
 	l.zl.Info().
 		Str("event", "market_data").
 		Str("symbol", data.Symbol).
-		Str("source", data.Source).
+		Str("provider", data.Source).
 		Str("timeframe", data.Timeframe).
 		Float64("open", data.Candle.Open).
 		Float64("high", data.Candle.High).
@@ -82,25 +82,25 @@ func (l *Logger) MarketData(data types.MarketData) {
 		Msg("MarketData")
 }
 
-func (l *Logger) Signal(sig types.Signal) {
+func (l *Logger) Signal(sig proto.Signal) {
 	l.zl.Info().
 		Str("event", "signal").
 		Str("symbol", sig.Symbol).
 		Str("side", string(sig.Side)).
-		Str("source", sig.Source).
+		Str("provider", sig.Source).
 		Int64("timestamp", sig.Timestamp).
 		Int64("expires_at", sig.ExpiresAt).
 		Msg("signal")
 }
 
-func (l *Logger) Order(ord types.Order) {
+func (l *Logger) Order(ord proto.Order) {
 	evt := l.zl.Info().
 		Str("event", "order").
 		Str("id", ord.ID).
 		Str("symbol", ord.Symbol).
 		Str("side", string(ord.Side)).
 		Float64("size", ord.Size).
-		Str("source", ord.Source).
+		Str("provider", ord.Source).
 		Int64("timestamp", ord.Timestamp).
 		Int64("expires_at", ord.ExpiresAt)
 
@@ -111,7 +111,7 @@ func (l *Logger) Order(ord types.Order) {
 	evt.Msg("order")
 }
 
-func (l *Logger) Fill(fill types.Fill) {
+func (l *Logger) Fill(fill proto.Fill) {
 	l.zl.Info().
 		Str("event", "fill").
 		Str("order_id", fill.Order.ID).
@@ -123,7 +123,7 @@ func (l *Logger) Fill(fill types.Fill) {
 		Msg("fill")
 }
 
-func (l *Logger) Position(pos types.Position) {
+func (l *Logger) Position(pos proto.Position) {
 	l.zl.Info().
 		Str("event", "position").
 		Str("symbol", pos.Symbol).
@@ -135,7 +135,7 @@ func (l *Logger) Position(pos types.Position) {
 		Msg("position")
 }
 
-func (l *Logger) Portfolio(state types.PortfolioState) {
+func (l *Logger) Portfolio(state proto.PortfolioState) {
 	l.zl.Info().
 		Str("event", "portfolio").
 		Float64("total_value", state.TotalValue).

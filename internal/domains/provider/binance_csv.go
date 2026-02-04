@@ -7,15 +7,16 @@ import (
 	"strconv"
 	"sync"
 
-	"whatever/types"
-	"whatever/utils/idgen"
-	"whatever/utils/logger"
+	"whatever/internal/idgen"
+	"whatever/internal/logger"
+	proto "whatever/internal/protocol"
+	reg "whatever/internal/registry"
 )
 
 const BinanceCSVID = "binance_csv"
 
 func init() {
-	Register(BinanceCSVID, func(opts map[string]any) (DataProvider, error) {
+	reg.Providers.Register(BinanceCSVID, func(opts map[string]any) (proto.DataProvider, error) {
 		id := idgen.GenerateID(BinanceCSVID)
 		logger := logger.NewLogger(logger.DefaultLoggerConfig()).
 			With("domain", "provider").
@@ -34,11 +35,11 @@ func init() {
 
 type BinanceCSVProvider struct {
 	id      string
-	sub     types.Subscription
+	sub     proto.Subscription
 	file    string
 	started bool
 	limit   int
-	data    chan types.MarketData
+	data    chan proto.MarketData
 	errs    chan error
 	done    chan struct{}
 	logger  *logger.Logger
@@ -49,7 +50,7 @@ func (p *BinanceCSVProvider) ID() string {
 	return p.id
 }
 
-func (p *BinanceCSVProvider) Init(sub types.Subscription, limit int) error {
+func (p *BinanceCSVProvider) Init(sub proto.Subscription, limit int) error {
 	p.sub = sub
 	p.limit = limit
 
@@ -60,14 +61,14 @@ func (p *BinanceCSVProvider) Init(sub types.Subscription, limit int) error {
 		return fmt.Errorf("file does not exist: %s", p.file)
 	}
 
-	p.data = make(chan types.MarketData, 100)
+	p.data = make(chan proto.MarketData, 100)
 	p.errs = make(chan error, 10)
 	p.done = make(chan struct{})
 
 	return nil
 }
 
-func (p *BinanceCSVProvider) Streams() (<-chan types.MarketData, <-chan error) {
+func (p *BinanceCSVProvider) Streams() (<-chan proto.MarketData, <-chan error) {
 	return p.data, p.errs
 }
 
@@ -110,7 +111,11 @@ func (p *BinanceCSVProvider) run() {
 		p.errs <- fmt.Errorf("failed to open file %s: %w", p.file, err)
 		return
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			panic(err)
+		}
+	}()
 
 	reader := csv.NewReader(file)
 	count := 0
@@ -143,7 +148,7 @@ func (p *BinanceCSVProvider) run() {
 			continue
 		}
 
-		md := types.MarketData{
+		md := proto.MarketData{
 			Symbol:    p.sub.Symbol,
 			Source:    p.ID(),
 			Timeframe: string(p.sub.Timeframe),
@@ -159,49 +164,49 @@ func (p *BinanceCSVProvider) run() {
 	}
 }
 
-func parseCsvRecordToCandle(record []string) (types.Candle, error) {
+func parseCsvRecordToCandle(record []string) (proto.Candle, error) {
 	// Binance kline CSV format (12 columns):
 	// OpenTime,Open,High,Low,Close,Volume,CloseTime,QuoteVol,Trades,TakerBuyBase,TakerBuyQuote,Ignore
 	if len(record) < 7 {
-		return types.Candle{}, fmt.Errorf("invalid record length: %d", len(record))
+		return proto.Candle{}, fmt.Errorf("invalid record length: %d", len(record))
 	}
 
 	openTs, err := strconv.ParseInt(record[0], 10, 64)
 	if err != nil {
-		return types.Candle{}, fmt.Errorf("invalid OpenTime: %w", err)
+		return proto.Candle{}, fmt.Errorf("invalid OpenTime: %w", err)
 	}
 
 	open, err := strconv.ParseFloat(record[1], 64)
 	if err != nil {
-		return types.Candle{}, fmt.Errorf("invalid Open: %w", err)
+		return proto.Candle{}, fmt.Errorf("invalid Open: %w", err)
 	}
 
 	high, err := strconv.ParseFloat(record[2], 64)
 	if err != nil {
-		return types.Candle{}, fmt.Errorf("invalid High: %w", err)
+		return proto.Candle{}, fmt.Errorf("invalid High: %w", err)
 	}
 
 	low, err := strconv.ParseFloat(record[3], 64)
 	if err != nil {
-		return types.Candle{}, fmt.Errorf("invalid Low: %w", err)
+		return proto.Candle{}, fmt.Errorf("invalid Low: %w", err)
 	}
 
 	closePrice, err := strconv.ParseFloat(record[4], 64)
 	if err != nil {
-		return types.Candle{}, fmt.Errorf("invalid Close: %w", err)
+		return proto.Candle{}, fmt.Errorf("invalid Close: %w", err)
 	}
 
 	volume, err := strconv.ParseFloat(record[5], 64)
 	if err != nil {
-		return types.Candle{}, fmt.Errorf("invalid Volume: %w", err)
+		return proto.Candle{}, fmt.Errorf("invalid Volume: %w", err)
 	}
 
 	closeTs, err := strconv.ParseInt(record[6], 10, 64)
 	if err != nil {
-		return types.Candle{}, fmt.Errorf("invalid CloseTime: %w", err)
+		return proto.Candle{}, fmt.Errorf("invalid CloseTime: %w", err)
 	}
 
-	return types.Candle{
+	return proto.Candle{
 		OpenTs:  openTs,
 		CloseTs: closeTs,
 		Open:    open,
