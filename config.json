@@ -1,0 +1,38 @@
+{                                                                                                                                                                                                                  
+    "providers": [                                                                                                                                                                                                   
+      {
+        "type": "binance_csv",
+        "enabled": true,
+        "file": "./data/BTCUSDT-1h-2024-01.csv"
+      },
+      {
+        "type": "binance_historical",
+        "enabled": false,
+        "startTime": 1714732800000,
+        "endTime": 1714819200000
+      }                                                                                                                                                                                                            
+    ],                                                                                                                                                                                                               
+    "strategies": [                                                                                                                                                                                                  
+      {
+        "type": "buy_the_dip",
+        "enabled": false,
+        "trendLength": 5,
+        "pullbackPct": 0.02
+      }                                                                                                                                                                                                             
+    ],                                                                                                                                                                                                               
+    "engine": {                                                                                                                                                                                                      
+      "type": "data_logger",                                                                                                                                                                                         
+      "provider": "binance_csv",                                                                                                                                                                                     
+      "strategies": ["buy_the_dip"],                                                                                                                                                                                 
+      "subscription": {                                                                                                                                                                                              
+        "symbol": "BTCUSDT",                                                                                                                                                                                         
+        "timeframe": "1h"                                                                                                                                                                                            
+      },                                                                                                                                                                                                             
+      "ticker": {                                                                                                                                                                                                    
+        "type": "fixed",                                                                                                                                                                                             
+        "interval": "100ms"                                                                                                                                                                                             
+      },                                                                                                                                                                                                          
+      "limit": 10,                                                                                                                                                                                                 
+      "bufferSize": 64                                                                                                                                                                                              
+    }                                                                                                                                                                                                                
+  } 

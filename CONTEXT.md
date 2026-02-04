@@ -10,7 +10,8 @@ Core Architecture
 - internal/domains: domain logic (execution, market, monitor, processor, provider, risk, strategy)
 - internal/engine: orchestration (backtesting, logging, full runtime)
 - internal/pipeline: fanout + pipeline execution
-- internal/protocol: domain interfaces + registries
+- internal/protocol: domain interfaces
+- internal/registry: registers all internal component factories
 
 Design Rules
 - Domains contain business logic only
