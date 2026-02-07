@@ -59,8 +59,9 @@ type DataLogger struct {
 	logger   *logger.Logger
 	cfg      DataLoggerConfig
 
-	done chan struct{}
-	wg   sync.WaitGroup
+	done      chan struct{}
+	closeOnce sync.Once
+	wg        sync.WaitGroup
 }
 
 type DataLoggerConfig struct {
@@ -145,39 +146,40 @@ func (e *DataLogger) Run(ctx context.Context) error {
 	// start ticker
 	e.ticker.Start()
 
-	// handle external cancellation
+	// close once logging goroutines complete
 	go func() {
 		e.wg.Wait()
-		e.logger.Debug("data logger stream completeeeeee")
 		e.Close()
 	}()
 
 	select {
+	// handle external cancellations
 	case <-ctx.Done():
+		e.Close()
 	case <-e.done:
 	}
 
-	e.Close()
+	// absorb ctrl+c context cancellation errors
+	if err := ctx.Err(); err != nil && err != context.Canceled {
+		return err
+	}
 	return nil
 }
 
 func (e *DataLogger) Close() {
-	e.logger.Info("data engine close")
-	select {
-	case <-e.done:
-		return
-	default:
+	e.closeOnce.Do(func() {
+		e.logger.Info("data engine close")
 		close(e.done)
-	}
 
-	if e.ticker != nil {
-		e.ticker.Stop()
-	}
-	if e.provider != nil {
-		e.provider.Close()
-	}
+		if e.ticker != nil {
+			e.ticker.Stop()
+		}
+		if e.provider != nil {
+			e.provider.Close()
+		}
 
-	e.wg.Wait()
+		e.wg.Wait()
+	})
 }
 
 // RunFor runs the data engine for a specified duration then stops.

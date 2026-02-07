@@ -3,7 +3,7 @@
       {
         "type": "binance_csv",
         "enabled": true,
-        "file": "./data/BTCUSDT-1h-2024-01.csv"
+        "file": "./data/BTCUSDT/BTCUSDT-1h-2024-01.csv"
       },
       {
         "type": "binance_historical",
