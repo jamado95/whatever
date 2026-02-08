@@ -44,6 +44,10 @@ type MarketData struct {
 	ReceivedAt *int64
 }
 
+func (m MarketData) Timestamp() int64 {
+	return m.Candle.CloseTs
+}
+
 type ProcessedMarketData struct {
 	MarketData
 	Indicators *Snapshot

@@ -1,5 +1,6 @@
 package proto
 
+// REVIEW
 type MonitorSubscription struct {
 	Subscription Subscription
 	Side         Side

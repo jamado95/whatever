@@ -10,6 +10,10 @@ type Key[T any] struct {
 	name string
 }
 
+func NewKey[T any](name string) Key[T] {
+	return Key[T]{name: name}
+}
+
 func (k Key[T]) Name() string { return k.name }
 
 type KeyRef struct {
@@ -26,7 +30,7 @@ type Snapshot struct {
 
 // key Key[T] allows for type inference snapshot `s` by type key
 // this is not a full type safe compile-time check, but its completely safe at runtime
-func Get[T any](s *Snapshot, key Key[T]) (T, bool) {
+func GetSnapshot[T any](s *Snapshot, key Key[T]) (T, bool) {
 	val, ok := s.data[key.name]
 	if !ok {
 		var zero T
@@ -35,6 +39,6 @@ func Get[T any](s *Snapshot, key Key[T]) (T, bool) {
 	return val.(T), true
 }
 
-func Set[T any](s *Snapshot, key Key[T], val T) {
+func SetSnapshot[T any](s *Snapshot, key Key[T], val T) {
 	s.data[key.name] = val
 }
