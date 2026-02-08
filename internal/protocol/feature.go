@@ -1,6 +1,6 @@
 package proto
 
-type EnrichedMarketData struct {
+type ExtendedMarketData struct {
 	MarketData
 	Indicators *Snapshot
 }

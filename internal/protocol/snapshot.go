@@ -42,3 +42,7 @@ func GetSnapshot[T any](s *Snapshot, key Key[T]) (T, bool) {
 func SetSnapshot[T any](s *Snapshot, key Key[T], val T) {
 	s.data[key.name] = val
 }
+
+func (s *Snapshot) Data() map[string]any {
+	return s.data
+}

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	feat "whatever/internal/domains/features"
 	"whatever/internal/idgen"
 	"whatever/internal/logger"
 	proto "whatever/internal/protocol"
@@ -26,6 +27,19 @@ func init() {
 			return nil, fmt.Errorf("missing or invalid _provider")
 		}
 
+		features, ok := opts["_features"].([]proto.Feature)
+		if !ok {
+			err := fmt.Errorf("$s missing or invalid _features", id)
+			log.Error(err, err.Error())
+			return nil, err
+		}
+
+		featuresChain, err := feat.NewFeatureChain(features)
+		if err != nil {
+			log.Error(err, fmt.Sprintf("$s failed to create feature chain", id, err))
+			return nil, err
+		}
+
 		cfg, err := parseDataLoggerConfig(opts)
 		if err != nil {
 			return nil, err
@@ -44,6 +58,7 @@ func init() {
 		return &DataLogger{
 			id:       id,
 			provider: provider,
+			features: featuresChain,
 			ticker:   ticker,
 			logger:   log,
 			cfg:      cfg,
@@ -55,6 +70,7 @@ func init() {
 type DataLogger struct {
 	id       string
 	provider proto.DataProvider
+	features *feat.FeatureChain
 	ticker   timing.Ticker[proto.MarketData]
 	logger   *logger.Logger
 	cfg      DataLoggerConfig
@@ -118,6 +134,8 @@ func (e *DataLogger) Run(ctx context.Context) error {
 	data, dataErrs := e.provider.Streams()
 	// gate data through ticker
 	gatedData := e.ticker.Gate(ctx, data)
+	// feature extraction pipeline
+	processedData := e.features.Process(gatedData)
 
 	// log errors
 	e.wg.Go(func() {
@@ -130,8 +148,8 @@ func (e *DataLogger) Run(ctx context.Context) error {
 	// log market data
 	e.wg.Go(func() {
 		count := 0
-		for md := range gatedData {
-			e.logger.MarketData(md)
+		for emd := range processedData {
+			e.logger.ExtendedMarketData(emd)
 			count++
 		}
 		e.logger.With("count", count).Info("data logger stream complete")

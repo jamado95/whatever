@@ -39,8 +39,8 @@ func calculateRequiredCapacity(features []proto.Feature) int {
 	return maxLookback
 }
 
-func (fc *FeatureChain) Process(in <-chan proto.MarketData) <-chan proto.EnrichedMarketData {
-	out := make(chan proto.EnrichedMarketData) // TODO: buffer size
+func (fc *FeatureChain) Process(in <-chan proto.MarketData) <-chan proto.ExtendedMarketData {
+	out := make(chan proto.ExtendedMarketData) // TODO: buffer size
 
 	go func() {
 		defer close(out)
@@ -55,7 +55,7 @@ func (fc *FeatureChain) Process(in <-chan proto.MarketData) <-chan proto.Enriche
 				feat.Update(fc.window, &snap)
 			}
 
-			out <- proto.EnrichedMarketData{
+			out <- proto.ExtendedMarketData{
 				MarketData: candle,
 				Indicators: &snap,
 			}

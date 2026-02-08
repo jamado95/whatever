@@ -82,6 +82,29 @@ func (l *Logger) MarketData(data proto.MarketData) {
 		Msg("MarketData")
 }
 
+func (l *Logger) ExtendedMarketData(data proto.ExtendedMarketData) {
+	evt := l.zl.Info().
+		Str("event", "extended_market_data").
+		Str("symbol", data.Symbol).
+		Str("provider", data.Source).
+		Str("timeframe", data.Timeframe).
+		Float64("open", data.Candle.Open).
+		Float64("high", data.Candle.High).
+		Float64("low", data.Candle.Low).
+		Float64("close", data.Candle.Close).
+		Float64("volume", data.Candle.Volume).
+		Int64("open_ts", data.Candle.OpenTs).
+		Int64("close_ts", data.Candle.CloseTs)
+
+	if data.Indicators != nil {
+		for k, v := range data.Indicators.Data() {
+			evt = evt.Any(k, v)
+		}
+	}
+
+	evt.Msg("ExtendedMarketData")
+}
+
 func (l *Logger) Signal(sig proto.Signal) {
 	l.zl.Info().
 		Str("event", "signal").
