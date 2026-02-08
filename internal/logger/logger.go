@@ -70,7 +70,7 @@ func (l *Logger) MarketData(data proto.MarketData) {
 	l.zl.Info().
 		Str("event", "market_data").
 		Str("symbol", data.Symbol).
-		Str("provider", data.Source).
+		Str("provider", data.ProviderID).
 		Str("timeframe", data.Timeframe).
 		Float64("open", data.Candle.Open).
 		Float64("high", data.Candle.High).
@@ -86,7 +86,7 @@ func (l *Logger) ExtendedMarketData(data proto.ExtendedMarketData) {
 	evt := l.zl.Info().
 		Str("event", "extended_market_data").
 		Str("symbol", data.Symbol).
-		Str("provider", data.Source).
+		Str("provider", data.ProviderID).
 		Str("timeframe", data.Timeframe).
 		Float64("open", data.Candle.Open).
 		Float64("high", data.Candle.High).

@@ -38,7 +38,7 @@ type Candle struct {
 
 type MarketData struct {
 	Symbol     string
-	Source     string
+	ProviderID string
 	Timeframe  string
 	Candle     Candle
 	ReceivedAt *int64

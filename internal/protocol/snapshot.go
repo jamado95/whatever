@@ -28,6 +28,12 @@ type Snapshot struct {
 	data map[string]any
 }
 
+func NewSnapshot() Snapshot {
+	return Snapshot{
+		data: make(map[string]any),
+	}
+}
+
 // key Key[T] allows for type inference snapshot `s` by type key
 // this is not a full type safe compile-time check, but its completely safe at runtime
 func GetSnapshot[T any](s *Snapshot, key Key[T]) (T, bool) {

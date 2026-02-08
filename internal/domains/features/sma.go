@@ -8,16 +8,16 @@ import (
 
 func init() {
 	reg.Features.Register("sma", func(opts map[string]any) (proto.Feature, error) {
-		period, ok := opts["period"].(int)
+		period, ok := opts["period"].(float64)
 		if !ok {
 			return nil, fmt.Errorf("sma register: missing or invalid period")
 		}
 
-		id := iDWithPeriod("sma", period)
+		id := iDWithPeriod("sma", int(period))
 
 		return &EMA{
 			id:     proto.NewKey[float64](id),
-			period: period,
+			period: int(period),
 		}, nil
 	})
 }

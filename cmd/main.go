@@ -93,6 +93,9 @@ func main() {
 	// 4. Resolve engine dependencies
 	engineOpts := cfg.Engine.Opts
 
+	// pass features to engine
+	engineOpts["_features"] = features
+
 	// resolve provider
 	if provType, ok := engineOpts["provider"].(string); ok && reg.Providers.Has(provType) {
 		engineOpts["_provider"] = providers[provType]
@@ -119,9 +122,6 @@ func main() {
 			}
 		}
 	}
-
-	// pass features to engine
-	engineOpts["_features"] = features
 
 	// 5. Create engine
 	eng, err := reg.Engines.Create(cfg.Engine.Type, engineOpts)

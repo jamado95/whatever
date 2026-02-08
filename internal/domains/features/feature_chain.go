@@ -46,7 +46,7 @@ func (fc *FeatureChain) Process(in <-chan proto.MarketData) <-chan proto.Extende
 		defer close(out)
 
 		for candle := range in {
-			snap := proto.Snapshot{}
+			snap := proto.NewSnapshot()
 
 			// push candle to shared state window
 			fc.window.Push(candle)

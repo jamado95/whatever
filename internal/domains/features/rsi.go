@@ -8,14 +8,16 @@ import (
 
 func init() {
 	reg.Features.Register("rsi", func(opts map[string]any) (proto.Feature, error) {
-		period, ok := opts["period"].(int)
+		period, ok := opts["period"].(float64)
 		if !ok {
-			return nil, fmt.Errorf("rsi register: missing or invalid period")
+			return nil, fmt.Errorf("missing or invalid period")
 		}
-		id := iDWithPeriod("rsi", period)
+
+		id := iDWithPeriod("rsi", int(period))
+
 		return &RSI{
 			id:     proto.NewKey[float64](id),
-			period: period,
+			period: int(period),
 		}, nil
 	})
 }
