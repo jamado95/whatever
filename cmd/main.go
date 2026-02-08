@@ -14,6 +14,7 @@ import (
 
 	// side-effect imports
 	_ "whatever/internal/domains/execution"
+	_ "whatever/internal/domains/features"
 	_ "whatever/internal/domains/market"
 	_ "whatever/internal/domains/provider"
 	_ "whatever/internal/domains/risk"
@@ -71,7 +72,25 @@ func main() {
 		log.Info(fmt.Sprintf("created strategy: %s", sc.Type))
 	}
 
-	// 3. Resolve engine dependencies
+	// 3. Instantiate features (one per variant)
+	features := make([]proto.Feature, 0)
+	for _, fc := range cfg.Features {
+		if !reg.Features.Has(fc.Type) {
+			log.Info(fmt.Sprintf("skipping unregistered feature: %s", fc.Type))
+			continue
+		}
+		for _, opts := range fc.Variants {
+			feat, err := reg.Features.Create(fc.Type, opts)
+			if err != nil {
+				log.Error(err, fmt.Sprintf("error creating feature %s: %v", fc.Type, err))
+				os.Exit(1)
+			}
+			features = append(features, feat)
+			log.Info(fmt.Sprintf("created feature: %s", feat.ID()))
+		}
+	}
+
+	// 4. Resolve engine dependencies
 	engineOpts := cfg.Engine.Opts
 
 	// resolve provider
@@ -101,7 +120,10 @@ func main() {
 		}
 	}
 
-	// 4. Create engine
+	// pass features to engine
+	engineOpts["_features"] = features
+
+	// 5. Create engine
 	eng, err := reg.Engines.Create(cfg.Engine.Type, engineOpts)
 	if err != nil {
 		log.Error(err, fmt.Sprintf("error creating engine %s: %v", cfg.Engine.Type, err))
@@ -114,7 +136,7 @@ func main() {
 
 	log.Info(fmt.Sprintf("whtv starting with engine: %s", cfg.Engine.Type))
 
-	// 5. Run engine (blocks until context cancelled or engine completes)
+	// 6. Run engine (blocks until context cancelled or engine completes)
 	if err := eng.Run(ctx); err != nil {
 		log.Error(err, "engine stopped with error")
 		os.Exit(1)

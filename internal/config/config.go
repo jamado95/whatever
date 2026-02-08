@@ -9,7 +9,13 @@ import (
 type Config struct {
 	Providers  []ComponentConfig `json:"providers"`
 	Strategies []ComponentConfig `json:"strategies"`
+	Features   []FeatureConfig   `json:"features"`
 	Engine     EngineConfig      `json:"engine"`
+}
+
+type FeatureConfig struct {
+	Type     string           `json:"type"`
+	Variants []map[string]any `json:"variants"`
 }
 
 type ComponentConfig struct {

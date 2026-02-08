@@ -11,7 +11,31 @@
         "startTime": 1714732800000,
         "endTime": 1714819200000
       }                                                                                                                                                                                                            
-    ],                                                                                                                                                                                                               
+    ],
+    "features": [
+      {
+        "type": "rsi",
+        "variants": [
+          { "period": 14 },
+          { "period": 21 }
+        ]
+      },
+      {
+        "type": "sma",
+        "variants": [
+          { "period": 20 },
+          { "period": 50 },
+          { "period": 200 }
+        ]
+      },                   
+      {
+        "type": "ema",
+        "variants": [
+          { "period": 12, "smoothing": 2.0 },
+          { "period": 26, "smoothing": 2.0 }
+        ]
+      }
+    ],
     "strategies": [                                                                                                                                                                                                  
       {
         "type": "buy_the_dip",

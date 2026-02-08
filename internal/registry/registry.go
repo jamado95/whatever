@@ -15,8 +15,8 @@ var (
 	Strategies = &registry[proto.Strategy]{
 		factories: make(map[string]Factory[proto.Strategy]),
 	}
-	Processors = &registry[proto.Processor]{
-		factories: make(map[string]Factory[proto.Processor]),
+	Features = &registry[proto.Feature]{
+		factories: make(map[string]Factory[proto.Feature]),
 	}
 	Execution = &registry[proto.Executor]{
 		factories: make(map[string]Factory[proto.Executor]),
