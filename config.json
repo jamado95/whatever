@@ -56,7 +56,7 @@
         "type": "fixed",                                                                                                                                                                                             
         "interval": "100ms"                                                                                                                                                                                             
       },                                                                                                                                                                                                          
-      "limit": 10,                                                                                                                                                                                                 
+      "limit": 100,                                                                                                                                                                                                 
       "bufferSize": 64                                                                                                                                                                                              
     }                                                                                                                                                                                                                
   } 
