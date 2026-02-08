@@ -2,6 +2,7 @@ package feat
 
 import (
 	"fmt"
+	"math"
 	proto "whatever/internal/protocol"
 	reg "whatever/internal/registry"
 )
@@ -55,5 +56,9 @@ func (s *SMA) Update(history *proto.SortedWindow[proto.MarketData], snap *proto.
 		sum += c.Candle.Close
 	}
 
-	proto.SetSnapshot(snap, s.id, sum/float64(s.period))
+	sma := sum / float64(s.period)
+	// round to 6 decimal places
+	sma = math.Floor(sma*1000000) / 1000000.0
+
+	proto.SetSnapshot(snap, s.id, sma)
 }
