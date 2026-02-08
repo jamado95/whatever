@@ -43,13 +43,18 @@ func main() {
 	// 1. Instantiate enabled providers
 	providers := make(map[string]proto.DataProvider)
 	for _, pc := range cfg.Providers {
-		if !pc.Enabled && reg.Providers.Has(pc.Type) {
+		if !reg.Providers.Has(pc.Type) {
+			err := fmt.Errorf("provider type %q not registered", pc.Type)
+			log.Error(err, err.Error())
+			os.Exit(1)
+		}
+		if !pc.Enabled {
 			log.Info(fmt.Sprintf("skipping disabled provider: %s", pc.Type))
 			continue
 		}
 		prov, err := reg.Providers.Create(pc.Type, pc.Opts)
 		if err != nil {
-			log.Error(err, fmt.Sprintf("Error creating provider %s: %v\n", pc.Type, err))
+			log.Error(err, fmt.Sprintf("error creating provider %s: %v", pc.Type, err))
 			os.Exit(1)
 		}
 		providers[pc.Type] = prov
@@ -59,13 +64,18 @@ func main() {
 	// 2. Instantiate enabled strategies
 	strategies := make(map[string]proto.Strategy)
 	for _, sc := range cfg.Strategies {
-		if !sc.Enabled && reg.Strategies.Has(sc.Type) {
+		if !reg.Strategies.Has(sc.Type) {
+			err := fmt.Errorf("strategy type %q not registered", sc.Type)
+			log.Error(err, err.Error())
+			os.Exit(1)
+		}
+		if !sc.Enabled {
 			log.Info(fmt.Sprintf("skipping disabled strategy: %s", sc.Type))
 			continue
 		}
 		strat, err := reg.Strategies.Create(sc.Type, sc.Opts)
 		if err != nil {
-			log.Error(err, fmt.Sprintf("error creating strategy %s: %v\n", sc.Type, err))
+			log.Error(err, fmt.Sprintf("error creating strategy %s: %v", sc.Type, err))
 			os.Exit(1)
 		}
 		strategies[sc.Type] = strat
@@ -97,10 +107,16 @@ func main() {
 	engineOpts["_features"] = features
 
 	// resolve provider
-	if provType, ok := engineOpts["provider"].(string); ok && reg.Providers.Has(provType) {
-		engineOpts["_provider"] = providers[provType]
+	if provType, ok := engineOpts["provider"].(string); ok {
+		if prov, exists := providers[provType]; exists {
+			engineOpts["_provider"] = prov
+		} else {
+			err := fmt.Errorf("engine references provider %q which was not instantiated (disabled or missing)", provType)
+			log.Error(err, err.Error())
+			os.Exit(1)
+		}
 	} else {
-		err := fmt.Errorf("engine config references unknown provider: %s", provType)
+		err := fmt.Errorf("engine config missing 'provider' field")
 		log.Error(err, err.Error())
 		os.Exit(1)
 	}
@@ -110,13 +126,13 @@ func main() {
 	if stratTypes, ok := engineOpts["strategies"].([]any); ok {
 		for _, t := range stratTypes {
 			stratType := t.(string)
-			if reg.Strategies.Has(stratType) {
+			if strat, exists := strategies[stratType]; exists {
 				engineOpts["_strategies"] = append(
 					engineOpts["_strategies"].([]proto.Strategy),
-					strategies[stratType],
+					strat,
 				)
 			} else {
-				err := fmt.Errorf("engine config references unknown strategy: %s", stratType)
+				err := fmt.Errorf("engine references strategy %q which was not instantiated (disabled or missing)", stratType)
 				log.Error(err, err.Error())
 				os.Exit(1)
 			}
