@@ -17,6 +17,9 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+# Default number of candles to show initially when dataset is large
+DEFAULT_VISIBLE_CANDLES = 200
+
 
 def parse_args():
     """Parse command-line arguments."""
@@ -38,6 +41,17 @@ def parse_args():
         "--indicators",
         help="Comma-separated list of indicator columns to include",
         default=None,
+    )
+    parser.add_argument(
+        "--window",
+        type=int,
+        default=DEFAULT_VISIBLE_CANDLES,
+        help=f"Number of candles to show initially (0 = show all, default: {DEFAULT_VISIBLE_CANDLES})",
+    )
+    parser.add_argument(
+        "--rangeslider",
+        action="store_true",
+        help="Show range slider for navigation",
     )
     return parser.parse_args()
 
@@ -103,7 +117,12 @@ def detect_indicators(df: pd.DataFrame, user_indicators: list = None) -> dict:
 
 
 def create_chart(
-    df: pd.DataFrame, overlays: list, oscillators: list, title: str = "Market Data"
+    df: pd.DataFrame,
+    overlays: list,
+    oscillators: list,
+    title: str = "Market Data",
+    window: int = DEFAULT_VISIBLE_CANDLES,
+    rangeslider: bool = False,
 ) -> go.Figure:
     """Build a multi-panel Plotly figure."""
     # Determine number of rows
@@ -212,6 +231,14 @@ def create_chart(
                 y=30, line_dash="dash", line_color="green", opacity=0.5, row=current_row, col=1
             )
 
+        # Add reference lines at oscillator bounds
+        fig.add_hline(
+            y=150, line_dash="dot", line_color="gray", opacity=0.3, row=current_row, col=1
+        )
+        fig.add_hline(
+            y=-150, line_dash="dot", line_color="gray", opacity=0.3, row=current_row, col=1
+        )
+
     # Panel 3: Volume (if present)
     if has_volume:
         current_row += 1
@@ -235,17 +262,26 @@ def create_chart(
     # Update layout
     fig.update_layout(
         title=title,
-        xaxis_rangeslider_visible=False,
-        height=600 + (num_rows - 1) * 150,
+        xaxis_rangeslider_visible=rangeslider,
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         template="plotly_dark",
         paper_bgcolor="#1e1e1e",
         plot_bgcolor="#1e1e1e",
+        dragmode="pan",  # Default to pan mode for TradingView-like behavior
+        autosize=True,
+        margin=dict(l=50, r=50, t=80, b=50),
     )
 
-    # Make responsive
-    fig.update_layout(autosize=True)
+    # Enable y-axis auto-scaling when zooming on x-axis
+    fig.update_yaxes(autorange=True, fixedrange=False)
+
+    # Apply initial zoom window for large datasets
+    if window > 0 and len(df) > window:
+        start_idx = len(df) - window
+        x_start = df["timestamp"].iloc[start_idx]
+        x_end = df["timestamp"].iloc[-1]
+        fig.update_xaxes(range=[x_start, x_end])
 
     return fig
 
@@ -292,11 +328,57 @@ def main():
     symbol = df["symbol"].iloc[0] if "symbol" in df.columns else "Unknown"
 
     # Create chart
-    fig = create_chart(df, overlays, oscillators, title=f"{symbol} Market Data")
+    fig = create_chart(
+        df,
+        overlays,
+        oscillators,
+        title=f"{symbol} Market Data",
+        window=args.window,
+        rangeslider=args.rangeslider,
+    )
 
-    # Save HTML in same directory as input file
+    # Save HTML in same directory as input file with full viewport styling
     output_path = input_path.with_suffix(".html")
-    fig.write_html(str(output_path), include_plotlyjs=True, full_html=True)
+    
+    # Custom HTML with full viewport CSS
+    html_string = fig.to_html(
+        include_plotlyjs=True,
+        full_html=False,
+        config={"scrollZoom": True, "displayModeBar": True, "responsive": True},
+    )
+    
+    full_html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{symbol} Market Data</title>
+    <style>
+        body {{
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #1e1e1e;
+        }}
+        .plotly-graph-div {{
+            width: 100vw !important;
+            height: 100vh !important;
+        }}
+    </style>
+</head>
+<body>
+    {html_string}
+    <script>
+        // Ensure chart resizes with window
+        window.addEventListener('resize', function() {{
+            Plotly.Plots.resize(document.querySelector('.plotly-graph-div'));
+        }});
+    </script>
+</body>
+</html>"""
+    
+    with open(str(output_path), 'w') as f:
+        f.write(full_html)
 
     # Print summary
     date_range_start = df["timestamp"].min().strftime("%Y-%m-%d %H:%M:%S")
