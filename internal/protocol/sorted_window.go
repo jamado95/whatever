@@ -2,6 +2,7 @@ package proto
 
 import (
 	"errors"
+	"slices"
 	"sort"
 	"sync"
 )
@@ -64,7 +65,7 @@ func (sw *SortedWindow[T]) Push(item T) error {
 	return nil
 }
 
-// Last returns the most recent n entries (largest ReceivedAt values).
+// Last returns the most recent n entries (largest Timestamp values).
 // Returns fewer if buffer has less than n entries.
 // The returned slice is a copy, safe for concurrent use.
 func (sw *SortedWindow[T]) Last(n int) []T {
@@ -81,6 +82,8 @@ func (sw *SortedWindow[T]) Last(n int) []T {
 	start := len(sw.data) - n
 	result := make([]T, n)
 	copy(result, sw.data[start:])
+	slices.Reverse(result)
+
 	return result
 }
 
