@@ -2,7 +2,6 @@ package feat
 
 import (
 	"fmt"
-	"math"
 	proto "whatever/internal/protocol"
 	reg "whatever/internal/registry"
 )
@@ -70,8 +69,6 @@ func (r *RSI) Update(history *proto.SortedWindow[proto.MarketData], snap *proto.
 
 	rs := avgGain / avgLoss
 	rsi := 100.0 - (100.0 / (1.0 + rs))
-	// round to 6 decimal places
-	rsi = math.Floor(rsi*1000000) / 1000000.0
 
-	proto.SetSnapshot(snap, r.id, rsi)
+	proto.SetSnapshot(snap, r.id, roundDecimals(rsi, 6))
 }

@@ -2,7 +2,6 @@ package feat
 
 import (
 	"fmt"
-	"math"
 	proto "whatever/internal/protocol"
 	reg "whatever/internal/registry"
 )
@@ -16,7 +15,7 @@ func init() {
 
 		id := iDWithPeriod("sma", int(period))
 
-		return &EMA{
+		return &SMA{
 			id:     proto.NewKey[float64](id),
 			period: int(period),
 		}, nil
@@ -57,8 +56,6 @@ func (s *SMA) Update(history *proto.SortedWindow[proto.MarketData], snap *proto.
 	}
 
 	sma := sum / float64(s.period)
-	// round to 6 decimal places
-	sma = math.Floor(sma*1000000) / 1000000.0
 
-	proto.SetSnapshot(snap, s.id, sma)
+	proto.SetSnapshot(snap, s.id, roundDecimals(sma, 6))
 }

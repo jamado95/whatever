@@ -2,7 +2,6 @@ package feat
 
 import (
 	"fmt"
-	"math"
 	proto "whatever/internal/protocol"
 	reg "whatever/internal/registry"
 )
@@ -64,8 +63,5 @@ func (e *EMA) Update(history *proto.SortedWindow[proto.MarketData], snap *proto.
 		ema = (candles[i].Candle.Close * multiplier) + (ema * (1 - multiplier))
 	}
 
-	// round to 6 decimal places
-	ema = math.Floor(ema*1000000) / 1000000.0
-
-	proto.SetSnapshot(snap, e.id, ema)
+	proto.SetSnapshot(snap, e.id, roundDecimals(ema, 6))
 }
