@@ -44,19 +44,23 @@
         "pullbackPct": 0.02
       }                                                                                                                                                                                                             
     ],                                                                                                                                                                                                               
-    "engine": {                                                                                                                                                                                                      
-      "type": "data_logger",                                                                                                                                                                                         
-      "provider": "binance_csv",                                                                                                                                                                                     
-      "strategies": ["buy_the_dip"],                                                                                                                                                                                 
-      "subscription": {                                                                                                                                                                                              
-        "symbol": "BTCUSDT",                                                                                                                                                                                         
-        "timeframe": "1h"                                                                                                                                                                                            
-      },                                                                                                                                                                                                             
-      "ticker": {                                                                                                                                                                                                    
-        "type": "fixed",                                                                                                                                                                                             
-        "interval": "100ms"                                                                                                                                                                                             
-      },                                                                                                                                                                                                          
-      "limit": 100,                                                                                                                                                                                                 
-      "bufferSize": 64                                                                                                                                                                                              
+    "engine": {
+      "type": "data_logger",
+      "provider": "binance_csv",
+      "strategies": [],
+      "subscription": {
+        "symbol": "BTCUSDT",
+        "timeframe": "1h"
+      },
+      "ticker": {
+        "type": "realtime",
+        "interval": "100ms"
+      },
+      "exporter": {
+        "type": "jsonl",
+        "output_dir": "data/exports"
+      },
+      "limit": 1000,
+      "bufferSize": 64
     }                                                                                                                                                                                                                
   } 

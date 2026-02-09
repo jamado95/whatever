@@ -75,3 +75,51 @@ tidy:
 	go mod tidy
 
 check: fmt tidy test lint
+
+# ------------------------
+# Python visualization
+# ------------------------
+# Python virtual environment setup
+VENV := .venv
+PYTHON := $(VENV)/bin/python3
+PIP := $(VENV)/bin/pip3
+
+.PHONY: venv
+venv:
+	python3 -m venv $(VENV)
+	$(PIP) install --upgrade pip
+
+.PHONY: plot-deps
+plot-deps: venv
+	$(PIP) install pandas plotly
+
+.PHONY: plot
+plot:
+	@if [ -z "$(FILE)" ]; then \
+		echo "Error: FILE parameter required"; \
+		echo "Usage: make plot FILE=outputs/market_data.jsonl"; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(FILE)" ]; then \
+		echo "Error: File not found: $(FILE)"; \
+		exit 1; \
+	fi
+	@cmd="$(PYTHON) scripts/plot_market_data.py $(FILE)"; \
+	if [ -n "$(START)" ]; then cmd="$$cmd --start $(START)"; fi; \
+	if [ -n "$(END)" ]; then cmd="$$cmd --end $(END)"; fi; \
+	if [ -n "$(INDICATORS)" ]; then cmd="$$cmd --indicators $(INDICATORS)"; fi; \
+	echo "$$cmd"; \
+	$$cmd
+
+.PHONY: quick-plot
+quick-plot:
+	@if [ ! -f "outputs/market_data.jsonl" ]; then \
+		echo "Error: outputs/market_data.jsonl not found"; \
+		exit 1; \
+	fi
+	$(PYTHON) scripts/plot_market_data.py outputs/market_data.jsonl
+
+# Clean virtual environment
+.PHONY: clean-venv
+clean-venv:
+	rm -rf $(VENV)

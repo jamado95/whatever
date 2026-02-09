@@ -14,6 +14,7 @@ import (
 
 	// side-effect imports
 	_ "whatever/internal/domains/execution"
+	_ "whatever/internal/domains/exporter"
 	_ "whatever/internal/domains/features"
 	_ "whatever/internal/domains/market"
 	_ "whatever/internal/domains/provider"
@@ -136,6 +137,31 @@ func main() {
 				log.Error(err, err.Error())
 				os.Exit(1)
 			}
+		}
+	}
+
+	// resolve exporter (optional)
+	if exporterCfg, ok := engineOpts["exporter"].(map[string]any); ok {
+		exporterType, _ := exporterCfg["type"].(string)
+		if exporterType != "" {
+			if !reg.Exporters.Has(exporterType) {
+				err := fmt.Errorf("exporter type %q not registered", exporterType)
+				log.Error(err, err.Error())
+				os.Exit(1)
+			}
+			// pass context info to exporter for filename generation
+			if sub, ok := engineOpts["subscription"].(map[string]any); ok {
+				exporterCfg["_symbol"], _ = sub["symbol"].(string)
+				exporterCfg["_timeframe"], _ = sub["timeframe"].(string)
+			}
+			exporterCfg["_engine"] = cfg.Engine.Type
+			exporter, err := reg.Exporters.Create(exporterType, exporterCfg)
+			if err != nil {
+				log.Error(err, fmt.Sprintf("error creating exporter %s: %v", exporterType, err))
+				os.Exit(1)
+			}
+			engineOpts["_exporter"] = exporter
+			log.Info(fmt.Sprintf("created exporter: %s", exporterType))
 		}
 	}
 

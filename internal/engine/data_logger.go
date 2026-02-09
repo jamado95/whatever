@@ -27,6 +27,12 @@ func init() {
 			return nil, fmt.Errorf("missing or invalid _provider")
 		}
 
+		// exporter is optional
+		var exporter proto.Exporter
+		if exp, ok := opts["_exporter"].(proto.Exporter); ok {
+			exporter = exp
+		}
+
 		features, ok := opts["_features"].([]proto.Feature)
 		if !ok {
 			err := fmt.Errorf("$s missing or invalid _features", id)
@@ -60,6 +66,7 @@ func init() {
 			provider: provider,
 			features: featuresChain,
 			ticker:   ticker,
+			exporter: exporter,
 			logger:   log,
 			cfg:      cfg,
 			done:     make(chan struct{}),
@@ -72,6 +79,7 @@ type DataLogger struct {
 	provider proto.DataProvider
 	features *feat.FeatureChain
 	ticker   timing.Ticker[proto.MarketData]
+	exporter proto.Exporter
 	logger   *logger.Logger
 	cfg      DataLoggerConfig
 
@@ -131,6 +139,13 @@ func (e *DataLogger) Run(ctx context.Context) error {
 		return err
 	}
 
+	// initialize exporter if configured
+	if e.exporter != nil {
+		if err := e.exporter.Init(); err != nil {
+			return fmt.Errorf("failed to initialize exporter: %w", err)
+		}
+	}
+
 	data, dataErrs := e.provider.Streams()
 	// gate data through ticker
 	gatedData := e.ticker.Gate(ctx, data)
@@ -150,6 +165,12 @@ func (e *DataLogger) Run(ctx context.Context) error {
 		count := 0
 		for emd := range processedData {
 			e.logger.ExtendedMarketData(emd)
+			// export data if exporter is configured
+			if e.exporter != nil {
+				if err := e.exporter.Export(emd.MarketData, emd.Indicators); err != nil {
+					e.logger.Error(err, "exporter error")
+				}
+			}
 			count++
 		}
 		e.logger.With("count", count).Info("data logger stream complete")
@@ -197,6 +218,12 @@ func (e *DataLogger) Close() {
 		}
 
 		e.wg.Wait()
+
+		if e.exporter != nil {
+			if err := e.exporter.Close(); err != nil {
+				e.logger.Error(err, "exporter close error")
+			}
+		}
 	})
 }
 

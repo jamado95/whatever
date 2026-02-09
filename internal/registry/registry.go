@@ -24,6 +24,9 @@ var (
 	Engines = &registry[Runnable]{
 		factories: make(map[string]Factory[Runnable]),
 	}
+	Exporters = &registry[proto.Exporter]{
+		factories: make(map[string]Factory[proto.Exporter]),
+	}
 )
 
 type Runnable interface {
