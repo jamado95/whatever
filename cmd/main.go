@@ -49,7 +49,7 @@ func main() {
 			log.Error(err, err.Error())
 			os.Exit(1)
 		}
-		if !pc.Enabled {
+		if pc.Disabled {
 			log.Info(fmt.Sprintf("skipping disabled provider: %s", pc.Type))
 			continue
 		}
@@ -70,7 +70,7 @@ func main() {
 			log.Error(err, err.Error())
 			os.Exit(1)
 		}
-		if !sc.Enabled {
+		if sc.Disabled {
 			log.Info(fmt.Sprintf("skipping disabled strategy: %s", sc.Type))
 			continue
 		}
@@ -88,6 +88,10 @@ func main() {
 	for _, fc := range cfg.Features {
 		if !reg.Features.Has(fc.Type) {
 			log.Info(fmt.Sprintf("skipping unregistered feature: %s", fc.Type))
+			continue
+		}
+		if fc.Disabled {
+			log.Info(fmt.Sprintf("skipping disabled feature: %s", fc.Type))
 			continue
 		}
 		for _, opts := range fc.Variants {
@@ -142,13 +146,18 @@ func main() {
 
 	// resolve exporter (optional)
 	if exporterCfg, ok := engineOpts["exporter"].(map[string]any); ok {
-		// check enabled flag (defaults to true if not specified)
-		enabled := true
-		if e, ok := exporterCfg["enabled"].(bool); ok {
-			enabled = e
-		}
 		exporterType, _ := exporterCfg["type"].(string)
-		if exporterType != "" && enabled {
+		if exporterType == "" {
+			err := fmt.Errorf("exporter config missing required 'type' field")
+			log.Error(err, err.Error())
+			os.Exit(1)
+		}
+		// check disabled flag (defaults to enabled if not specified)
+		disabled := false
+		if d, ok := exporterCfg["disabled"].(bool); ok {
+			disabled = d
+		}
+		if !disabled {
 			if !reg.Exporters.Has(exporterType) {
 				err := fmt.Errorf("exporter type %q not registered", exporterType)
 				log.Error(err, err.Error())
@@ -167,8 +176,8 @@ func main() {
 			}
 			engineOpts["_exporter"] = exporter
 			log.Info(fmt.Sprintf("created exporter: %s", exporterType))
-		} else if !enabled {
-			log.Info("skipping disabled exporter")
+		} else {
+			log.Info(fmt.Sprintf("skipping disabled exporter: %s", exporterType))
 		}
 	}
 
