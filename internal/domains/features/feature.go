@@ -2,6 +2,7 @@ package feat
 
 import (
 	"fmt"
+	"math"
 
 	proto "whatever/internal/protocol"
 )
@@ -118,6 +119,10 @@ func topologicalSort(features []proto.Feature) ([]proto.Feature, error) {
 	return sorted, nil
 }
 
+// ////////////////////////////////////
+// Utility functions
+// ////////////////////////////////////
+
 func removeDuplicates(features []proto.Feature) []proto.Feature {
 	seen := make(map[proto.KeyRef]bool)
 	uniqueFeatures := make([]proto.Feature, 0)
@@ -128,4 +133,13 @@ func removeDuplicates(features []proto.Feature) []proto.Feature {
 		}
 	}
 	return uniqueFeatures
+}
+
+func iDWithPeriod(base string, period int) string {
+	return fmt.Sprintf("%s_%d", base, period)
+}
+
+func roundDecimals(value float64, precision int) float64 {
+	multiplier := math.Pow(10, float64(precision))
+	return math.Round(value*multiplier) / multiplier
 }

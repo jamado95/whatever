@@ -186,17 +186,19 @@ func (e *DataLogger) Run(ctx context.Context) error {
 	e.ticker.Start()
 
 	// close once logging goroutines complete
+	wait := make(chan struct{})
 	go func() {
 		e.wg.Wait()
-		e.Close()
+		wait <- struct{}{}
 	}()
 
 	select {
 	// handle external cancellations
 	case <-ctx.Done():
-		e.Close()
-	case <-e.done:
+	case <-wait:
 	}
+
+	e.Close()
 
 	// absorb ctrl+c context cancellation errors
 	if err := ctx.Err(); err != nil && err != context.Canceled {
