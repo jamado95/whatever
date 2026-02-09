@@ -35,14 +35,14 @@ func init() {
 
 		features, ok := opts["_features"].([]proto.Feature)
 		if !ok {
-			err := fmt.Errorf("$s missing or invalid _features", id)
+			err := fmt.Errorf("%s missing or invalid _features", id)
 			log.Error(err, err.Error())
 			return nil, err
 		}
 
 		featuresChain, err := feat.NewFeatureChain(features)
 		if err != nil {
-			log.Error(err, fmt.Sprintf("$s failed to create feature chain", id, err))
+			log.Error(err, fmt.Sprintf("%s failed to create feature chain", id))
 			return nil, err
 		}
 

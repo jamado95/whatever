@@ -142,8 +142,13 @@ func main() {
 
 	// resolve exporter (optional)
 	if exporterCfg, ok := engineOpts["exporter"].(map[string]any); ok {
+		// check enabled flag (defaults to true if not specified)
+		enabled := true
+		if e, ok := exporterCfg["enabled"].(bool); ok {
+			enabled = e
+		}
 		exporterType, _ := exporterCfg["type"].(string)
-		if exporterType != "" {
+		if exporterType != "" && enabled {
 			if !reg.Exporters.Has(exporterType) {
 				err := fmt.Errorf("exporter type %q not registered", exporterType)
 				log.Error(err, err.Error())
@@ -162,6 +167,8 @@ func main() {
 			}
 			engineOpts["_exporter"] = exporter
 			log.Info(fmt.Sprintf("created exporter: %s", exporterType))
+		} else if !enabled {
+			log.Info("skipping disabled exporter")
 		}
 	}
 
