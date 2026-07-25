@@ -44,15 +44,16 @@ func main() {
 	// 1. Instantiate enabled providers
 	providers := make(map[string]proto.DataProvider)
 	for _, pc := range cfg.Providers {
+		if pc.Disabled {
+			log.Info(fmt.Sprintf("skipping disabled provider: %s", pc.Type))
+			continue
+		}
 		if !reg.Providers.Has(pc.Type) {
 			err := fmt.Errorf("provider type %q not registered", pc.Type)
 			log.Error(err, err.Error())
 			os.Exit(1)
 		}
-		if pc.Disabled {
-			log.Info(fmt.Sprintf("skipping disabled provider: %s", pc.Type))
-			continue
-		}
+
 		prov, err := reg.Providers.Create(pc.Type, pc.Opts)
 		if err != nil {
 			log.Error(err, fmt.Sprintf("error creating provider %s: %v", pc.Type, err))
@@ -65,15 +66,16 @@ func main() {
 	// 2. Instantiate enabled strategies
 	strategies := make(map[string]proto.Strategy)
 	for _, sc := range cfg.Strategies {
+		if sc.Disabled {
+			log.Info(fmt.Sprintf("skipping disabled strategy: %s", sc.Type))
+			continue
+		}
 		if !reg.Strategies.Has(sc.Type) {
 			err := fmt.Errorf("strategy type %q not registered", sc.Type)
 			log.Error(err, err.Error())
 			os.Exit(1)
 		}
-		if sc.Disabled {
-			log.Info(fmt.Sprintf("skipping disabled strategy: %s", sc.Type))
-			continue
-		}
+
 		strat, err := reg.Strategies.Create(sc.Type, sc.Opts)
 		if err != nil {
 			log.Error(err, fmt.Sprintf("error creating strategy %s: %v", sc.Type, err))
@@ -83,25 +85,35 @@ func main() {
 		log.Info(fmt.Sprintf("created strategy: %s", sc.Type))
 	}
 
+	// createFeature helper to create feature from config
+	createFeature := func(fc config.FeatureConfig, opts map[string]any) proto.Feature {
+		feat, err := reg.Features.Create(fc.Type, opts)
+		if err != nil {
+			log.Error(err, fmt.Sprintf("error creating feature %s: %v", fc.Type, err))
+			os.Exit(1)
+		}
+		log.Info(fmt.Sprintf("created feature: %s", feat.ID().Name))
+		return feat
+	}
+
 	// 3. Instantiate features (one per variant)
 	features := make([]proto.Feature, 0)
 	for _, fc := range cfg.Features {
-		if !reg.Features.Has(fc.Type) {
-			log.Info(fmt.Sprintf("skipping unregistered feature: %s", fc.Type))
-			continue
-		}
 		if fc.Disabled {
 			log.Info(fmt.Sprintf("skipping disabled feature: %s", fc.Type))
 			continue
 		}
-		for _, opts := range fc.Variants {
-			feat, err := reg.Features.Create(fc.Type, opts)
-			if err != nil {
-				log.Error(err, fmt.Sprintf("error creating feature %s: %v", fc.Type, err))
-				os.Exit(1)
+		if !reg.Features.Has(fc.Type) {
+			log.Info(fmt.Sprintf("skipping unregistered feature: %s", fc.Type))
+			continue
+		}
+
+		if len(fc.Variants) == 0 {
+			features = append(features, createFeature(fc, nil))
+		} else {
+			for _, opts := range fc.Variants {
+				features = append(features, createFeature(fc, opts))
 			}
-			features = append(features, feat)
-			log.Info(fmt.Sprintf("created feature: %s", feat.ID()))
 		}
 	}
 

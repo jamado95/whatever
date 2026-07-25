@@ -90,8 +90,12 @@ def detect_indicators(df: pd.DataFrame, user_indicators: list = None) -> dict:
     # Patterns for oscillator indicators (separate panel)
     oscillator_patterns = [r"^rsi", r"^macd", r"^stoch", r"^cci", r"^mfi", r"^adx"]
 
+    # Patterns for candlestick pattern signals (plotted as arrows on price chart)
+    candle_patterns = [r"_candle$"]
+
     overlays = []
     oscillators = []
+    candles = []
 
     # Get candidate columns
     if user_indicators:
@@ -112,14 +116,21 @@ def detect_indicators(df: pd.DataFrame, user_indicators: list = None) -> dict:
         is_oscillator = any(re.match(p, col_lower) for p in oscillator_patterns)
         if is_oscillator:
             oscillators.append(col)
+            continue
 
-    return {"overlay": overlays, "oscillator": oscillators}
+        # Check if candlestick pattern
+        is_candle = any(re.search(p, col_lower) for p in candle_patterns)
+        if is_candle:
+            candles.append(col)
+
+    return {"overlay": overlays, "oscillator": oscillators, "candles": candles}
 
 
 def create_chart(
     df: pd.DataFrame,
     overlays: list,
     oscillators: list,
+    candles: list = None,
     title: str = "Market Data",
     window: int = DEFAULT_VISIBLE_CANDLES,
     rangeslider: bool = False,
@@ -202,6 +213,39 @@ def create_chart(
             row=current_row,
             col=1,
         )
+
+    # Plot candlestick patterns as markers on price chart
+    if candles:
+        for candle_col in candles:
+            # Up signals (value == 1): green triangle-up below candle low
+            up_mask = df[candle_col] == 1
+            fig.add_trace(
+                go.Scatter(
+                    x=df.loc[up_mask, "timestamp"],
+                    y=df.loc[up_mask, "low"] * 0.998,
+                    mode="markers",
+                    marker=dict(symbol="triangle-up", size=12, color="lime"),
+                    name=f"{candle_col} (bullish)",
+                    hovertemplate=f"<b>{candle_col}</b><br>%{{x}}<br>Bullish<extra></extra>",
+                ),
+                row=1,
+                col=1,
+            )
+
+            # Down signals (value == -1): red triangle-down above candle high
+            down_mask = df[candle_col] == -1
+            fig.add_trace(
+                go.Scatter(
+                    x=df.loc[down_mask, "timestamp"],
+                    y=df.loc[down_mask, "high"] * 1.002,
+                    mode="markers",
+                    marker=dict(symbol="triangle-down", size=12, color="red"),
+                    name=f"{candle_col} (bearish)",
+                    hovertemplate=f"<b>{candle_col}</b><br>%{{x}}<br>Bearish<extra></extra>",
+                ),
+                row=1,
+                col=1,
+            )
 
     # Panel 2: Oscillators (if present)
     if has_oscillators:
@@ -323,6 +367,7 @@ def main():
     indicators = detect_indicators(df, user_indicators)
     overlays = indicators["overlay"]
     oscillators = indicators["oscillator"]
+    candles = indicators["candles"]
 
     # Get symbol for title
     symbol = df["symbol"].iloc[0] if "symbol" in df.columns else "Unknown"
@@ -332,6 +377,7 @@ def main():
         df,
         overlays,
         oscillators,
+        candles=candles,
         title=f"{symbol} Market Data",
         window=args.window,
         rangeslider=args.rangeslider,
@@ -389,6 +435,7 @@ def main():
     print(f"Candle count: {len(df)}")
     print(f"Overlay indicators: {overlays if overlays else 'None'}")
     print(f"Oscillator indicators: {oscillators if oscillators else 'None'}")
+    print(f"Candle patterns: {candles if candles else 'None'}")
 
     return 0
 

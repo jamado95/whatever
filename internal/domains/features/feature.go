@@ -7,6 +7,18 @@ import (
 	proto "whatever/internal/protocol"
 )
 
+// ////////////////////////////////////
+// Feature Types
+// ////////////////////////////////////
+
+type DirectionalMarker = int
+
+const (
+	DirectionalMarkerUp   DirectionalMarker = 1
+	DirectionalMarkerDown DirectionalMarker = -1
+	DirectionalMarkerNoop DirectionalMarker = 0
+)
+
 type FeatureChain struct {
 	features []proto.Feature
 	window   *proto.SortedWindow[proto.MarketData]
