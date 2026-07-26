@@ -7,7 +7,7 @@ Downloads historical kline (candlestick) data from Binance public archives.
 ### Usage
 
 ```bash
-go run scripts/binance_download_klines.go -symbol BTCUSDT -interval 1h -start 2024-01-01 -end 2024-03-01 -out ./data
+go run cmd/scripts/binance_download_klines/binance_download_klines.go -symbol BTCUSDT -interval 1h -start 2024-01-01 -end 2024-03-01 -out ./data
 ```
 
 ### Flags
@@ -28,10 +28,10 @@ Creates a CSV file named `{SYMBOL}-{INTERVAL}-{START_MONTH}.csv` in the output d
 
 ```bash
 # Download January 2024 hourly data for BTCUSDT
-go run scripts/binance_download_klines.go -symbol BTCUSDT -interval 1h -start 2024-01-01 -end 2024-01-31 -out ./data
+go run cmd/scripts/binance_download_klines/binance_download_klines.go -symbol BTCUSDT -interval 1h -start 2024-01-01 -end 2024-01-31 -out ./data
 
 # Download Q1 2024 daily data for ETHUSDT
-go run scripts/binance_download_klines.go -symbol ETHUSDT -interval 1d -start 2024-01-01 -end 2024-03-31 -out ./data
+go run cmd/scripts/binance_download_klines/binance_download_klines.go -symbol ETHUSDT -interval 1d -start 2024-01-01 -end 2024-03-31 -out ./data
 ```
 
 ---
@@ -43,7 +43,7 @@ Fetches live market data from the Binance REST API.
 ### Usage
 
 ```bash
-go run scripts/binance_market_info.go -cmd <command> [flags]
+go run cmd/scripts/binance_market_info/binance_market_info.go -cmd <command> [flags]
 ```
 
 ### Commands
@@ -68,17 +68,17 @@ go run scripts/binance_market_info.go -cmd <command> [flags]
 
 ```bash
 # List all USDT trading pairs
-go run scripts/binance_market_info.go -cmd pairs -quote USDT
+go run cmd/scripts/binance_market_info/binance_market_info.go -cmd pairs -quote USDT
 
 # Search for BTC pairs
-go run scripts/binance_market_info.go -cmd pairs -search BTC
+go run cmd/scripts/binance_market_info/binance_market_info.go -cmd pairs -search BTC
 
 # Get 24h ticker for BTCUSDT
-go run scripts/binance_market_info.go -cmd ticker -symbol BTCUSDT
+go run cmd/scripts/binance_market_info/binance_market_info.go -cmd ticker -symbol BTCUSDT
 
 # Get all USDT tickers
-go run scripts/binance_market_info.go -cmd tickers -quote USDT
+go run cmd/scripts/binance_market_info/binance_market_info.go -cmd tickers -quote USDT
 
 # Output pairs as JSON
-go run scripts/binance_market_info.go -cmd pairs -quote USDT -json
+go run cmd/scripts/binance_market_info/binance_market_info.go -cmd pairs -quote USDT -json
 ```

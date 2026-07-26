@@ -2,5 +2,9 @@ data
 
 whatever
 
-# python3 virutal env directory
+# python virtual env directory (managed by uv; uv.lock is committed)
 .venv
+__pycache__/
+pyproject.toml
+uv.lock
+.python-version

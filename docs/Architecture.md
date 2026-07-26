@@ -1,6 +1,6 @@
 # Architecture Overview 
 
-The core of this project is a live trading engine which is essentially a golang data processing pipeline with event-driven interactions between internal protocol modules.
+The core of this project is a live trading engine which is essentially a golang data processing pipeline with event-driven interactions between internal protocol modules. Protocols modules are further described at a high-level at `docs/Protocol.md`.
 
 Processing speed and paralelization are core primitives in this project's development. It must support hundreds (or even thousands) of concurrent data streams internally so as to, for example, develop trading signals based on correlated assets, and manage multi-asset portfolios.
 
@@ -12,7 +12,7 @@ Entry Point
 - /cmd/main.go
 
 Core Architecture
-- internal/domains: domain logic (execution, market, monitor, processor, provider, risk, strategy)
+- internal/domains: domain logic (execution, market, monitor, features, provider, risk, strategy)
 - internal/engine: orchestration (backtesting, logging, full runtime)
 - internal/pipeline: fanout + pipeline execution
 - internal/protocol: domain interfaces
@@ -25,6 +25,11 @@ Design Rules
 - Engine wires domains together
 - Protocol defines contracts; implementations live in domains
 - Pipeline is the primary data/control flow mechanism
+- Factories must not perform I/O. Construction is inert; all I/O belongs in `Init()`. This is what
+  makes `--validate-only` a genuine dry run.
+- Each component declares a config struct beside its factory and decodes into it with
+  `config.Decode`. That struct is the component's config schema: unknown keys, wrong types and
+  invalid enum values are startup errors. See `docs/discussions/config.md`.
 
 Engines
 - focus on log/backtesting engines
@@ -42,7 +47,7 @@ Constraints
 
 ## Backtesting
 
-A rough idea of this piece can be found at `docs/Bactesting.md`
+A rough idea of this piece can be found at `docs/Backtesting.md`
 
 This piece is still in planning and under development.
 It should live in a separate module, cleanly separated from the trading engine core.

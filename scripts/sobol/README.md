@@ -4,23 +4,25 @@ Parameter sensitivity analysis for trading strategies using Sobol indices. Ident
 
 ## Installation
 
-```bash
-pip install -r requirements.txt
-```
+Dependencies are managed by [uv](https://docs.astral.sh/uv/) from the repo root
+`pyproject.toml` (`sobol` dependency group). There is no install step — `uv run`
+provisions the interpreter and syncs the environment on first use.
+
+Run every command below from the **repo root**, not from this directory.
 
 ## Quick Start
 
 ```bash
 # 1. Generate sample matrix
-python generate.py --problem problem.json --output samples.csv
+uv run scripts/sobol/generate.py --problem problem.json --output samples.csv
 
 # 2. Run your strategy on each sample row, output results.csv with metric columns
 
 # 3. Compute Sobol indices
-python analyze.py --problem problem.json --results results.csv --output analysis.json
+uv run scripts/sobol/analyze.py --problem problem.json --results results.csv --output analysis.json
 
 # 4. Generate visualizations and summary
-python report.py --problem problem.json --analysis analysis.json --results results.csv --output report/
+uv run scripts/sobol/report.py --problem problem.json --analysis analysis.json --results results.csv --output report/
 ```
 
 ## Problem Definition
@@ -75,7 +77,7 @@ Create a `problem.json` file defining parameters and metrics:
 Generates Saltelli sample matrix for Sobol analysis.
 
 ```bash
-python generate.py --problem problem.json --output samples.csv [--dry-run]
+uv run scripts/sobol/generate.py --problem problem.json --output samples.csv [--dry-run]
 ```
 
 | Argument | Description |
@@ -93,7 +95,7 @@ Sample count formula: `N * (2D + 2)` where N=1024 and D=number of parameters.
 Computes Sobol sensitivity indices from simulation results.
 
 ```bash
-python analyze.py --problem problem.json --results results.csv --output analysis.json
+uv run scripts/sobol/analyze.py --problem problem.json --results results.csv --output analysis.json
 ```
 
 | Argument | Description |
@@ -114,7 +116,7 @@ python analyze.py --problem problem.json --results results.csv --output analysis
 Generates visualizations and text summary.
 
 ```bash
-python report.py --problem problem.json --analysis analysis.json --results results.csv --output report/
+uv run scripts/sobol/report.py --problem problem.json --analysis analysis.json --results results.csv --output report/
 ```
 
 | Argument | Description |
@@ -161,10 +163,10 @@ If `ST >> S1`, the parameter has strong interactions with others.
 
 ```bash
 # Check sample count before generating
-python generate.py --problem problem.json --output samples.csv --dry-run
+uv run scripts/sobol/generate.py --problem problem.json --output samples.csv --dry-run
 
 # Generate samples
-python generate.py --problem problem.json --output samples.csv
+uv run scripts/sobol/generate.py --problem problem.json --output samples.csv
 
 # Run backtests (example using parallel)
 cat samples.csv | parallel --header : --colsep ',' \
@@ -172,10 +174,10 @@ cat samples.csv | parallel --header : --colsep ',' \
   > results.csv
 
 # Analyze
-python analyze.py --problem problem.json --results results.csv --output analysis.json
+uv run scripts/sobol/analyze.py --problem problem.json --results results.csv --output analysis.json
 
 # Generate report
-python report.py --problem problem.json --analysis analysis.json \
+uv run scripts/sobol/report.py --problem problem.json --analysis analysis.json \
   --results results.csv --output report/
 
 # View summary

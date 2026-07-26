@@ -1,4 +1,0 @@
-SALib>=1.4
-pandas>=2.0
-matplotlib>=3.7
-numpy>=1.24
