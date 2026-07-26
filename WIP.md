@@ -1,4 +1,4 @@
-## WIP
+## WIP (Outdated)
 
 ### CHANGELOG (highlights to remember later)
     - introduced monitoring domain responsible for monitoring Fills and producing portfolio/position updates

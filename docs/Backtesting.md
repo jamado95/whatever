@@ -93,14 +93,14 @@ Stress-test the entire research pipeline against false discovery.
 Procedure:
 	•	Apply the full walk-forward process to permuted (noise) data
 	•	Measure the best performance achievable through:
-	•	Optimization
-	•	Walk-forward selection
-	•	Chance alone
+		• Optimization
+		• Walk-forward selection
+		• Chance alone
 
 Interpretation:
 	•	If real walk-forward results are not statistically distinct from noise:
-	•	The pipeline is discovering patterns that do not exist
-	•	This is the strongest defense against research overfitting
+		•	The pipeline is discovering patterns that do not exist
+		•	This is the strongest defense against research overfitting
 
 ⸻
 
@@ -112,7 +112,7 @@ This is why return alignment (e.g. shifting) matters in backtests.
 	•	Optimization reveals bias; it does not create truth
 A good strategy works across ranges of parameters, not sharp peaks.
 	•	Noise always fits
-The question is whether your strategy fits better than noise.
+The question is whether the strategy fits better than noise.
 
 ⸻
 
