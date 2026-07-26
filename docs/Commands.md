@@ -56,8 +56,9 @@ A single run reports every independent problem it finds, not just the first. Com
 with `"disabled": true` are not validated. Because no component performs I/O when constructed,
 `--validate-only` is a genuine dry run — nothing is fetched and no files are written.
 
-One limitation: if a component the engine depends on fails to build, the engine itself is not
-constructed, so errors inside its `options` block only surface once the earlier error is fixed.
+If a component the engine depends on fails to build, the engine is not constructed — building it
+would fail for a reason already reported. The run says so, and errors inside the engine's `options`
+block surface on the next run, once the dependency is fixed.
 
 ### Checks
 

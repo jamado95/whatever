@@ -1,12 +1,19 @@
-.PHONY: build run test lint fmt tidy check
+.PHONY: build run validate test lint fmt tidy check
 
 GO := go
+
+CONFIG ?= config.json
 
 build:
 	$(GO) build -o whatever ./cmd
 
 run:
-	$(GO) run ./cmd/main.go
+	$(GO) run ./cmd/main.go --config $(CONFIG)
+
+# Validate a config without running the engine. No market data is fetched and
+# no export files are written.
+validate:
+	$(GO) run ./cmd/main.go --config $(CONFIG) --validate-only
 
 # Script paths
 BINANCE_KLINES := cmd/scripts/binance_download_klines/binance_download_klines.go
@@ -79,25 +86,31 @@ check: fmt tidy test lint
 # ------------------------
 # Python visualization
 # ------------------------
-# Python virtual environment setup
-VENV := .venv
-PYTHON := $(VENV)/bin/python3
-PIP := $(VENV)/bin/pip3
+# Python tooling is managed by uv (https://docs.astral.sh/uv/).
+# Dependencies are declared in pyproject.toml and pinned in uv.lock.
+# `uv run` provisions the interpreter and syncs .venv on demand, so the
+# plot targets below need no separate setup step.
+UV := uv
+PYTHON := $(UV) run
 
-.PHONY: venv
-venv:
-	python3 -m venv $(VENV)
-	$(PIP) install --upgrade pip
+# Where the engine's exporter writes JSONL (must match "output_dir" in config.json)
+EXPORT_DIR := data/exports
 
-.PHONY: plot-deps
-plot-deps: venv
-	$(PIP) install pandas plotly
+# Explicitly materialise .venv from uv.lock (optional; `uv run` does this itself)
+.PHONY: py-sync
+py-sync:
+	$(UV) sync
+
+# Re-resolve dependencies and update uv.lock after editing pyproject.toml
+.PHONY: py-lock
+py-lock:
+	$(UV) lock
 
 .PHONY: plot
 plot:
 	@if [ -z "$(FILE)" ]; then \
 		echo "Error: FILE parameter required"; \
-		echo "Usage: make plot FILE=outputs/market_data.jsonl"; \
+		echo "Usage: make plot FILE=$(EXPORT_DIR)/BTCUSDT_1h_data_logger_<start>_<end>.jsonl"; \
 		exit 1; \
 	fi
 	@if [ ! -f "$(FILE)" ]; then \
@@ -111,15 +124,20 @@ plot:
 	echo "$$cmd"; \
 	$$cmd
 
+# Plot the most recently written export. Export filenames carry a timestamp
+# range, so there is no fixed name to target.
 .PHONY: quick-plot
 quick-plot:
-	@if [ ! -f "outputs/market_data.jsonl" ]; then \
-		echo "Error: outputs/market_data.jsonl not found"; \
+	@latest=$$(ls -t $(EXPORT_DIR)/*.jsonl 2>/dev/null | head -1); \
+	if [ -z "$$latest" ]; then \
+		echo "Error: no .jsonl exports found in $(EXPORT_DIR)"; \
+		echo "Run 'make run' with an exporter configured to produce one"; \
 		exit 1; \
-	fi
-	$(PYTHON) scripts/plot_market_data.py outputs/market_data.jsonl
+	fi; \
+	echo "$(PYTHON) scripts/plot_market_data.py $$latest"; \
+	$(PYTHON) scripts/plot_market_data.py $$latest
 
 # Clean virtual environment
 .PHONY: clean-venv
 clean-venv:
-	rm -rf $(VENV)
+	rm -rf .venv
