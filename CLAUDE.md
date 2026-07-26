@@ -1,73 +1,100 @@
 # Project Overview
 
-A systematic trading engine with a complete backtesting pipeline. The goal of this project is to be both a research platform and live trading engine for multiple asset types such as FX, crypto and stocks.
+A systematic trading engine with a complete backtesting pipeline. The project serves both as a research platform and a live trading engine for multiple asset classes, including FX, crypto, and equities.
 
-Core Engine Language: golang
-Preferred Research / Backtesting Language: python
+- **Core engine:** Go
+- **Research / backtesting:** Python
 
-To understand the architecture and strucutre of this project alwasy refer to `docs/Architecture.md` before engaging with any topic.
+## Authority
 
-`docs/Commands.md` is the reference for every runnable command — build, run, checks, data downloads, visualisation and backtesting tooling. Refer to it instead of inferring commands from the Makefile, and keep it current when commands are added, changed or removed.
+Use the following sources in order of precedence:
 
+1. `docs/Architecture.md` — project architecture, design, and engineering principles.
+2. `docs/plans/*` — approved implementation plans.
+3. `docs/discussions/*` — design discussions and current reasoning.
+4. Source code.
+
+Do not infer architecture. Always consult `docs/Architecture.md`.
+
+Do not infer build, run, testing, or tooling commands. Use `docs/Commands.md`, and keep it updated whenever commands are added, removed, or changed.
 
 ## Workflow
 
-Every feature progresses through three stages:
- 1. Discussion
- 2. Implementation Plan
- 3. Implementation + Testing
+Every feature follows this sequence:
 
-Each work stream has its own discussion document under `docs/discussions` to capture the exploration around a particular topic. Each document presents a summary of the topic under discussion, goals, constraints, trade-offs and current thinking. These documents are living records that can be iterated at any point when appropriate. Always inform when these docs are updated.
+> Discussion → Implementation Plan → Implementation & Testing
 
-Critically, updates to these docs should only be done when explicitly prompted to do so!
+### Discussion
 
-Chats are where discussion is elaborated, the discussion docs are meant as briefs and summaries of ongoing chat discussions. They should not be full copies of the ongoing chat discussions. They are meant as state checkpoints from where indepth chat discussions can resume.
+Each topic has a discussion document under `docs/discussions`.
 
-When a discussion reaches consensus, an associated implementation plan is created under `docs/plans`. Implementation plans are authoritative for engineering work. Claude should not implement directly from discussion documents. Implementation should always follow an approved implementation plan.
+Discussion documents:
+- Capture design reasoning and decisions.
+- Serve as concise state snapshots, not chat transcripts.
+- Summarize rather than append indefinitely.
+- Remove obsolete or rejected ideas unless they provide useful historical context.
+- Cross-reference related discussions when appropriate.
 
-If implementation uncovers missing information, ambiguities, design issues or incompatibilities with existing architecture, pause implementation update the discussion and implementation plan for further clatification.
+Only update discussion documents when explicitly requested.
 
-Multiple work streams may proceed in parallel, provided they concern independent topics.
-
-Claude must:
-1. Read the discussion doc before contributing to that topic. Create it for new discussions.
-2. Record assumptions, decisions, open questions and next steps.
-3. Summarize obsolete discussion rather than appending indefinitely.
-4. Remove rejected ideas if they're not useful for ongoing discussion or historical context.
-4. Cross-reference related discussions when appropriate.
-5. Remind the user about updating the doc, as  discussion evolves sufficiently
-
-Discussion docs are md filees following the format:
-- Topic: context and objective of discussion
-- Current Understanding: current state of reasoning around the topic. Very brief of summary of discussion.
-- Decisions: brief summary of decisions made, with max two-lines of reasoning as to why
-- Solution: current solution around the topic being discussed with supporting reasoning for it.
-    - Keep immutable references to all executed implementation plans originated from the discussion.
-- Open Quesions
-- WIP: current state of the work on this topic
-- Resources: related discussion docs and/or other resources used to inform discussion
+If implementation uncovers ambiguity, missing information, architectural conflicts, or design issues:
+- Stop implementation.
+- Explain the blocking issue clearly. 
+- Request clarification before proceeding.
 
 
-### Documentation
+Before contributing to an existing topic:
+1. Read its discussion document.
+2. Record assumptions, decisions, open questions, and next steps.
+3. Notify the user if the discussion document is updated.
 
-Always keep documentation, such as Architecture.md, up to date after changes to the code. Minor refactors or bug fixes that do not impact future work or discussions do not need to be documented.
+Discussion documents follow this structure:
 
+- Topic
+- Current Understanding
+- Decisions
+- Solution
+  - Include immutable references to implementation plans executed for the topic.
+- Open Questions
+- WIP
+- Resources
 
-## Testing
+### Implementation Plans
 
-Run existing tests after changes to the code. Run any other project related tooling like compilers and linters if applicable.
+Implementation plans are stored under `docs/plans`.
 
-Add tests for new behaviours. Prefer unit tests.
+- Plans are the authoritative source for engineering work.
+- Never implement directly from discussion documents.
+- After an approved plan is executed:
+  - Store it in `docs/plans`.
+  - Reference it from the associated discussion document when appropriate.
 
-Briefly explain failing tests before changing them.
+## Documentation
 
+Update documentation after architectural, workflow, or other changes that affect future development.
+
+Minor refactors and bug fixes that do not impact future work do not require documentation updates.
+
+Always notify the user when documentation is modified.
+
+## Implementation & Testing
+
+Implementation checklist:
+
+- Follow the approved implementation plan.
+- Prefer extending existing abstractions over introducing new patterns.
+- Make the smallest change that satisfies the requirement.
+- Avoid unrelated refactoring.
+- Add tests for new behavior, preferably unit tests.
+- Run relevant project tests.
+- Run applicable compilers, linters, and project tooling.
+- Briefly explain failing tests before modifying them.
 
 ## Communication
 
-Skip the pleasentries. Keep responses concise and focused on the topic, unless asked for detail.
-
-Highlight alternatives when appropriate, for example in research or exploratory related discussions.
-
-If uncertain, ask.
-
-Put forward any ambiguities, or uncertainties in your responses. Do no present guesses as facts, always be clear about any unknows, assumptions and details that might require further exploration in your replies.
+- Skip pleasantries.
+- Be concise unless additional detail is requested.
+- Present alternatives when appropriate.
+- State assumptions and uncertainties explicitly.
+- Never present guesses as facts.
+- Ask for clarification when uncertain.
