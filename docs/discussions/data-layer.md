@@ -67,14 +67,14 @@ that `binance_csv` reads, and `cmd/scripts/binance_market_info/` queries symbols
 
 ## Decisions
 
-- **Event time (`Candle.CloseTs`) is the canonical timestamp**, not arrival time. It is the only
-  choice that makes historical replay and live operation behave identically, and `SortedWindow`
-  ordering depends on it.
-- **Candle-close is the unit of ingestion.** Providers emit closed candles only; there are no
-  partial-bar updates. This removes look-ahead ambiguity for free and matches the causality
-  requirement in `docs/Backtesting.md`.
-- **Normalisation happens inside the provider**, not in the engine. Each provider owns its vendor's format, so adding a venue never touches downstream code.
-- **Providers are registry-constructed from `map[string]any` options.** Uniform with every other component. Each provider now declares a config struct decoded strictly by `config.Decode`, so the map is an interchange format rather than the schema — see [[config]]; [[engine]] covers the DI side.
+- **Event time (`Candle.CloseTs`) is the canonical timestamp**, not arrival time — the only choice
+  that makes replay and live operation behave identically. `SortedWindow` ordering depends on it.
+- **Candle-close is the unit of ingestion.** Closed candles only, no partial-bar updates, which
+  removes look-ahead ambiguity by construction.
+- **Normalisation happens inside the provider**, so adding a venue never touches downstream code.
+- **Providers are registry-constructed from `map[string]any` options**, uniform with every other
+  component; each declares a config struct decoded strictly — see [[config]], and [[engine]] for
+  the DI side.
 
 ## Solution
 

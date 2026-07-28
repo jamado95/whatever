@@ -84,16 +84,23 @@ have tests as of the config work; `pipeline`, `timing` and the feature maths sti
 
 ## Decisions
 
-- **Engines own wiring; domains own logic.** Domains never import each other, only `protocol`. This is what makes alternative topologies (log-only, signal-only, full, backtest) cheap to add.
-- **Multiple engines rather than one configurable engine.** Each engine is a fixed topology. Rationale: a partial pipeline stays runnable while downstream layers are unbuilt — which is the only reason anything in this repo runs today, given that risk and execution are empty.
-- **Registry + `init()` side-effect registration.** Components self-register; adding one requires no change to `main.go`. Cost: package-level mutable state, and construction is untyped
-(`map[string]any`).
-- **`_`-prefixed option keys carry resolved instances.** A pragmatic hack for passing constructed dependencies through the same untyped map used for scalar config. Works, but means the DI graph is invisible to the type system and errors surface as runtime assertion failures.
-- **Timing is the engine's concern, not the provider's.** The `Ticker` gate sits between provider and everything downstream, so the same provider serves live and replay. `fixedInterval` propagates backpressure upstream rather than buffering, which keeps memory bounded during fast replay.
-- **Context cancellation is the shutdown signal.** `main.go` installs a `signal.NotifyContext` for SIGINT/SIGTERM and `Run(ctx)` blocks until cancelled or complete.
-- **Errors are streamed, not returned.** Every component exposes an error channel; the engine merges and counts them, shutting down past a threshold. Keeps error handling out of the hot path.
-- **Config decoding is strict and lives with each component.** See [[config]] for the contract,
-  the enum rules and the `--validate-only` dry run.
+- **Engines own wiring; domains own logic.** Domains never import each other, only `protocol` —
+  which is what makes alternative topologies cheap to add.
+- **Multiple engines rather than one configurable engine.** Each is a fixed topology, so a partial
+  pipeline stays runnable while downstream layers are unbuilt. Currently the only reason anything in
+  this repo runs at all.
+- **Registry + `init()` side-effect registration.** Components self-register; adding one requires no
+  change to `main.go`. Cost: package-level mutable state.
+- **`_`-prefixed option keys carry resolved instances**, passing constructed dependencies through the
+  same map as scalar config. Keeps the DI graph invisible to the type system — errors surface as
+  runtime assertion failures.
+- **Timing is the engine's concern, not the provider's.** The `Ticker` gate sits between provider and
+  everything downstream, so one provider serves both live and replay. `fixedInterval` propagates
+  backpressure upstream rather than buffering.
+- **Errors are streamed, not returned.** Every component exposes an error channel; the engine merges
+  and counts them, shutting down past a threshold.
+- **Context cancellation is the shutdown signal**, installed once in `main.go`.
+- **Config decoding is strict and lives with each component** — see [[config]].
 
 ## Solution
 

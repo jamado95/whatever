@@ -56,13 +56,15 @@ Points 3 and 5 are the interesting ones: they are symptoms of the interface gap,
 
 ## Decisions
 
-- **Signals are intent, not orders.** A strategy says "I want to be long BTCUSDT now"; it does not say how much or at what price. Rationale: sizing depends on portfolio-wide state that a single strategy cannot see, and this keeps strategies independently testable and composable.
-- **Strategies may hold mutable state.** Unlike features (see [[features]]), strategies are explicitly permitted per-symbol memory — position intent, trend state, cooldowns. Rationale:
-strategy logic is inherently path-dependent, and forcing it through a shared window would either
-bloat the window or push strategy state into features where it does not belong. The cost is that strategies are not trivially reproducible and need explicit reset semantics for backtesting.
-- **Strategies are per-instance identified** (`idgen.GenerateID`) so that concurrent instances of the same strategy with different parameters are distinguishable in signal attribution — a
-prerequisite for parameter sweeps.
-- **Signals carry an expiry.** `ExpiresAt` lets risk management discard stale intent rather than acting on a signal generated many bars ago. Nothing consumes it yet.
+- **Signals are intent, not orders.** A strategy says "I want to be long BTCUSDT now", never how much
+  or at what price. Sizing needs portfolio-wide state a strategy cannot see — see
+  [[risk-management]].
+- **Strategies may hold mutable state**, unlike features ([[features]]). Strategy logic is
+  path-dependent, and forcing it through a shared window would push strategy state into features.
+  Cost: strategies are not trivially reproducible and need reset semantics for backtesting.
+- **Strategies are per-instance identified**, so concurrent instances with different parameters stay
+  distinguishable in signal attribution — a prerequisite for parameter sweeps.
+- **Signals carry an expiry**, letting risk discard stale intent. Nothing consumes it yet.
 
 ## Solution
 

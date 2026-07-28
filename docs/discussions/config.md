@@ -75,43 +75,24 @@ independent problem.
 
 ## Decisions
 
-- **Unknown config keys are a hard startup error.** Every config defect found in the survey was a
-  silent-failure bug; a warning in a log stream is how `ema.smoothing` survived unnoticed.
-- **Disabled blocks are not validated.** A switched-off component need not be well-formed, which
-  keeps disabled blocks usable as scratch space.
-- **Config enums accept only known values.** `proto.Timeframe` and `TickerType` have validating
-  `UnmarshalJSON`; any future enum-valued key gets the same.
-- **`TickerType` is a string, not an iota.** With an integer enum the zero value is a legal
-  selection, so absent or unparsed silently *means* realtime — the mechanism of the original defect.
-  As a string, absence is distinguishable from every value.
-- **Schemas live with components, not in a central table.** A table would cost locality (two edits
-  in two packages per component) and single-source-of-truth (the table can disagree with the
-  factory) — the `ema.smoothing` defect one layer up.
-- **Dry run is a flag, not a module.** An earlier design registered config-struct prototypes through
-  `reg.*` and instantiated them by reflection. Dropped: its coverage advantage vanished once
-  disabled blocks went out of scope (every enabled block is constructed at startup anyway), and
-  out-of-process sweep configs are served by `--validate-only --config <path>`. Removing it avoided
-  a `Register` signature change across ~15 sites, `reflect.New`, and prototype-carried defaults.
-- **Channel capacity is not config.** `bufferSize` is gone from the config file and from every
-  engine's options. Capacity is an implementation detail of whoever owns the channel, so each owner
-  carries its own default: `pipeline.DefaultFanOutBuffer`, the `full` engine's `fillsRelayBuffer`,
-  the feature chain's `outputBufferSize` ([[features]]). `FanOut` keeps an optional variadic
-  override for callers that need one; no caller uses it today.
-- **Factories must not perform I/O.** True everywhere already and consistent with the four-phase
-  lifecycle, but now load-bearing: it is what makes `--validate-only` a genuine dry run.
-- **Feature IDs encode all identity-bearing fields.** A defaulted parameter is omitted so the common
-  IDs (`ema_20`, `vwap_50`) stay stable — they appear in exports and plotting arguments. Only a
-  non-default value extends the ID (`ema_20_s3`).
-- **Duplicate feature IDs are an error.** Now that an ID covers every distinguishing parameter, a
-  collision means two variants were configured identically, which is a mistake rather than an intent
-  to deduplicate.
-- **An engine with an unresolved dependency is not constructed.** Attempting it is a guaranteed
-  failure whose error ("missing dependency `_provider`") only restates one already reported. It is
-  therefore skipped, and the skip is logged as a consequence rather than counted as a config error
-  of its own — otherwise the tally overstates how many independent problems the file has. Accepted
-  cost: errors inside the engine's `options` block surface on the next run, once the dependency is
-  fixed. Validating those options without constructing the engine would require reaching its config
-  struct through a registry, which is the prototype machinery deliberately dropped above.
+- **Unknown config keys are a hard startup error**, not a warning. Silent failure was the defect
+  class this layer exists to close.
+- **Config enums accept only known values**, via validating `UnmarshalJSON` (`proto.Timeframe`,
+  `TickerType`). Enum types are strings, not iota — an integer zero value is a legal selection, so
+  "absent" and "explicitly chosen" become indistinguishable.
+- **Schemas live with their component, not in a central table.** Preserves locality and avoids a
+  table that can drift out of agreement with the factory. Rules out validating a component's options
+  without constructing it.
+- **Factories must not perform I/O.** Long true in practice, now load-bearing: it is what makes
+  `--validate-only` a genuine dry run.
+- **Channel capacity is not config.** Capacity belongs to whoever owns the channel, so each owner
+  carries its own default rather than exposing `bufferSize`.
+- **Feature IDs encode every identity-bearing field**, omitting defaulted ones so common IDs
+  (`ema_20`) stay stable in exports. A duplicate ID is therefore an error, not a deduplication.
+- **Disabled blocks are not validated**, keeping them usable as scratch space.
+- **An engine with an unresolved dependency is skipped, not constructed.** Constructing it would
+  only restate an error already reported. Accepted cost: errors inside that engine's own options
+  surface on the next run.
 
 ## Solution
 

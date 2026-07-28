@@ -61,17 +61,13 @@ plumbing position it would occupy rather than from what it should do.
 
 ## Decisions
 
-Very little has been decided here. What can be inferred from the code and `Protocol.md`:
+Nothing has been decided in code. Both entries below are inherited from `Protocol.md` and remain
+unvalidated:
 
-- **Monitoring is separated from execution in the protocol**, even though both talk to the same
-  venue. Rationale in `Protocol.md`: the concerns differ (order submission vs. state observation),
-  while the transport, auth and availability logic is shared and should be reused rather than
-  duplicated.
-- **Risk management is the consumer**, and it is expected to act on monitor signals independently
-  of the strategy signal path — i.e. the monitor can trigger risk action with no strategy involved
+- **Monitoring is separated from execution**, despite both talking to the same venue: order
+  submission and state observation are different concerns, while transport and auth are shared.
+- **Risk management is the consumer**, and may act on monitor signals with no strategy involved
   (stop-outs, margin events).
-
-Both of these are inherited from `Protocol.md` rather than validated in code.
 
 ## Solution
 

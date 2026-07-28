@@ -74,20 +74,17 @@ This is the single hard blocker on the signal→order path.
 
 ## Decisions
 
-- **Risk is the sole signal→order translator.** No strategy can emit an order. Rationale: sizing
-  requires portfolio-wide state that no individual strategy sees, and a single translation point is
-  the only place where a global limit can actually be enforced.
-- **Risk is a singleton.** One instance per engine, owning the one portfolio view. Reflected in the
-  interface having no `ID()` and in the `full` engine taking a single `proto.RiskManager` while
-  taking slices of strategies and executors.
-- **Risk is the portfolio ledger**, updated from the fill stream. Positions are derived from
-  executions, not from strategy expectations. This is why `fills` is an input.
+- **Risk is the sole signal→order translator.** No strategy can emit an order — sizing needs
+  portfolio-wide state, and a single translation point is the only place a global limit can be
+  enforced.
+- **Risk is a singleton**, one instance per engine owning the one portfolio view. Reflected in the
+  interface having no `ID()`, unlike every other component.
+- **Risk is the portfolio ledger**, updated from the fill stream. Positions derive from executions,
+  not from strategy expectations — hence `fills` as an input.
 - **Risk marks to market itself**, which is why it receives the `data` stream in parallel with
-  strategies (`full.go:215` fans the gated data out to `len(strategies)+1` consumers, the extra one
-  being risk).
-- **Risk may act without a signal.** Since it sees prices and fills continuously, it can emit
-  protective orders — stop-outs, exposure reduction — with no strategy involvement. This is stated
-  in `Protocol.md` and is the reason it consumes market data rather than only signals.
+  strategies.
+- **Risk may act without a signal**, emitting protective orders (stop-outs, exposure reduction) with
+  no strategy involvement.
 
 ## Solution
 

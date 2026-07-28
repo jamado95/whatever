@@ -53,12 +53,16 @@ comment:
 
 ## Decisions
 
-- **One abstraction per venue, venue specifics fully contained.** Adding a broker must not require changes outside `internal/domains/execution`. Same rationale as the provider layer.
-- **Channel-in / channel-out, not request-response.** The executor consumes an order stream and
-  produces a fill stream, consistent with the rest of the pipeline. This means order submission is asynchronous by construction and the caller never blocks on venue latency.
-- **`Fill` embeds the originating `Order`.** Downstream consumers (risk, monitoring, logging) do not need an order book to interpret a fill. Cost: duplication on partial fills, where N fills each carry a full copy of the order.
-- **Multiple executors run concurrently.** The `full` engine fans orders out to all executors (`full.go:247`) and fans fills back in. This supports live + shadow/mock execution side by side, which is how the test mode requirement in `Protocol.md` is intended to be met.
-- **A mock executor is a first-class component, not a flag.** Test mode is a different registered executor, not a boolean on the live one — keeps credential-carrying code paths out of test runs entirely.
+- **One abstraction per venue, venue specifics fully contained.** Adding a broker must not require
+  changes outside `internal/domains/execution`. Same rationale as the provider layer.
+- **Channel-in / channel-out, not request-response.** Order submission is asynchronous by
+  construction and the caller never blocks on venue latency.
+- **`Fill` embeds the originating `Order`**, so consumers need no order book to interpret a fill.
+  Cost: duplication across partial fills.
+- **Multiple executors run concurrently**, orders fanned out and fills fanned back in. Supports live
+  and shadow/mock execution side by side.
+- **A mock executor is a first-class component, not a flag**, keeping credential-carrying code paths
+  out of test runs entirely.
 
 ## Solution
 

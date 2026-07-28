@@ -53,7 +53,7 @@ Discussion documents follow this structure:
 - Topic
 - Current Understanding
 - Decisions
-  - Keep this section focused on structural implementation and design decisions. Not all minor decisions need to be recorded.
+  - Keep section trimmed, and focused on high-impact implementation and design decisions. No rationale essays, just enough context to reason about the decision.
 - Solution
   - Include immutable references to implementation plans executed for the topic.
 - Open Questions
