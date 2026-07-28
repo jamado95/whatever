@@ -71,16 +71,14 @@ All float outputs are rounded to 6 decimals via `roundDecimals` before being wri
 1. **Features never reach strategies.** `proto.Strategy.Init` takes `<-chan MarketData`, and the
    `FeatureChain` produces `ExtendedMarketData`. Only the `data_logger` engine runs the chain, and
    it logs/exports rather than forwarding. This is the long-standing item in `WIP.md`.
-2. **Duplicate carrier types.** `ExtendedMarketData` (`protocol/feature.go:3`) and
-   `ProcessedMarketData` (`protocol/provider.go:51`) are structurally identical. Only the former is used; the latter is dead.
-3. **Missing dependency reports as a cycle.** `topologicalSort` sets in-degree from
+2. **Missing dependency reports as a cycle.** `topologicalSort` sets in-degree from
    `len(Dependencies())` without checking the dependency exists in the set, so a feature depending on an unconfigured feature can never reach in-degree 0 and the chain fails with "circular dependency detected in processors" — a misleading error for a common misconfiguration.
-4. **No feature declares dependencies today.** The composition path is entirely untested.
-5. **Sequential, unbuffered evaluation.** `Process` uses one goroutine and an unbuffered output
+3. **No feature declares dependencies today.** The composition path is entirely untested.
+4. **Sequential, unbuffered evaluation.** `Process` uses one goroutine and an unbuffered output
    channel (there is a `TODO: buffer size` at `feature.go:56`). Independent features are not
    evaluated in parallel, which is at odds with the parallelism goals in `Architecture.md`.
-6. **`Push` error ignored** at `feature.go:65`; a zero-timestamp candle silently fails to enter the window while the feature pass still runs.
-7. **No tests.** Indicator maths — the one part of this codebase that is trivially unit-testable
+5. **`Push` error ignored** at `feature.go:65`; a zero-timestamp candle silently fails to enter the window while the feature pass still runs.
+6. **No tests.** Indicator maths — the one part of this codebase that is trivially unit-testable
    against known reference values — has zero coverage.
 
 ## Decisions

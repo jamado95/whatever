@@ -75,11 +75,6 @@ func (m MarketData) Timestamp() int64 {
 	return m.Candle.CloseTs
 }
 
-type ProcessedMarketData struct {
-	MarketData
-	Indicators *Snapshot
-}
-
 type Subscription struct {
 	Symbol    string
 	Timeframe Timeframe

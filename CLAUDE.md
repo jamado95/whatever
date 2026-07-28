@@ -35,7 +35,7 @@ Discussion documents:
 - Remove obsolete or rejected ideas unless they provide useful historical context.
 - Cross-reference related discussions when appropriate.
 
-Only update discussion documents when explicitly requested.
+Only update discussion documents when explicitly requested, or within the scope of an implementation plan
 
 If implementation uncovers ambiguity, missing information, architectural conflicts, or design issues:
 - Stop implementation.
@@ -65,7 +65,8 @@ Implementation plans are stored under `docs/plans`.
 
 - Plans are the authoritative source for engineering work.
 - Never implement directly from discussion documents.
-- After an approved plan is executed:
+- Plans should include targeted updates to the associated discussion document, if applicable.
+- After an approved plan is executed
   - Store it in `docs/plans`.
   - Reference it from the associated discussion document when appropriate.
 
