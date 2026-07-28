@@ -53,6 +53,7 @@ Discussion documents follow this structure:
 - Topic
 - Current Understanding
 - Decisions
+  - Keep this section focused on structural implementation and design decisions. Not all minor decisions need to be recorded.
 - Solution
   - Include immutable references to implementation plans executed for the topic.
 - Open Questions
@@ -85,6 +86,7 @@ Implementation checklist:
 - Follow the approved implementation plan.
 - Prefer extending existing abstractions over introducing new patterns.
 - Make the smallest change that satisfies the requirement.
+- Keep comments brief, no in-depth explanations. Functions can be described in more depth.
 - Avoid unrelated refactoring.
 - Add tests for new behavior, preferably unit tests.
 - Run relevant project tests.

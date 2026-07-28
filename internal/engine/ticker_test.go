@@ -93,12 +93,3 @@ func TestAbsentTickerMeansRealtime(t *testing.T) {
 		t.Error("expected a realtime ticker for an absent block")
 	}
 }
-
-func TestDataLoggerOptionsRejectsRemovedBufferSize(t *testing.T) {
-	// bufferSize was parsed by this engine but never read. It now belongs only
-	// to the full engine, and must not be silently accepted here.
-	var opts DataLoggerOptions
-	if err := config.Decode(map[string]any{"bufferSize": float64(64)}, &opts); err == nil {
-		t.Fatal("expected an error for bufferSize, got nil")
-	}
-}

@@ -65,9 +65,13 @@ type Engine struct {
 	wg   sync.WaitGroup
 }
 
+// fillsRelayBuffer decouples the executors' fill emission from the risk
+// manager's consumption of it. Channel capacities are not engine config; see
+// pipeline.DefaultFanOutBuffer for the equivalent on fan-out.
+const fillsRelayBuffer = 1000
+
 type FullEngineOptions struct {
 	Limit          int           `json:"limit"`          // 0 = unlimited
-	BufferSize     int           `json:"bufferSize"`     // channel buffer size
 	ErrorThreshold int           `json:"errorThreshold"` // errors tolerated before shutdown
 	Ticker         *TickerConfig `json:"ticker"`
 }
@@ -75,9 +79,6 @@ type FullEngineOptions struct {
 func (o *FullEngineOptions) Validate() error {
 	if o.Limit < 0 {
 		return fmt.Errorf("limit must not be negative")
-	}
-	if o.BufferSize < 0 {
-		return fmt.Errorf("bufferSize must not be negative")
 	}
 	if o.ErrorThreshold <= 0 {
 		return fmt.Errorf("errorThreshold is required and must be positive")
@@ -154,7 +155,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	data, providerErrs := e.provider.Streams()
 	eErrors = append(eErrors, providerErrs)
 	// gate data through e.ticker and broadcast to strats and riskmgr
-	dataOuts := pipeline.FanOut(e.ticker.Gate(ctx, data), len(e.strategies)+1, e.cfg.BufferSize)
+	dataOuts := pipeline.FanOut(e.ticker.Gate(ctx, data), len(e.strategies)+1)
 
 	/*
 		Init strategy modules
@@ -177,7 +178,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	/*
 		Init risk manager
 	*/
-	fillsRelay := make(chan proto.Fill, e.cfg.BufferSize)
+	fillsRelay := make(chan proto.Fill, fillsRelayBuffer)
 	if err := e.risk.Init(dataOuts[len(e.strategies)], signalsIn, fillsRelay); err != nil {
 		e.Close()
 		return fmt.Errorf("failed to init risk manager: %w", err)
@@ -186,7 +187,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	orders, orderErrs := e.risk.Streams()
 	eErrors = append(eErrors, orderErrs)
 	// broadcast to execution layer
-	orderOuts := pipeline.FanOut(orders, len(e.executors), e.cfg.BufferSize)
+	orderOuts := pipeline.FanOut(orders, len(e.executors))
 
 	/*
 		Init execution layer

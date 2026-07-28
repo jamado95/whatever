@@ -68,18 +68,11 @@ All float outputs are rounded to 6 decimals via `roundDecimals` before being wri
 
 ### Known gaps and defects
 
-1. **Features never reach strategies.** `proto.Strategy.Init` takes `<-chan MarketData`, and the
-   `FeatureChain` produces `ExtendedMarketData`. Only the `data_logger` engine runs the chain, and
-   it logs/exports rather than forwarding. This is the long-standing item in `WIP.md`.
-2. **Missing dependency reports as a cycle.** `topologicalSort` sets in-degree from
+1. **Missing dependency reports as a cycle.** `topologicalSort` sets in-degree from
    `len(Dependencies())` without checking the dependency exists in the set, so a feature depending on an unconfigured feature can never reach in-degree 0 and the chain fails with "circular dependency detected in processors" — a misleading error for a common misconfiguration.
-3. **No feature declares dependencies today.** The composition path is entirely untested.
-4. **Sequential, unbuffered evaluation.** `Process` uses one goroutine and an unbuffered output
-   channel (there is a `TODO: buffer size` at `feature.go:56`). Independent features are not
-   evaluated in parallel, which is at odds with the parallelism goals in `Architecture.md`.
-5. **`Push` error ignored** at `feature.go:65`; a zero-timestamp candle silently fails to enter the window while the feature pass still runs.
-6. **No tests.** Indicator maths — the one part of this codebase that is trivially unit-testable
-   against known reference values — has zero coverage.
+2. **No tests.** Indicator maths — the one part of this codebase that is trivially unit-testable
+   against known reference values — has near-zero coverage (only `Process` output buffering and
+   malformed-candle dropping are guarded).
 
 ## Decisions
 
@@ -88,8 +81,8 @@ All float outputs are rounded to 6 decimals via `roundDecimals` before being wri
 - **Composition through the snapshot, ordering through the dependency graph.** Features do not call each other; they read each other's outputs by key. Keeps features independent and the graph explicit.
 - **Insufficient history means "absent", not "zero".** A feature that cannot compute writes nothing, so consumers can distinguish "not ready" from a real value. This is why exported rows have ragged columns.
 - **Strict definitions over permissive ones** for pattern features (documented for `engulfing`): lower signal frequency, higher information content, better suited to statistical validation.
-- **A feature ID encodes every parameter that distinguishes one instance from another.** Previously an ID was `name_period`, which was accidentally sufficient because `period` was the only parameter any feature took. Adding `ema.smoothing` broke that: two variants differing only in smoothing both keyed `ema_20`. Defaulted values are omitted from the ID so the common names (`ema_20`, `vwap_50`) stay stable — they appear in exports and in `make plot INDICATORS=`; only a non-default extends it (`ema_20_s3`). See [[config]].
-- **Duplicate feature IDs are a construction error, not a silent drop.** `removeDuplicates` used to keep the first and discard the rest. Now that an ID covers every distinguishing parameter, a collision means two variants were configured identically — a config mistake.
+- **A feature ID encodes every parameter that distinguishes one instance from another.** Defaulted values are omitted so common names (`ema_20`, `vwap_50`) stay stable; only a non-default extends the ID (`ema_20_s3`). A duplicate ID is therefore a construction error — two variants configured identically — not a silent drop. See [[config]].
+- **Feature evaluation stays serial for now.** `Process` runs a candle's features in one goroutine. Parallelising independent graph levels was rejected at the current scale: per-candle dispatch/join overhead is the same order as the feature work itself, and `Snapshot`'s `map[string]any` (`snapshot.go:28`) is not safe for concurrent writes even to distinct keys, so parallelism would need a synchronised write path that adds the cost back. Revisit when features are numerous or expensive, or for multi-symbol chains — gated on a benchmark.
 
 ## Solution
 
@@ -108,10 +101,8 @@ published strategies; it matters little if features are only ever compared again
 ## Open Questions
 
 - EMA/RSI exactness: which of the three options above? What tolerance is acceptable?
-- Should `Lookback()` be expressed in candles or in duration? Duration is timeframe-independent and necessary once one chain sees multiple timeframes.
 - Multi-symbol: the chain holds one window and assumes a single instrument stream. Does a chain instance exist per symbol, or does the window become keyed by symbol? Cross-asset feature (correlation, spread, beta) — explicitly a goal in `Architecture.md` — need the latter, or need a distinct "multi-stream feature" concept.
 - Should the type-safety hole in `Snapshot` be closed (registry of key name → type, checked at chain construction), or is the convention sufficient?
-- Parallel evaluation of independent graph levels: worth it, or is per-candle feature cost too small for the goroutine overhead to pay off? Needs a benchmark before deciding.
 - `Dependencies()` is declared but unused. Is it kept for the composition roadmap, or removed until a real composite feature demands it?
 
 ## WIP
@@ -121,6 +112,7 @@ published strategies; it matters little if features are only ever compared again
 - `config.json` currently enables `engulfing_candle`, `vwap` (20, 50) and `ema` (20, smoothing 2.0); `rsi` and `sma` are disabled.
 - Every feature now declares a config struct decoded strictly ([[config]]); `PeriodConfig` is shared by the period-only features, `swing_highlow` adds an even-period rule in `Validate()` — unexercised, since it sits behind the `wip` build tag.
 - Fibonacci and trend features are listed as ToDo in `WIP.md`.
+- `Process` now drops and warns on candles the window rejects (zero timestamp), instead of running features over stale history and forwarding the bad candle. This is a defensive stopgap at the consumer; malformed-candle validation properly belongs upstream at ingestion — tracked as robustness work in [[data-layer]].
 
 ## Resources
 

@@ -67,7 +67,7 @@ mutex-guarded `map[string]Factory[T]`, populated by `init()` side-effect imports
 
 1. **Ticker type falls back silently.** ~~Resolved~~ — see [[config]]. `TickerType` is now a
 string enum with a validating `UnmarshalJSON`; there is no realtime fallback path.
-2. **`FanOut` drops data.** On a full output buffer it evicts the oldest value (`pipeline/fanout.go:28`). Silent, non-deterministic loss — acceptable for a live feed where
+2. **`FanOut` drops data.** On a full output buffer it evicts the oldest value (`pipeline/fanout.go:41`). Silent, non-deterministic loss — acceptable for a live feed where
 staleness beats lag, fatal for backtesting reproducibility, and fatal for any strategy whose state depends on seeing every candle.
 3. **`signal_logger` goroutine leak.** `eErrs := make([]<-chan error, len(strategies)+1)` followed by `append` (`signal_logger.go:143`) produces a slice with `n+1` leading `nil` channels. Ranging over a `nil` channel blocks forever, so the `FanIn` wait group never completes and its output is never closed. Uses `make(..., 0, n+1)`.
 4. **Config parsing is triplicated.** ~~Resolved~~ — see [[config]]. The three parsers are gone;

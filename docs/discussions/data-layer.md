@@ -104,7 +104,7 @@ option 2 or 3 substantially more natural, so this should be settled before that 
   own provider interface? The `TimeStamped` constraint on `SortedWindow` suggests the latter is
   cheap to add.
 - Options and futures (per `Protocol.md`) need instrument metadata — expiry, strike, contract size, funding. Where does an instrument/reference-data concept live? It is not currently modelled anywhere.
-- Gap and integrity handling: missing candles, exchange halts, duplicate timestamps. `SortedWindow` will happily accept out-of-order and duplicate entries. Should the provider guarantee a contiguous, deduplicated, monotonic sequence, or should the engine validate?
+- Gap and integrity handling: missing candles, exchange halts, duplicate timestamps, and malformed candles (e.g. zero `CloseTs`). `SortedWindow` accepts out-of-order and duplicate entries, and rejects only zero-timestamp candles — which the feature chain now drops-and-warns defensively ([[features]]), a downstream stopgap rather than validation. Robustness work to review: should the provider guarantee a contiguous, deduplicated, monotonic, well-formed sequence at ingestion, or should the engine validate? Ingestion is the natural boundary, since a candle that fails here should never reach features at all.
 - Does the data layer own historical warm-up (fetch N candles before live start so features have
   lookback), or is that the engine's job?
 - FX and equities need session/calendar awareness (market hours, holidays) that crypto does not. Does that belong here or in a separate calendar service?

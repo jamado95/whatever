@@ -5,6 +5,7 @@ import (
 	"math"
 	"strconv"
 
+	"whatever/internal/logger"
 	proto "whatever/internal/protocol"
 )
 
@@ -23,6 +24,7 @@ const (
 type FeatureChain struct {
 	features []proto.Feature
 	window   *proto.SortedWindow[proto.MarketData]
+	logger   *logger.Logger
 }
 
 func NewFeatureChain(features []proto.Feature) (*FeatureChain, error) {
@@ -40,6 +42,7 @@ func NewFeatureChain(features []proto.Feature) (*FeatureChain, error) {
 	return &FeatureChain{
 		features: sorted,
 		window:   proto.NewSortedWindow[proto.MarketData](windowCap),
+		logger:   logger.NewLogger(logger.DefaultLoggerConfig()).With("domain", "features"),
 	}, nil
 }
 
@@ -56,8 +59,11 @@ func calculateRequiredCapacity(features []proto.Feature) int {
 	return maxLookback
 }
 
+// Sized in candles.
+const outputBufferSize = 100
+
 func (fc *FeatureChain) Process(in <-chan proto.MarketData) <-chan proto.ExtendedMarketData {
-	out := make(chan proto.ExtendedMarketData) // TODO: buffer size
+	out := make(chan proto.ExtendedMarketData, outputBufferSize)
 
 	go func() {
 		defer close(out)
@@ -65,8 +71,11 @@ func (fc *FeatureChain) Process(in <-chan proto.MarketData) <-chan proto.Extende
 		for candle := range in {
 			snap := proto.NewSnapshot()
 
-			// push candle to shared state window
-			fc.window.Push(candle)
+			// Drop malformed candles (e.g. zero timestamp)
+			if err := fc.window.Push(candle); err != nil {
+				fc.logger.Warn(fmt.Sprintf("dropping candle: %v", err))
+				continue
+			}
 
 			for _, feat := range fc.features {
 				feat.Update(fc.window, &snap)

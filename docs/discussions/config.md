@@ -92,6 +92,11 @@ independent problem.
   disabled blocks went out of scope (every enabled block is constructed at startup anyway), and
   out-of-process sweep configs are served by `--validate-only --config <path>`. Removing it avoided
   a `Register` signature change across ~15 sites, `reflect.New`, and prototype-carried defaults.
+- **Channel capacity is not config.** `bufferSize` is gone from the config file and from every
+  engine's options. Capacity is an implementation detail of whoever owns the channel, so each owner
+  carries its own default: `pipeline.DefaultFanOutBuffer`, the `full` engine's `fillsRelayBuffer`,
+  the feature chain's `outputBufferSize` ([[features]]). `FanOut` keeps an optional variadic
+  override for callers that need one; no caller uses it today.
 - **Factories must not perform I/O.** True everywhere already and consistent with the four-phase
   lifecycle, but now load-bearing: it is what makes `--validate-only` a genuine dry run.
 - **Feature IDs encode all identity-bearing fields.** A defaulted parameter is omitted so the common
@@ -137,7 +142,7 @@ Resolved by this work: silent ticker fallback, triplicated engine parsers, untyp
 | B. Discarded assertion → zero | `symbol, _ := sub["symbol"].(string)`; `file`; `output_dir` | Required fields error via `Validate()`; `Timeframe` validates its value set |
 | C. Assertion that can never succeed | `opts["startTime"].(int64)` against a `float64` — the window was *always* 0 | `encoding/json` widens into the declared `int64`; regression test in `binance_historical_test.go` |
 | D. Optional block skipped whole | misspelling `ticker` skipped every field inside it | `tickers` is an unknown key and errors |
-| E. Unknown key accepted | `ema.smoothing` did nothing; `bufferSize` was parsed and never read | Unknown keys error; `smoothing` is now a real field, `bufferSize` removed from the engines that ignored it |
+| E. Unknown key accepted | `ema.smoothing` did nothing; `bufferSize` was parsed and never read | Unknown keys error; `smoothing` is now a real field, `bufferSize` removed from config entirely |
 
 ## Open Questions
 

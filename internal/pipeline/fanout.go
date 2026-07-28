@@ -2,15 +2,23 @@ package pipeline
 
 import "sync"
 
+// DefaultFanOutBuffer is the per-output capacity used when FanOut is called
+// without an explicit size.
+const DefaultFanOutBuffer = 1000
+
 // FanOut sends each value from input to all output channels.
 // Each output has an independent buffer. Drops oldest if buffer full.
 // Closes all outputs when input closes.
-func FanOut[T any](in <-chan T, n int, bufferSize int) []<-chan T {
+func FanOut[T any](in <-chan T, n int, bufferSize ...int) []<-chan T {
+	size := DefaultFanOutBuffer
+	if len(bufferSize) > 0 {
+		size = bufferSize[0]
+	}
 
 	// create n broadcast channels with same size buffers
 	outs := make([]chan T, n)
 	for i := range outs {
-		outs[i] = make(chan T, bufferSize)
+		outs[i] = make(chan T, size)
 	}
 
 	go func() {
