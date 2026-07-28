@@ -2,29 +2,57 @@ package feat
 
 import (
 	"fmt"
+
+	"whatever/internal/config"
 	proto "whatever/internal/protocol"
 	reg "whatever/internal/registry"
 )
 
+const EMAID = "ema"
+
+// DefaultEMASmoothing is the conventional smoothing constant; the multiplier is
+// smoothing / (period + 1).
+const DefaultEMASmoothing = 2.0
+
+type EMAConfig struct {
+	Period    int     `json:"period"`
+	Smoothing float64 `json:"smoothing"`
+}
+
+func (c *EMAConfig) Validate() error {
+	if c.Period <= 0 {
+		return fmt.Errorf("'period' is required and must be positive")
+	}
+	if c.Smoothing <= 0 {
+		return fmt.Errorf("'smoothing' must be positive")
+	}
+	return nil
+}
+
 func init() {
-	reg.Features.Register("ema", func(opts map[string]any) (proto.Feature, error) {
-		period, ok := opts["period"].(float64)
-		if !ok {
-			return nil, fmt.Errorf("ema register: missing or invalid period")
+	reg.Features.Register(EMAID, func(opts map[string]any) (proto.Feature, error) {
+		cfg := EMAConfig{Smoothing: DefaultEMASmoothing}
+		if err := config.Decode(opts, &cfg); err != nil {
+			return nil, err
 		}
 
-		id := iDWithPeriod("ema", int(period))
+		id := iDWithParam(
+			iDWithPeriod(EMAID, cfg.Period),
+			"s", cfg.Smoothing, DefaultEMASmoothing,
+		)
 
 		return &EMA{
-			id:     proto.NewKey[float64](id),
-			period: int(period),
+			id:        proto.NewKey[float64](id),
+			period:    cfg.Period,
+			smoothing: cfg.Smoothing,
 		}, nil
 	})
 }
 
 type EMA struct {
-	id     proto.Key[float64]
-	period int
+	id        proto.Key[float64]
+	period    int
+	smoothing float64
 }
 
 func (e *EMA) ID() proto.KeyRef {
@@ -47,7 +75,7 @@ func (e *EMA) Update(history *proto.SortedWindow[proto.MarketData], snap *proto.
 		return
 	}
 
-	multiplier := 2.0 / float64(e.period+1)
+	multiplier := e.smoothing / float64(e.period+1)
 
 	// Initialize EMA with SMA of first 'period' candles
 	sum := 0.0

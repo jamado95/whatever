@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"whatever/internal/config"
 	feat "whatever/internal/domains/features"
 	"whatever/internal/idgen"
 	"whatever/internal/logger"
@@ -22,21 +23,24 @@ func init() {
 		log := logger.NewLogger(logger.DefaultLoggerConfig()).
 			With("engine", id)
 
-		provider, ok := opts["_provider"].(proto.DataProvider)
-		if !ok {
-			return nil, fmt.Errorf("missing or invalid _provider")
+		provider, err := config.Dep[proto.DataProvider](opts, "_provider")
+		if err != nil {
+			return nil, err
+		}
+
+		subscription, err := config.Dep[proto.Subscription](opts, "_subscription")
+		if err != nil {
+			return nil, err
+		}
+
+		features, err := config.Dep[[]proto.Feature](opts, "_features")
+		if err != nil {
+			return nil, err
 		}
 
 		// exporter is optional
-		var exporter proto.Exporter
-		if exp, ok := opts["_exporter"].(proto.Exporter); ok {
-			exporter = exp
-		}
-
-		features, ok := opts["_features"].([]proto.Feature)
-		if !ok {
-			err := fmt.Errorf("%s missing or invalid _features", id)
-			log.Error(err, err.Error())
+		exporter, _, err := config.OptDep[proto.Exporter](opts, "_exporter")
+		if err != nil {
 			return nil, err
 		}
 
@@ -46,96 +50,73 @@ func init() {
 			return nil, err
 		}
 
-		cfg, err := parseDataLoggerConfig(opts)
+		cfg, err := parseDataLoggerOptions(opts)
 		if err != nil {
 			return nil, err
 		}
 
-		var ticker timing.Ticker[proto.MarketData]
-		switch cfg.Ticker.Type {
-		case FixedInterval:
-			ticker = timing.FixedInterval[proto.MarketData](cfg.Ticker.TickInterval)
-		case Realtime:
-			ticker = timing.Realtime[proto.MarketData]()
-		default:
-			ticker = timing.Realtime[proto.MarketData]()
+		ticker, err := newTicker(cfg.Ticker)
+		if err != nil {
+			return nil, err
 		}
 
 		return &DataLogger{
-			id:       id,
-			provider: provider,
-			features: featuresChain,
-			ticker:   ticker,
-			exporter: exporter,
-			logger:   log,
-			cfg:      cfg,
-			done:     make(chan struct{}),
+			id:           id,
+			provider:     provider,
+			subscription: subscription,
+			features:     featuresChain,
+			ticker:       ticker,
+			exporter:     exporter,
+			logger:       log,
+			cfg:          cfg,
+			done:         make(chan struct{}),
 		}, nil
 	})
 }
 
 type DataLogger struct {
-	id       string
-	provider proto.DataProvider
-	features *feat.FeatureChain
-	ticker   timing.Ticker[proto.MarketData]
-	exporter proto.Exporter
-	logger   *logger.Logger
-	cfg      DataLoggerConfig
+	id           string
+	provider     proto.DataProvider
+	subscription proto.Subscription
+	features     *feat.FeatureChain
+	ticker       timing.Ticker[proto.MarketData]
+	exporter     proto.Exporter
+	logger       *logger.Logger
+	cfg          DataLoggerOptions
 
 	done      chan struct{}
 	closeOnce sync.Once
 	wg        sync.WaitGroup
 }
 
-type DataLoggerConfig struct {
-	Subscription proto.Subscription
-	Limit        int // 0 = unlimited
-	Ticker       TickerConfig
-	BufferSize   int
+type DataLoggerOptions struct {
+	Limit  int           `json:"limit"` // 0 = unlimited
+	Ticker *TickerConfig `json:"ticker"`
 }
 
-func parseDataLoggerConfig(opts map[string]any) (DataLoggerConfig, error) {
-	cfg := DataLoggerConfig{}
-
-	if sub, ok := opts["subscription"].(map[string]any); ok {
-		symbol, _ := sub["symbol"].(string)
-		timeframe, _ := sub["timeframe"].(string)
-		cfg.Subscription = proto.Subscription{
-			Symbol:    symbol,
-			Timeframe: proto.Timeframe(timeframe),
-		}
+// Validate distinguishes an absent ticker block (nil, meaning realtime) from a
+// present but incomplete one, which is a config mistake.
+func (o *DataLoggerOptions) Validate() error {
+	if o.Limit < 0 {
+		return fmt.Errorf("limit must not be negative")
 	}
-
-	if limit, ok := opts["limit"].(float64); ok {
-		cfg.Limit = int(limit)
+	if o.Ticker != nil {
+		return o.Ticker.Validate()
 	}
+	return nil
+}
 
-	if bufferSize, ok := opts["bufferSize"].(float64); ok {
-		cfg.BufferSize = int(bufferSize)
+func parseDataLoggerOptions(opts map[string]any) (DataLoggerOptions, error) {
+	cfg := DataLoggerOptions{}
+	// The caller names the engine; adding it here would duplicate the prefix.
+	if err := config.DecodeOptions(opts, &cfg); err != nil {
+		return cfg, err
 	}
-
-	if ticker, ok := opts["ticker"].(map[string]any); ok {
-		tickerType, _ := ticker["type"].(string)
-		if tickerType == "fixed" {
-			cfg.Ticker.Type = FixedInterval
-		} else {
-			cfg.Ticker.Type = Realtime
-		}
-		if interval, ok := ticker["interval"].(string); ok {
-			dur, err := time.ParseDuration(interval)
-			if err != nil {
-				return cfg, fmt.Errorf("invalid ticker interval: %w", err)
-			}
-			cfg.Ticker.TickInterval = dur
-		}
-	}
-
 	return cfg, nil
 }
 
 func (e *DataLogger) Run(ctx context.Context) error {
-	if err := e.provider.Init(e.cfg.Subscription, e.cfg.Limit); err != nil {
+	if err := e.provider.Init(e.subscription, e.cfg.Limit); err != nil {
 		return err
 	}
 

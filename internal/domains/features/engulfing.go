@@ -1,14 +1,24 @@
 package feat
 
 import (
+	"whatever/internal/config"
 	proto "whatever/internal/protocol"
 	reg "whatever/internal/registry"
 )
 
 const EngulfingID = "engulfing_candle"
 
+// EngulfingConfig takes no options. Decoding into it still matters: it turns
+// any key supplied for this feature into an error rather than silence.
+type EngulfingConfig struct{}
+
 func init() {
 	reg.Features.Register(EngulfingID, func(opts map[string]any) (proto.Feature, error) {
+		var cfg EngulfingConfig
+		if err := config.Decode(opts, &cfg); err != nil {
+			return nil, err
+		}
+
 		return &Engulfing{
 			id: proto.NewKey[DirectionalMarker](EngulfingID),
 		}, nil

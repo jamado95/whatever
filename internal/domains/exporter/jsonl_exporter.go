@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"whatever/internal/config"
 	proto "whatever/internal/protocol"
 	reg "whatever/internal/registry"
 )
@@ -16,17 +17,40 @@ const JSONLExporterID = "jsonl"
 
 func init() {
 	reg.Exporters.Register(JSONLExporterID, func(opts map[string]any) (proto.Exporter, error) {
-		outputDir, _ := opts["output_dir"].(string)
-		symbol, _ := opts["_symbol"].(string)
-		timeframe, _ := opts["_timeframe"].(string)
-		engine, _ := opts["_engine"].(string)
+		cfg := JSONLExporterConfig{}
+		// The caller names the exporter; adding it here would duplicate it.
+		if err := config.Decode(opts, &cfg); err != nil {
+			return nil, err
+		}
+
+		// Runtime context injected by the composition root, not user config.
+		symbol, _ := config.Dep[string](opts, "_symbol")
+		timeframe, _ := config.Dep[string](opts, "_timeframe")
+		engine, _ := config.Dep[string](opts, "_engine")
+
 		return &JSONLExporter{
-			outputDir: outputDir,
+			outputDir: cfg.OutputDir,
 			symbol:    symbol,
 			timeframe: timeframe,
 			engine:    engine,
 		}, nil
 	})
+}
+
+type JSONLExporterConfig struct {
+	// Type and Disabled are read by the composition root when it decides
+	// whether to build this exporter; they are declared here so that strict
+	// decoding does not reject them.
+	Type      string `json:"type"`
+	Disabled  bool   `json:"disabled"`
+	OutputDir string `json:"output_dir"`
+}
+
+func (c *JSONLExporterConfig) Validate() error {
+	if c.OutputDir == "" {
+		return fmt.Errorf("'output_dir' is required")
+	}
+	return nil
 }
 
 type JSONLExporter struct {

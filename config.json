@@ -1,76 +1,78 @@
-{                                                                                                                                                                                                                  
-    "providers": [                                                                                                                                                                                                   
-      {
-        "type": "binance_csv",
-        "file": "./data/BTCUSDT/BTCUSDT-1h-2024-01.csv"
-      },
-      {
-        "type": "binance_historical",
-        "disabled": true,
-        "startTime": 1714732800000,
-        "endTime": 1714819200000
-      }                                                                                                                                                                                                            
-    ],
-    "features": [
-      {
-        "type": "engulfing_candle"
-      },
-      {
-        "type": "vwap",
-        "variants": [
-          { "period": 20 },
-          { "period": 50 }
-        ]
-      },
-      {
-        "type": "rsi",
-        "disabled": true,
-        "variants": [
-          { "period": 14 },
-          { "period": 21 }
-        ]
-      },
-      {
-        "type": "sma",
-        "disabled": true,
-        "variants": [
-          { "period": 20 },
-          { "period": 50 },
-          { "period": 100 }
-        ]
-      },                   
-      {
-        "type": "ema",
-        "variants": [
-          { "period": 20, "smoothing": 2.0 }
-        ]
-      }
-    ],
-    "strategies": [                                                                                                                                                                                                  
-      {
-        "type": "buy_the_dip",
-        "disabled": true,
-        "trendLength": 5,
-        "pullbackPct": 0.02
-      }                                                                                                                                                                                                             
-    ],                                                                                                                                                                                                               
-    "engine": {
-      "type": "data_logger",
-      "provider": "binance_csv",
-      "strategies": [],
-      "subscription": {
-        "symbol": "BTCUSDT",
-        "timeframe": "1h"
-      },
+{
+  "providers": [
+    {
+      "type": "binance_csv",
+      "file": "./data/BTCUSDT/BTCUSDT-1h-2024-01.csv"
+    },
+    {
+      "type": "binance_historical",
+      "disabled": true,
+      "startTime": 1714732800000,
+      "endTime": 1714819200000
+    }
+  ],
+  "features": [
+    {
+      "type": "engulfing_candle"
+    },
+    {
+      "type": "vwap",
+      "variants": [
+        { "period": 20 },
+        { "period": 50 }
+      ]
+    },
+    {
+      "type": "rsi",
+      "disabled": true,
+      "variants": [
+        { "period": 14 },
+        { "period": 21 }
+      ]
+    },
+    {
+      "type": "sma",
+      "disabled": true,
+      "variants": [
+        { "period": 20 },
+        { "period": 50 },
+        { "period": 100 }
+      ]
+    },
+    {
+      "type": "ema",
+      "variants": [
+        { "period": 20, "smoothing": 2.0 },
+        { "period": 50 }
+      ]
+    }
+  ],
+  "strategies": [
+    {
+      "type": "buy_the_dip",
+      "disabled": true,
+      "trendLength": 5,
+      "pullbackPct": 0.02
+    }
+  ],
+  "subscription": {
+    "symbol": "BTCUSDT",
+    "timeframe": "1h"
+  },
+  "engine": {
+    "type": "data_logger",
+    "provider": "binance_csv",
+    "strategies": [],
+    "exporter": {
+      "type": "jsonl",
+      "output_dir": "data/exports"
+    },
+    "options": {
       "ticker": {
-        "type": "fixedinterval",
+        "type": "fixed",
         "interval": "100ms"
       },
-      "exporter": {
-        "type": "jsonl",
-        "output_dir": "data/exports"
-      },
-      "limit": 1000,
-      "bufferSize": 64
-    }                                                                                                                                                                                                                
-  } 
+      "limit": 1000
+    }
+  }
+}

@@ -121,12 +121,12 @@ closed by that work.
 
 - Fan-out policy (options above) — decide before the backtesting engine.
 - How does a backtest instantiate hundreds of engine variants? The registry is package-global but factories are pure, so parallel instantiation looks safe — this needs confirming rather than assuming.
-  - Sub-question with a bearing on config: do parameter sweeps go *through* `config.json`
-    (generated JSON fed to `config.Load`) or bypass it (typed config structs built directly in Go
-    and handed to factories in-process)? The second looks better — serialising to JSON only to
-    parse it back is pointless when the sweep driver is Go in the same binary — but it removes the
-    sweep as a justification for the stage-2 dry-run pass, leaving only hand-edited configs and
-    generated config reference.
+  - Sub-question with a bearing on [[config]]: do parameter sweeps go *through* `config.json`
+    (generated files fed to `config.Load`) or bypass it (typed config structs built directly in Go
+    and handed to factories in-process)? Bypassing looks better when the sweep driver is Go in the
+    same binary — serialising to JSON only to parse it back is pointless. It does narrow what
+    `--validate-only` is for: generated config files are its main use today, leaving only
+    hand-edited configs if sweeps bypass the file.
 - Multi-provider / multi-symbol engines: how does the topology change? One engine per symbol with a supervising process, or one engine fanning many subscriptions through one feature-chain-per-symbol?
 - Should `data_logger` and `signal_logger` merge into one composable "observation" engine now that the difference is just which stage terminates? Or does keeping them separate remain worth the duplication?
 - Does the `Ticker` abstraction need the `Simulated` (factor-based) and `Manual` implementations its interface already implies, or should `SetFactor`/`Tick` be dropped until something needs them?

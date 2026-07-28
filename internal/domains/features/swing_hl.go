@@ -4,26 +4,42 @@ package feat
 
 import (
 	"fmt"
-	"math"
 
+	"whatever/internal/config"
 	proto "whatever/internal/protocol"
 	reg "whatever/internal/registry"
 )
 
 const SwingHighLowID = "swing_highlow"
 
+// SwingHighLowConfig needs an even period so the lookback splits evenly either
+// side of the candidate swing point.
+type SwingHighLowConfig struct {
+	PeriodConfig
+}
+
+func (c *SwingHighLowConfig) Validate() error {
+	if err := c.PeriodConfig.Validate(); err != nil {
+		return err
+	}
+	if c.Period%2 != 0 {
+		return fmt.Errorf("'period' must be even, got %d", c.Period)
+	}
+	return nil
+}
+
 func init() {
 	reg.Features.Register(SwingHighLowID, func(opts map[string]any) (proto.Feature, error) {
-		period, ok := opts["period"].(float64)
-		if !ok || math.Mod(period, 2) != 0 {
-			return nil, fmt.Errorf("%s register: missing or invalid period", SwingHighLowID)
+		cfg := SwingHighLowConfig{}
+		if err := config.Decode(opts, &cfg); err != nil {
+			return nil, err
 		}
 
-		id := iDWithPeriod(SwingHighLowID, int(period))
+		id := iDWithPeriod(SwingHighLowID, cfg.Period)
 
 		return &SwingHighLow{
 			id:     proto.NewKey[DirectionalMarker](id),
-			period: int(period),
+			period: cfg.Period,
 		}, nil
 	})
 }

@@ -1,5 +1,10 @@
 package proto
 
+import (
+	"encoding/json"
+	"fmt"
+)
+
 type Side string
 
 const (
@@ -24,6 +29,28 @@ func (t Timeframe) IsValid() bool {
 	default:
 		return false
 	}
+}
+
+// ValidTimeframes lists every accepted value, for error messages.
+func ValidTimeframes() []Timeframe {
+	return []Timeframe{Timeframe1m, Timeframe5m, Timeframe15m, Timeframe1h, Timeframe1d}
+}
+
+// UnmarshalJSON rejects any timeframe outside the known set, so a typo such as
+// "1hr" fails at config load instead of being carried as an opaque string.
+func (t *Timeframe) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return fmt.Errorf("timeframe must be a string: %w", err)
+	}
+
+	tf := Timeframe(s)
+	if !tf.IsValid() {
+		return fmt.Errorf("invalid timeframe %q, want one of %v", s, ValidTimeframes())
+	}
+
+	*t = tf
+	return nil
 }
 
 type Candle struct {

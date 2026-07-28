@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"whatever/internal/config"
 	"whatever/internal/idgen"
 	"whatever/internal/logger"
 	"whatever/internal/pipeline"
@@ -23,103 +24,83 @@ func init() {
 			With("domain", "core").
 			With("engine", id)
 
-		prov, ok := opts["_provider"].(proto.DataProvider)
-		if !ok {
-			return nil, fmt.Errorf("missing or invalid _provider")
-		}
-
-		strats, ok := opts["_strategies"].([]proto.Strategy)
-		if !ok {
-			return nil, fmt.Errorf("missing or invalid _strategies")
-		}
-
-		cfg, err := parseSignalLoggerConfig(opts)
+		prov, err := config.Dep[proto.DataProvider](opts, "_provider")
 		if err != nil {
 			return nil, err
 		}
 
-		var ticker timing.Ticker[proto.MarketData]
-		switch cfg.Ticker.Type {
-		case FixedInterval:
-			ticker = timing.FixedInterval[proto.MarketData](cfg.Ticker.TickInterval)
-		case Realtime:
-			ticker = timing.Realtime[proto.MarketData]()
-		default:
-			ticker = timing.Realtime[proto.MarketData]()
+		subscription, err := config.Dep[proto.Subscription](opts, "_subscription")
+		if err != nil {
+			return nil, err
+		}
+
+		strats, err := config.Dep[[]proto.Strategy](opts, "_strategies")
+		if err != nil {
+			return nil, err
+		}
+
+		cfg, err := parseSignalLoggerOptions(opts)
+		if err != nil {
+			return nil, err
+		}
+
+		ticker, err := newTicker(cfg.Ticker)
+		if err != nil {
+			return nil, err
 		}
 
 		return &SignalLogger{
-			id:         id,
-			provider:   prov,
-			strategies: strats,
-			ticker:     ticker,
-			logger:     log,
-			cfg:        cfg,
-			done:       make(chan struct{}),
+			id:           id,
+			provider:     prov,
+			subscription: subscription,
+			strategies:   strats,
+			ticker:       ticker,
+			logger:       log,
+			cfg:          cfg,
+			done:         make(chan struct{}),
 		}, nil
 	})
 }
 
-func parseSignalLoggerConfig(opts map[string]any) (SignalLoggerConfig, error) {
-	cfg := SignalLoggerConfig{}
-
-	if sub, ok := opts["subscription"].(map[string]any); ok {
-		symbol, _ := sub["symbol"].(string)
-		timeframe, _ := sub["timeframe"].(string)
-		cfg.Subscription = proto.Subscription{
-			Symbol:    symbol,
-			Timeframe: proto.Timeframe(timeframe),
-		}
+func parseSignalLoggerOptions(opts map[string]any) (SignalLoggerOptions, error) {
+	cfg := SignalLoggerOptions{}
+	// The caller names the engine; adding it here would duplicate the prefix.
+	if err := config.DecodeOptions(opts, &cfg); err != nil {
+		return cfg, err
 	}
-
-	if limit, ok := opts["limit"].(float64); ok {
-		cfg.Limit = int(limit)
-	}
-
-	if bufferSize, ok := opts["bufferSize"].(float64); ok {
-		cfg.BufferSize = int(bufferSize)
-	}
-
-	if ticker, ok := opts["ticker"].(map[string]any); ok {
-		tickerType, _ := ticker["type"].(string)
-		if tickerType == "fixed" {
-			cfg.Ticker.Type = FixedInterval
-		} else {
-			cfg.Ticker.Type = Realtime
-		}
-		if interval, ok := ticker["interval"].(string); ok {
-			dur, err := time.ParseDuration(interval)
-			if err != nil {
-				return cfg, fmt.Errorf("invalid ticker interval: %w", err)
-			}
-			cfg.Ticker.TickInterval = dur
-		}
-	}
-
 	return cfg, nil
 }
 
 type SignalLogger struct {
-	id         string
-	provider   proto.DataProvider
-	strategies []proto.Strategy
-	ticker     timing.Ticker[proto.MarketData]
-	logger     *logger.Logger
-	cfg        SignalLoggerConfig
+	id           string
+	provider     proto.DataProvider
+	subscription proto.Subscription
+	strategies   []proto.Strategy
+	ticker       timing.Ticker[proto.MarketData]
+	logger       *logger.Logger
+	cfg          SignalLoggerOptions
 
 	done chan struct{}
 	wg   sync.WaitGroup
 }
 
-type SignalLoggerConfig struct {
-	Subscription proto.Subscription
-	Limit        int // 0 = unlimited
-	Ticker       TickerConfig
-	BufferSize   int
+type SignalLoggerOptions struct {
+	Limit  int           `json:"limit"` // 0 = unlimited
+	Ticker *TickerConfig `json:"ticker"`
+}
+
+func (o *SignalLoggerOptions) Validate() error {
+	if o.Limit < 0 {
+		return fmt.Errorf("limit must not be negative")
+	}
+	if o.Ticker != nil {
+		return o.Ticker.Validate()
+	}
+	return nil
 }
 
 func (e *SignalLogger) Run(ctx context.Context) error {
-	if err := e.provider.Init(e.cfg.Subscription, e.cfg.Limit); err != nil {
+	if err := e.provider.Init(e.subscription, e.cfg.Limit); err != nil {
 		return err
 	}
 	data, dataErrs := e.provider.Streams()

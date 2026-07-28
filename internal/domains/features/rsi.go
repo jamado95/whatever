@@ -1,23 +1,25 @@
 package feat
 
 import (
-	"fmt"
+	"whatever/internal/config"
 	proto "whatever/internal/protocol"
 	reg "whatever/internal/registry"
 )
 
+const RSIID = "rsi"
+
 func init() {
-	reg.Features.Register("rsi", func(opts map[string]any) (proto.Feature, error) {
-		period, ok := opts["period"].(float64)
-		if !ok {
-			return nil, fmt.Errorf("missing or invalid period")
+	reg.Features.Register(RSIID, func(opts map[string]any) (proto.Feature, error) {
+		cfg := PeriodConfig{}
+		if err := config.Decode(opts, &cfg); err != nil {
+			return nil, err
 		}
 
-		id := iDWithPeriod("rsi", int(period))
+		id := iDWithPeriod(RSIID, cfg.Period)
 
 		return &RSI{
 			id:     proto.NewKey[float64](id),
-			period: int(period),
+			period: cfg.Period,
 		}, nil
 	})
 }

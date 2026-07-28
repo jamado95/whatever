@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"sync"
 
+	"whatever/internal/config"
 	"whatever/internal/idgen"
 	"whatever/internal/logger"
 	proto "whatever/internal/protocol"
@@ -24,11 +25,9 @@ func init() {
 			With("provider", id)
 
 		cfg := BinanceHistoricalConfig{}
-		if v, ok := opts["startTime"].(int64); ok {
-			cfg.StartTime = v
-		}
-		if v, ok := opts["endTime"].(int64); ok {
-			cfg.EndTime = v
+		// The caller names the provider; adding it here would duplicate it.
+		if err := config.Decode(opts, &cfg); err != nil {
+			return nil, err
 		}
 
 		return &BinanceHistoricalProvider{
@@ -56,8 +55,18 @@ var timeframeMap = map[proto.Timeframe]string{
 }
 
 type BinanceHistoricalConfig struct {
-	StartTime int64 // Unix ms timestamp
-	EndTime   int64 // Unix ms timestamp
+	StartTime int64 `json:"startTime"` // Unix ms timestamp, 0 = unbounded
+	EndTime   int64 `json:"endTime"`   // Unix ms timestamp, 0 = unbounded
+}
+
+func (c *BinanceHistoricalConfig) Validate() error {
+	if c.StartTime < 0 || c.EndTime < 0 {
+		return fmt.Errorf("'startTime' and 'endTime' must not be negative")
+	}
+	if c.StartTime != 0 && c.EndTime != 0 && c.EndTime <= c.StartTime {
+		return fmt.Errorf("'endTime' (%d) must be after 'startTime' (%d)", c.EndTime, c.StartTime)
+	}
+	return nil
 }
 
 type BinanceHistoricalProvider struct {

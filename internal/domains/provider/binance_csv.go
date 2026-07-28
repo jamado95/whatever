@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"sync"
 
+	"whatever/internal/config"
 	"whatever/internal/idgen"
 	"whatever/internal/logger"
 	proto "whatever/internal/protocol"
@@ -22,15 +23,30 @@ func init() {
 			With("domain", "provider").
 			With("provider", id)
 
-		file, _ := opts["file"].(string)
+		cfg := BinanceCSVConfig{}
+		// The caller names the provider; adding it here would duplicate it.
+		if err := config.Decode(opts, &cfg); err != nil {
+			return nil, err
+		}
 
 		return &BinanceCSVProvider{
 			id:     id,
-			file:   file,
+			file:   cfg.File,
 			logger: logger,
 			mu:     sync.Mutex{},
 		}, nil
 	})
+}
+
+type BinanceCSVConfig struct {
+	File string `json:"file"`
+}
+
+func (c *BinanceCSVConfig) Validate() error {
+	if c.File == "" {
+		return fmt.Errorf("'file' is required")
+	}
+	return nil
 }
 
 type BinanceCSVProvider struct {

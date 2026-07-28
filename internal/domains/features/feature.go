@@ -3,6 +3,7 @@ package feat
 import (
 	"fmt"
 	"math"
+	"strconv"
 
 	proto "whatever/internal/protocol"
 )
@@ -25,8 +26,11 @@ type FeatureChain struct {
 }
 
 func NewFeatureChain(features []proto.Feature) (*FeatureChain, error) {
-	unique := removeDuplicates(features)
-	sorted, err := topologicalSort(unique)
+	if err := checkDuplicates(features); err != nil {
+		return nil, err
+	}
+
+	sorted, err := topologicalSort(features)
 	if err != nil {
 		return nil, err
 	}
@@ -135,20 +139,47 @@ func topologicalSort(features []proto.Feature) ([]proto.Feature, error) {
 // Utility functions
 // ////////////////////////////////////
 
-func removeDuplicates(features []proto.Feature) []proto.Feature {
-	seen := make(map[proto.KeyRef]bool)
-	uniqueFeatures := make([]proto.Feature, 0)
-	for _, feat := range features {
-		if !seen[feat.ID()] {
-			seen[feat.ID()] = true
-			uniqueFeatures = append(uniqueFeatures, feat)
-		}
+// PeriodConfig is the config shape shared by the period-parameterised features.
+type PeriodConfig struct {
+	Period int `json:"period"`
+}
+
+func (c *PeriodConfig) Validate() error {
+	if c.Period <= 0 {
+		return fmt.Errorf("'period' is required and must be positive")
 	}
-	return uniqueFeatures
+	return nil
+}
+
+// checkDuplicates rejects features sharing an ID. Because an ID now encodes
+// every parameter that distinguishes one instance from another, a collision
+// means two variants were configured identically — a config mistake rather
+// than an intent to deduplicate.
+func checkDuplicates(features []proto.Feature) error {
+	seen := make(map[proto.KeyRef]bool, len(features))
+	for _, feat := range features {
+		id := feat.ID()
+		if seen[id] {
+			return fmt.Errorf("duplicate feature %q: two variants are configured identically", id.Name)
+		}
+		seen[id] = true
+	}
+	return nil
 }
 
 func iDWithPeriod(base string, period int) string {
 	return fmt.Sprintf("%s_%d", base, period)
+}
+
+// iDWithParam extends a feature ID with a non-default parameter, so that two
+// variants differing only in that parameter cannot collide. Defaulted values
+// are omitted to keep the common IDs (ema_20, vwap_50) stable — they appear in
+// exports and in plotting arguments.
+func iDWithParam(base, param string, value, defaultValue float64) string {
+	if value == defaultValue {
+		return base
+	}
+	return fmt.Sprintf("%s_%s%s", base, param, strconv.FormatFloat(value, 'g', -1, 64))
 }
 
 func roundDecimals(value float64, precision int) float64 {

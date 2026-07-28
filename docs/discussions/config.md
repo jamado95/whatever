@@ -10,7 +10,7 @@ signature.
 Objective of this discussion: record how config reaches components, why the untyped map produced a
 family of silent failures, and the decoding contract that replaced it.
 
-Implemented 2026-07-26. Plan: strict config parsing and validation.
+Implemented 2026-07-26 — see Solution for the executed plan.
 
 ## Current Understanding
 
@@ -100,8 +100,20 @@ independent problem.
 - **Duplicate feature IDs are an error.** Now that an ID covers every distinguishing parameter, a
   collision means two variants were configured identically, which is a mistake rather than an intent
   to deduplicate.
+- **An engine with an unresolved dependency is not constructed.** Attempting it is a guaranteed
+  failure whose error ("missing dependency `_provider`") only restates one already reported. It is
+  therefore skipped, and the skip is logged as a consequence rather than counted as a config error
+  of its own — otherwise the tally overstates how many independent problems the file has. Accepted
+  cost: errors inside the engine's `options` block surface on the next run, once the dependency is
+  fixed. Validating those options without constructing the engine would require reaching its config
+  struct through a registry, which is the prototype machinery deliberately dropped above.
 
 ## Solution
+
+Executed implementation plans:
+
+- [`docs/plans/config-strict-parsing.md`](../plans/config-strict-parsing.md) — strict config parsing
+  and validation. Executed 2026-07-26.
 
 As implemented:
 
@@ -129,17 +141,8 @@ Resolved by this work: silent ticker fallback, triplicated engine parsers, untyp
 
 ## Open Questions
 
-- Should the engine's `options` block still be validated when one of its dependencies failed to
-  construct? Today the engine is skipped to avoid cascading "missing `_provider`" noise, so those
-  errors need a second run. Validating it independently would need the engine's struct without the
-  engine, which is the prototype registry that was deliberately dropped.
 - Generating a config reference from the component structs. Would need that same registry. Cheap
   once it exists; not worth it on its own.
-- Do backtest parameter sweeps go *through* `config.json` (generated files fed to `Load`) or bypass
-  it (typed structs built in Go and handed to factories in-process)? Tracked under [[engine]]'s
-  backtest-instantiation question. It matters here because generated config files are the main
-  standing justification for `--validate-only`; if sweeps bypass the file, only hand-edited configs
-  remain.
 - Should `exporter` become a top-level component block referenced by name, like providers, features
   and strategies? More consistent and would allow several exporters. Deferred as a separate format
   change.

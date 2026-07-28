@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -28,17 +29,57 @@ const defaultConfigPath = "config.json"
 func main() {
 	log := logger.NewLogger(logger.DefaultLoggerConfig())
 
-	cfg, err := config.Load(defaultConfigPath)
+	configPath := flag.String("config", defaultConfigPath, "path to the config file")
+	validateOnly := flag.Bool("validate-only", false,
+		"validate the config and exit without running the engine")
+	flag.Parse()
+
+	cfg, err := config.Load(*configPath)
 	if err != nil {
-		log.Error(err, "Error loading config: %v\n")
+		log.Error(err, fmt.Sprintf("%s: %v", *configPath, err))
 		os.Exit(1)
 	}
 
-	// 0. check engine type is registered
-	if !reg.Engines.Has(cfg.Engine.Type) {
-		err := fmt.Errorf("engine %s not registered", cfg.Engine.Type)
-		log.Error(err, err.Error())
+	// Construction is side-effect free — no factory performs I/O, which is what
+	// makes building everything a genuine dry run. Errors are collected rather
+	// than fatal so that one pass reports every problem in the file.
+	eng, errs := build(cfg, log)
+	if len(errs) > 0 {
+		for _, e := range errs {
+			log.Error(e, fmt.Sprintf("%s: %v", *configPath, e))
+		}
+		log.Error(fmt.Errorf("%d config error(s)", len(errs)),
+			fmt.Sprintf("%s: %d config error(s)", *configPath, len(errs)))
 		os.Exit(1)
+	}
+
+	if *validateOnly {
+		log.Info(fmt.Sprintf("%s: config valid", *configPath))
+		return
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(),
+		syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	log.Info(fmt.Sprintf("whtv starting with engine: %s", cfg.Engine.Type))
+
+	if err := eng.Run(ctx); err != nil {
+		log.Error(err, "engine stopped with error")
+		os.Exit(1)
+	}
+
+	log.Info("whtv shutdown complete")
+}
+
+// build constructs every enabled component and wires the engine, accumulating
+// errors instead of exiting on the first. The returned engine is nil whenever
+// any error was recorded.
+func build(cfg *config.Config, log *logger.Logger) (reg.Runnable, []error) {
+	var errs []error
+
+	if !reg.Engines.Has(cfg.Engine.Type) {
+		errs = append(errs, fmt.Errorf("engine %q not registered", cfg.Engine.Type))
 	}
 
 	// 1. Instantiate enabled providers
@@ -49,15 +90,14 @@ func main() {
 			continue
 		}
 		if !reg.Providers.Has(pc.Type) {
-			err := fmt.Errorf("provider type %q not registered", pc.Type)
-			log.Error(err, err.Error())
-			os.Exit(1)
+			errs = append(errs, fmt.Errorf("provider %q not registered", pc.Type))
+			continue
 		}
 
 		prov, err := reg.Providers.Create(pc.Type, pc.Opts)
 		if err != nil {
-			log.Error(err, fmt.Sprintf("error creating provider %s: %v", pc.Type, err))
-			os.Exit(1)
+			errs = append(errs, fmt.Errorf("provider %q: %w", pc.Type, err))
+			continue
 		}
 		providers[pc.Type] = prov
 		log.Info(fmt.Sprintf("created provider: %s", pc.Type))
@@ -71,29 +111,17 @@ func main() {
 			continue
 		}
 		if !reg.Strategies.Has(sc.Type) {
-			err := fmt.Errorf("strategy type %q not registered", sc.Type)
-			log.Error(err, err.Error())
-			os.Exit(1)
+			errs = append(errs, fmt.Errorf("strategy %q not registered", sc.Type))
+			continue
 		}
 
 		strat, err := reg.Strategies.Create(sc.Type, sc.Opts)
 		if err != nil {
-			log.Error(err, fmt.Sprintf("error creating strategy %s: %v", sc.Type, err))
-			os.Exit(1)
+			errs = append(errs, fmt.Errorf("strategy %q: %w", sc.Type, err))
+			continue
 		}
 		strategies[sc.Type] = strat
 		log.Info(fmt.Sprintf("created strategy: %s", sc.Type))
-	}
-
-	// createFeature helper to create feature from config
-	createFeature := func(fc config.FeatureConfig, opts map[string]any) proto.Feature {
-		feat, err := reg.Features.Create(fc.Type, opts)
-		if err != nil {
-			log.Error(err, fmt.Sprintf("error creating feature %s: %v", fc.Type, err))
-			os.Exit(1)
-		}
-		log.Info(fmt.Sprintf("created feature: %s", feat.ID().Name))
-		return feat
 	}
 
 	// 3. Instantiate features (one per variant)
@@ -104,113 +132,127 @@ func main() {
 			continue
 		}
 		if !reg.Features.Has(fc.Type) {
-			log.Info(fmt.Sprintf("skipping unregistered feature: %s", fc.Type))
+			errs = append(errs, fmt.Errorf("feature %q not registered", fc.Type))
 			continue
 		}
 
-		if len(fc.Variants) == 0 {
-			features = append(features, createFeature(fc, nil))
-		} else {
-			for _, opts := range fc.Variants {
-				features = append(features, createFeature(fc, opts))
-			}
+		// A feature with no variants is a single instance with no options.
+		variants := fc.Variants
+		if len(variants) == 0 {
+			variants = []map[string]any{nil}
 		}
-	}
 
-	// 4. Resolve engine dependencies
-	engineOpts := cfg.Engine.Opts
-
-	// pass features to engine
-	engineOpts["_features"] = features
-
-	// resolve provider
-	if provType, ok := engineOpts["provider"].(string); ok {
-		if prov, exists := providers[provType]; exists {
-			engineOpts["_provider"] = prov
-		} else {
-			err := fmt.Errorf("engine references provider %q which was not instantiated (disabled or missing)", provType)
-			log.Error(err, err.Error())
-			os.Exit(1)
-		}
-	} else {
-		err := fmt.Errorf("engine config missing 'provider' field")
-		log.Error(err, err.Error())
-		os.Exit(1)
-	}
-
-	// resolve strategies
-	engineOpts["_strategies"] = make([]proto.Strategy, 0)
-	if stratTypes, ok := engineOpts["strategies"].([]any); ok {
-		for _, t := range stratTypes {
-			stratType := t.(string)
-			if strat, exists := strategies[stratType]; exists {
-				engineOpts["_strategies"] = append(
-					engineOpts["_strategies"].([]proto.Strategy),
-					strat,
-				)
-			} else {
-				err := fmt.Errorf("engine references strategy %q which was not instantiated (disabled or missing)", stratType)
-				log.Error(err, err.Error())
-				os.Exit(1)
-			}
-		}
-	}
-
-	// resolve exporter (optional)
-	if exporterCfg, ok := engineOpts["exporter"].(map[string]any); ok {
-		exporterType, _ := exporterCfg["type"].(string)
-		if exporterType == "" {
-			err := fmt.Errorf("exporter config missing required 'type' field")
-			log.Error(err, err.Error())
-			os.Exit(1)
-		}
-		// check disabled flag (defaults to enabled if not specified)
-		disabled := false
-		if d, ok := exporterCfg["disabled"].(bool); ok {
-			disabled = d
-		}
-		if !disabled {
-			if !reg.Exporters.Has(exporterType) {
-				err := fmt.Errorf("exporter type %q not registered", exporterType)
-				log.Error(err, err.Error())
-				os.Exit(1)
-			}
-			// pass context info to exporter for filename generation
-			if sub, ok := engineOpts["subscription"].(map[string]any); ok {
-				exporterCfg["_symbol"], _ = sub["symbol"].(string)
-				exporterCfg["_timeframe"], _ = sub["timeframe"].(string)
-			}
-			exporterCfg["_engine"] = cfg.Engine.Type
-			exporter, err := reg.Exporters.Create(exporterType, exporterCfg)
+		for i, opts := range variants {
+			feature, err := reg.Features.Create(fc.Type, opts)
 			if err != nil {
-				log.Error(err, fmt.Sprintf("error creating exporter %s: %v", exporterType, err))
-				os.Exit(1)
+				errs = append(errs, fmt.Errorf("feature %q variant %d: %w", fc.Type, i, err))
+				continue
 			}
-			engineOpts["_exporter"] = exporter
-			log.Info(fmt.Sprintf("created exporter: %s", exporterType))
-		} else {
-			log.Info(fmt.Sprintf("skipping disabled exporter: %s", exporterType))
+			features = append(features, feature)
+			log.Info(fmt.Sprintf("created feature: %s", feature.ID().Name))
 		}
 	}
 
-	// 5. Create engine
+	// 4. Resolve engine dependencies. The engine block's own keys stay untouched
+	// under "options"; only resolved instances are injected here.
+	engineOpts := cfg.Engine.Opts()
+	engineOpts["_features"] = features
+	engineOpts["_subscription"] = cfg.Subscription
+
+	depsOK := true
+
+	if prov, exists := providers[cfg.Engine.Provider]; exists {
+		engineOpts["_provider"] = prov
+	} else {
+		errs = append(errs, fmt.Errorf(
+			"engine references provider %q, which was not instantiated (disabled or missing)",
+			cfg.Engine.Provider))
+		depsOK = false
+	}
+
+	engineStrategies := make([]proto.Strategy, 0, len(cfg.Engine.Strategies))
+	for _, name := range cfg.Engine.Strategies {
+		strat, exists := strategies[name]
+		if !exists {
+			errs = append(errs, fmt.Errorf(
+				"engine references strategy %q, which was not instantiated (disabled or missing)",
+				name))
+			depsOK = false
+			continue
+		}
+		engineStrategies = append(engineStrategies, strat)
+	}
+	engineOpts["_strategies"] = engineStrategies
+
+	// 5. Resolve exporter (optional)
+	if exporter, ok, err := buildExporter(cfg, log); err != nil {
+		errs = append(errs, err)
+		depsOK = false
+	} else if ok {
+		engineOpts["_exporter"] = exporter
+	}
+
+	// 6. Create engine. With a dependency unresolved this is a guaranteed
+	// failure, so it is skipped rather than attempted — the resulting "missing
+	// _provider" would restate an error already reported. The skip is reported
+	// as a consequence, not counted as a config error of its own.
+	if !depsOK || !reg.Engines.Has(cfg.Engine.Type) {
+		log.Warn(fmt.Sprintf(
+			"engine %q not constructed: unresolved dependencies; errors inside its "+
+				"'options' block will surface once the above are fixed", cfg.Engine.Type))
+		return nil, errs
+	}
+
 	eng, err := reg.Engines.Create(cfg.Engine.Type, engineOpts)
 	if err != nil {
-		log.Error(err, fmt.Sprintf("error creating engine %s: %v", cfg.Engine.Type, err))
-		os.Exit(1)
+		errs = append(errs, fmt.Errorf("engine %q: %w", cfg.Engine.Type, err))
+		return nil, errs
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(),
-		syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
+	if len(errs) > 0 {
+		return nil, errs
+	}
+	return eng, nil
+}
 
-	log.Info(fmt.Sprintf("whtv starting with engine: %s", cfg.Engine.Type))
-
-	// 6. Run engine (blocks until context cancelled or engine completes)
-	if err := eng.Run(ctx); err != nil {
-		log.Error(err, "engine stopped with error")
-		os.Exit(1)
+// buildExporter reports (exporter, configured, error). A missing or disabled
+// exporter block is not an error — the engine treats it as optional.
+func buildExporter(cfg *config.Config, log *logger.Logger) (proto.Exporter, bool, error) {
+	if cfg.Engine.Exporter == nil {
+		return nil, false, nil
 	}
 
-	log.Info("whtv shutdown complete")
+	exporterCfg := cfg.Engine.Exporter
+
+	exporterType, _ := exporterCfg["type"].(string)
+	if exporterType == "" {
+		return nil, false, fmt.Errorf("exporter: missing required 'type' field")
+	}
+
+	if disabled, ok := exporterCfg["disabled"].(bool); ok && disabled {
+		log.Info(fmt.Sprintf("skipping disabled exporter: %s", exporterType))
+		return nil, false, nil
+	}
+
+	if !reg.Exporters.Has(exporterType) {
+		return nil, false, fmt.Errorf("exporter %q not registered", exporterType)
+	}
+
+	// Runtime context for filename generation. These are dependency keys, so
+	// config.Decode strips them rather than rejecting them as unknown fields.
+	opts := make(map[string]any, len(exporterCfg)+3)
+	for k, v := range exporterCfg {
+		opts[k] = v
+	}
+	opts["_symbol"] = cfg.Subscription.Symbol
+	opts["_timeframe"] = string(cfg.Subscription.Timeframe)
+	opts["_engine"] = cfg.Engine.Type
+
+	exporter, err := reg.Exporters.Create(exporterType, opts)
+	if err != nil {
+		return nil, false, fmt.Errorf("exporter %q: %w", exporterType, err)
+	}
+
+	log.Info(fmt.Sprintf("created exporter: %s", exporterType))
+	return exporter, true, nil
 }

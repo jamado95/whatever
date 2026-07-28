@@ -1,23 +1,25 @@
 package feat
 
 import (
-	"fmt"
+	"whatever/internal/config"
 	proto "whatever/internal/protocol"
 	reg "whatever/internal/registry"
 )
 
+const VWAPID = "vwap"
+
 func init() {
-	reg.Features.Register("vwap", func(opts map[string]any) (proto.Feature, error) {
-		period, ok := opts["period"].(float64)
-		if !ok {
-			return nil, fmt.Errorf("vwap register: missing or invalid period")
+	reg.Features.Register(VWAPID, func(opts map[string]any) (proto.Feature, error) {
+		cfg := PeriodConfig{}
+		if err := config.Decode(opts, &cfg); err != nil {
+			return nil, err
 		}
 
-		id := iDWithPeriod("vwap", int(period))
+		id := iDWithPeriod(VWAPID, cfg.Period)
 
 		return &VWAP{
 			id:     proto.NewKey[float64](id),
-			period: int(period),
+			period: cfg.Period,
 		}, nil
 	})
 }

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
+	"whatever/internal/config"
 	"whatever/internal/logger"
 	"whatever/internal/pipeline"
 	proto "whatever/internal/protocol"
@@ -17,146 +17,93 @@ const FullEngineID = "full"
 
 func init() {
 	reg.Engines.Register(FullEngineID, func(opts map[string]any) (reg.Runnable, error) {
-		prov, ok := opts["_provider"].(proto.DataProvider)
-		if !ok {
-			return nil, fmt.Errorf("missing or invalid _provider")
-		}
-
-		strats, ok := opts["_strategies"].([]proto.Strategy)
-		if !ok {
-			return nil, fmt.Errorf("missing or invalid _strategies")
-		}
-
-		riskMgr, ok := opts["_risk"].(proto.RiskManager)
-		if !ok {
-			return nil, fmt.Errorf("missing or invalid _risk")
-		}
-
-		execs, ok := opts["_executors"].([]proto.Executor)
-		if !ok {
-			return nil, fmt.Errorf("missing or invalid _executors")
-		}
-
-		cfg, err := parseFullEngineConfig(opts)
+		prov, err := config.Dep[proto.DataProvider](opts, "_provider")
 		if err != nil {
 			return nil, err
 		}
 
-		return NewEngine(prov, riskMgr, strats, execs, cfg)
+		subscription, err := config.Dep[proto.Subscription](opts, "_subscription")
+		if err != nil {
+			return nil, err
+		}
+
+		strats, err := config.Dep[[]proto.Strategy](opts, "_strategies")
+		if err != nil {
+			return nil, err
+		}
+
+		riskMgr, err := config.Dep[proto.RiskManager](opts, "_risk")
+		if err != nil {
+			return nil, err
+		}
+
+		execs, err := config.Dep[[]proto.Executor](opts, "_executors")
+		if err != nil {
+			return nil, err
+		}
+
+		cfg, err := parseFullEngineOptions(opts)
+		if err != nil {
+			return nil, err
+		}
+
+		return NewEngine(prov, subscription, riskMgr, strats, execs, cfg)
 	})
 }
 
-type TickerType int
-
-const (
-	Realtime TickerType = iota
-	FixedInterval
-)
-
-type TickerConfig struct {
-	Type         TickerType
-	TickInterval time.Duration
-}
-
 type Engine struct {
-	provider   proto.DataProvider
-	strategies []proto.Strategy
-	risk       proto.RiskManager
-	executors  []proto.Executor
-	ticker     timing.Ticker[proto.MarketData]
-	logger     *logger.Logger
-	cfg        Config
+	provider     proto.DataProvider
+	subscription proto.Subscription
+	strategies   []proto.Strategy
+	risk         proto.RiskManager
+	executors    []proto.Executor
+	ticker       timing.Ticker[proto.MarketData]
+	logger       *logger.Logger
+	cfg          FullEngineOptions
 
 	done chan struct{}
 	wg   sync.WaitGroup
 }
 
-type Config struct {
-	Subscription   proto.Subscription
-	Limit          int // 0 = unlimited
-	Ticker         TickerConfig
-	BufferSize     int // channel buffer size
-	ErrorThreshold int // number of errors to log before shutting down
+type FullEngineOptions struct {
+	Limit          int           `json:"limit"`          // 0 = unlimited
+	BufferSize     int           `json:"bufferSize"`     // channel buffer size
+	ErrorThreshold int           `json:"errorThreshold"` // errors tolerated before shutdown
+	Ticker         *TickerConfig `json:"ticker"`
 }
 
-func NewFullEngine(opts map[string]any) (*Engine, error) {
-	prov, ok := opts["_provider"].(proto.DataProvider)
-	if !ok {
-		return nil, fmt.Errorf("missing or invalid _provider")
+func (o *FullEngineOptions) Validate() error {
+	if o.Limit < 0 {
+		return fmt.Errorf("limit must not be negative")
 	}
-
-	strats, ok := opts["_strategies"].([]proto.Strategy)
-	if !ok {
-		return nil, fmt.Errorf("missing or invalid _strategies")
+	if o.BufferSize < 0 {
+		return fmt.Errorf("bufferSize must not be negative")
 	}
-
-	riskMgr, ok := opts["_risk"].(proto.RiskManager)
-	if !ok {
-		return nil, fmt.Errorf("missing or invalid _risk")
+	if o.ErrorThreshold <= 0 {
+		return fmt.Errorf("errorThreshold is required and must be positive")
 	}
-
-	execs, ok := opts["_executors"].([]proto.Executor)
-	if !ok {
-		return nil, fmt.Errorf("missing or invalid _executors")
+	if o.Ticker != nil {
+		return o.Ticker.Validate()
 	}
-
-	cfg, err := parseFullEngineConfig(opts)
-	if err != nil {
-		return nil, err
-	}
-
-	return NewEngine(prov, riskMgr, strats, execs, cfg)
+	return nil
 }
 
-func parseFullEngineConfig(opts map[string]any) (Config, error) {
-	cfg := Config{}
-
-	if sub, ok := opts["subscription"].(map[string]any); ok {
-		symbol, _ := sub["symbol"].(string)
-		timeframe, _ := sub["timeframe"].(string)
-		cfg.Subscription = proto.Subscription{
-			Symbol:    symbol,
-			Timeframe: proto.Timeframe(timeframe),
-		}
+func parseFullEngineOptions(opts map[string]any) (FullEngineOptions, error) {
+	cfg := FullEngineOptions{}
+	// The caller names the engine; adding it here would duplicate the prefix.
+	if err := config.DecodeOptions(opts, &cfg); err != nil {
+		return cfg, err
 	}
-
-	if limit, ok := opts["limit"].(float64); ok {
-		cfg.Limit = int(limit)
-	}
-
-	if bufferSize, ok := opts["bufferSize"].(float64); ok {
-		cfg.BufferSize = int(bufferSize)
-	}
-
-	if errorThreshold, ok := opts["errorThreshold"].(float64); ok {
-		cfg.ErrorThreshold = int(errorThreshold)
-	}
-
-	if ticker, ok := opts["ticker"].(map[string]any); ok {
-		tickerType, _ := ticker["type"].(string)
-		if tickerType == "fixed" {
-			cfg.Ticker.Type = FixedInterval
-		} else {
-			cfg.Ticker.Type = Realtime
-		}
-		if interval, ok := ticker["interval"].(string); ok {
-			dur, err := time.ParseDuration(interval)
-			if err != nil {
-				return cfg, fmt.Errorf("invalid ticker interval: %w", err)
-			}
-			cfg.Ticker.TickInterval = dur
-		}
-	}
-
 	return cfg, nil
 }
 
 func NewEngine(
 	prov proto.DataProvider,
+	sub proto.Subscription,
 	riskMgr proto.RiskManager,
 	strats []proto.Strategy,
 	execs []proto.Executor,
-	cfg Config,
+	cfg FullEngineOptions,
 ) (*Engine, error) {
 	if prov == nil {
 		return nil, fmt.Errorf("provider is required")
@@ -171,29 +118,24 @@ func NewEngine(
 		return nil, fmt.Errorf("executor is required")
 	}
 
-	// initiate ticker based on engine config
-	var ticker timing.Ticker[proto.MarketData]
-	switch cfg.Ticker.Type {
-	case FixedInterval:
-		ticker = timing.FixedInterval[proto.MarketData](cfg.Ticker.TickInterval)
-	case Realtime:
-		ticker = timing.Realtime[proto.MarketData]()
-	default:
-		return nil, fmt.Errorf("unsupported ticker type: %d", cfg.Ticker.Type)
+	ticker, err := newTicker(cfg.Ticker)
+	if err != nil {
+		return nil, err
 	}
 
 	// init engine logger
 	logger := logger.NewLogger(logger.DefaultLoggerConfig()).With("domain", "engine")
 
 	return &Engine{
-		provider:   prov,
-		strategies: strats,
-		risk:       riskMgr,
-		executors:  execs,
-		cfg:        cfg,
-		ticker:     ticker,
-		logger:     logger,
-		done:       make(chan struct{}),
+		provider:     prov,
+		subscription: sub,
+		strategies:   strats,
+		risk:         riskMgr,
+		executors:    execs,
+		cfg:          cfg,
+		ticker:       ticker,
+		logger:       logger,
+		done:         make(chan struct{}),
 	}, nil
 }
 
@@ -204,7 +146,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	/*
 		Init data provider layer
 	*/
-	if err := e.provider.Init(e.cfg.Subscription, e.cfg.Limit); err != nil {
+	if err := e.provider.Init(e.subscription, e.cfg.Limit); err != nil {
 		e.Close()
 		return fmt.Errorf("failed to init provider %s: %w", e.provider.ID(), err)
 	}
