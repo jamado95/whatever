@@ -63,10 +63,16 @@ Discussion documents follow this structure:
 ### Implementation Plans
 
 Implementation plans are stored under `docs/plans`.
+Plans can be single docs or tiered plans depending on scope size. Tiered plans are composed by multiple docs. If planning structure is not obvious from the chat, ask explicitly.  
+- Main doc lays out implementation iterations, and implementation stages for each iteration.
+- Implementation stage docs are THE fine-grained implementation plans.
 
-- Plans are the authoritative source for engineering work.
+The typical workflow consists of locking in the main plan and then iteratively discuss and produce implementation plans.
+
+Regrading implementation plans:
+- Are the authoritative source for engineering work.
 - Never implement directly from discussion documents.
-- Plans should include targeted updates to the associated discussion document, if applicable.
+- Plans should include targeted updates to the relevant discussion documents, if applicable.
 - After an approved plan is executed
   - Store it in `docs/plans`.
   - Reference it from the associated discussion document when appropriate.

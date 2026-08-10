@@ -83,6 +83,20 @@ All float outputs are rounded to 6 decimals via `roundDecimals` before being wri
 - **Strict definitions over permissive ones** for pattern features (documented for `engulfing`): lower signal frequency, higher information content, better suited to statistical validation.
 - **A feature ID encodes every parameter that distinguishes one instance from another.** Defaulted values are omitted so common names (`ema_20`, `vwap_50`) stay stable; only a non-default extends the ID (`ema_20_s3`). A duplicate ID is therefore a construction error — two variants configured identically — not a silent drop. See [[config]].
 - **Feature evaluation stays serial for now.** `Process` runs a candle's features in one goroutine. Parallelising independent graph levels was rejected at the current scale: per-candle dispatch/join overhead is the same order as the feature work itself, and `Snapshot`'s `map[string]any` (`snapshot.go:28`) is not safe for concurrent writes even to distinct keys, so parallelism would need a synchronised write path that adds the cost back. Revisit when features are numerous or expensive, or for multi-symbol chains — gated on a benchmark.
+- **The feature layer evolves toward a layered feature engine.** Features become organised into
+  families — Technical, Statistical, Market/Microstructure, Cross-Asset, Fundamental/Alternative —
+  assembling into a feature vector consumed by strategy logic, rather than one flat chain ordered by
+  a generic dependency graph. Directional roadmap, not a rewrite: only Technical and Statistical are
+  reachable today, Cross-Asset waits on the seam ([[multi-subscription]]), and Market/Microstructure
+  and Fundamental/Alternative wait on non-candle data ([[data-layer]]). See Solution for the diagram.
+- **Cross-asset metrics are features, not strategy internals.** Correlation, spread, beta and
+  similar cross-stream derived series live in the feature layer as a distinct **multi-stream
+  feature** that runs after the per-stream chains on synchronised (aligned) streams — never computed
+  inside a strategy. They are pure functions of aligned windows, so they keep the reproducibility,
+  reuse and exporter visibility every other feature has; strategy-internal math has none of these.
+  Which inputs to correlate (symbols/timeframes) is a feature-variant parameter, not a strategy
+  concern. Requires a second feature shape beyond today's single-window `Update`; the alignment
+  mechanism (the "seam") and the exact shape are tracked in [[multi-subscription]].
 
 ## Solution
 
@@ -98,12 +112,63 @@ Alternatives if exactness matters:
 Not yet decided. This matters most when comparing engine output against third-party charts or
 published strategies; it matters little if features are only ever compared against themselves.
 
+### Target architecture: layered feature engine
+
+The layer evolves from a flat chain executed by a generic dependency graph into a **layered feature
+engine** — features grouped into families, each with its own data and timing needs, assembling into
+a feature vector the strategy consumes.
+
+```
+Market Data
+      │
+      ▼
+Feature Engineering
+      ├── Technical Features
+      ├── Statistical Features
+      ├── Market/Microstructure Features
+      ├── Cross-Asset Features
+      └── Fundamental/Alternative Features
+              │
+              ▼
+        Feature Vector
+              │
+              ▼
+          Strategy Logic
+              │
+              ▼
+      Buy / Sell / Hold
+```
+
+- **Technical** — single-stream price/volume indicators (today's `sma`, `ema`, `rsi`, `vwap`,
+  `engulfing`). Reachable now.
+- **Statistical** — distributional / time-series stats over a window (volatility, z-score,
+  autocorrelation, moments). Reachable now over candle windows.
+- **Market/Microstructure** — order-book and trade-flow features (spread, imbalance, volume
+  profile). Needs non-candle data — gated on [[data-layer]].
+- **Cross-Asset** — correlation, spread, beta, cointegration across streams; the multi-stream
+  feature decided above, running after per-stream chains on the aligned seam ([[multi-subscription]]).
+- **Fundamental/Alternative** — funding, on-chain, sentiment, macro; needs external data sources not
+  modelled today.
+
+The shift is from *mechanism* (topological execution order) to *taxonomy* (families with distinct
+data, windows and execution tiers): the generic dependency graph persists as intra-family ordering,
+not the top-level structure. The **feature vector** is the assembled per-instant output the strategy
+consumes — today's `Snapshot` / `ExtendedMarketData` is its embryonic, single-stream form; its
+concrete shape is bound up with the strategy input contract ([[strategy-layer]]).
+
 ## Open Questions
 
 - EMA/RSI exactness: which of the three options above? What tolerance is acceptable?
-- Multi-symbol: the chain holds one window and assumes a single instrument stream. Does a chain instance exist per symbol, or does the window become keyed by symbol? Cross-asset feature (correlation, spread, beta) — explicitly a goal in `Architecture.md` — need the latter, or need a distinct "multi-stream feature" concept.
+- Multi-symbol chain topology: one chain instance per stream, or a window keyed by symbol? Leaning
+  per-stream chains — tracked in [[multi-subscription]].
+- Cross-asset feature shape: placement is now decided (feature layer, see Decisions); the open part
+  is the mechanism — a distinct multi-stream feature consuming the synchronised (aligned) streams
+  after the per-stream chains, versus a keyed multi-window `Update`. Tracked in [[multi-subscription]].
 - Should the type-safety hole in `Snapshot` be closed (registry of key name → type, checked at chain construction), or is the convention sufficient?
 - `Dependencies()` is declared but unused. Is it kept for the composition roadmap, or removed until a real composite feature demands it?
+- Layered engine mechanics: is the dependency graph per-family or global, and do families run in
+  tiers (per-stream → aligned cross-asset → …) or in parallel? Is the feature vector a fixed schema
+  or the current heterogeneous `Snapshot`? (Ties the [[strategy-layer]] input contract.)
 
 ## WIP
 

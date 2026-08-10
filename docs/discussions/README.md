@@ -16,6 +16,7 @@ Opened 2026-07-26 from a full review of the codebase at commit `fbee380`.
 | [monitor-layer.md](monitor-layer.md) | Monitor layer | Interface sketch only, marked `REVIEW` |
 | [risk-management.md](risk-management.md) | Risk management | Stub file only |
 | [engine.md](engine.md) | Engine | `data_logger` works; `signal_logger` blocked; `full` uninstantiable; `backtesting` unstarted |
+| [multi-subscription.md](multi-subscription.md) | Cross-cutting — multi-stream flows | **Under active research** — nothing implemented, no plan |
 
 ## Cross-cutting themes
 
@@ -31,7 +32,9 @@ per-layer:
    deferred because wiring it changes strategy behaviour.
 2. **Determinism vs. liveness.** `FanOut` drops data under load and features approximate their
    recursive definitions. Both are defensible for live trading and both undermine the reproducibility
-   the backtesting methodology requires. See [[engine]] and [[features]].
+   the backtesting methodology requires. Multi-stream synchronisation is the same axis — a shared
+   logical clock versus free flow from providers. See [[engine]], [[features]] and
+   [[multi-subscription]].
 3. **The feature → strategy gap.** Features exist and work; strategies cannot receive them. This one
    interface change unblocks the strategy layer, the `signal_logger` engine, and everything
    downstream. See [[strategy-layer]].
