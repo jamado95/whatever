@@ -136,11 +136,7 @@ func (p *BinanceCSVProvider) run() {
 	reader := csv.NewReader(file)
 	count := 0
 
-	for {
-		if p.limit > 0 && count >= p.limit {
-			break
-		}
-
+	for p.limit <= 0 || count < p.limit {
 		select {
 		case <-p.done:
 			return
