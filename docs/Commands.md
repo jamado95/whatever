@@ -64,14 +64,20 @@ block surface on the next run, once the dependency is fixed.
 
 | Command | Description |
 |---|---|
-| `make test` | Run the Go test suite — covers `internal/config`, `internal/engine` and the providers; the remaining packages report "no test files". |
-| `make fmt` | Format all Go sources with `gofmt -w`. |
+| `make test` | Run the Go test suite — covers `cmd`, `internal/config`, `internal/engine`, `internal/protocol`, `internal/stream`, features and providers; the remaining packages report "no test files". |
+| `make fmt` | Format all Go sources and fix imports with `goimports -w`. |
 | `make tidy` | Prune and sync `go.mod` / `go.sum`. |
-| `make lint` | ⚠️ Run `golangci-lint` (v2 config in `.golangci.yml`). |
-| `make lint-clean` | ⚠️ Clear the lint cache, then lint. |
-| `make check` | ⚠️ Run `fmt` → `tidy` → `test` → `lint` in sequence. |
+| `make lint` | Run `staticcheck` over every package. |
+| `make check` | Run `fmt` → `tidy` → `test` → `lint` in sequence. |
 | `go build ./...` | Compile every package without producing a binary. |
-| `go vet ./...` | Static analysis — the working substitute while `golangci-lint` is unavailable. |
+| `go vet ./...` | Go's built-in static analysis. |
+
+`make fmt` and `make lint` need the tools on `PATH`:
+
+```bash
+go install golang.org/x/tools/cmd/goimports@latest
+go install honnef.co/go/tools/cmd/staticcheck@latest
+```
 
 ### Data acquisition
 
@@ -177,6 +183,4 @@ read the diagnostics.
 
 ## Known broken commands
 
-| Command | Problem | Workaround |
-|---|---|---|
-| `make lint`, `make lint-clean`, `make check` | `golangci-lint` is not installed. | Install it, or use `go vet ./...`. |
+None currently.

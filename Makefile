@@ -10,6 +10,9 @@ build:
 run:
 	$(GO) run ./cmd/main.go --config $(CONFIG)
 
+lint:
+	staticcheck ./...
+
 # Validate a config without running the engine. No market data is fetched and
 # no export files are written.
 validate:
@@ -70,13 +73,7 @@ test:
 	go test ./...
 
 fmt:
-	gofmt -w .
-
-lint:
-	golangci-lint run
-
-lint-clean:
-	golangci-lint cache clean && golangci-lint run
+	goimports -w .
 
 tidy:
 	go mod tidy
