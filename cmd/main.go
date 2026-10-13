@@ -99,8 +99,8 @@ func build(cfg *config.Config, log *logger.Logger) (reg.Runnable, []error) {
 			errs = append(errs, fmt.Errorf("provider %q: %w", pc.Type, err))
 			continue
 		}
-		providers[pc.Type] = prov
-		log.Info(fmt.Sprintf("created provider: %s", pc.Type))
+		providers[pc.Name] = prov
+		log.Info(fmt.Sprintf("created provider: %s", pc.Name))
 	}
 
 	// 2. Instantiate enabled strategies
@@ -153,22 +153,54 @@ func build(cfg *config.Config, log *logger.Logger) (reg.Runnable, []error) {
 		}
 	}
 
-	// 4. Resolve engine dependencies. The engine block's own keys stay untouched
+	// 4. Validate subscription and strategy references. These checks run for
+	// every subscription regardless of count; only the run-path wiring below is
+	// single-subscription this stage.
+	subNames := make(map[string]bool, len(cfg.Subscriptions))
+	for _, sub := range cfg.Subscriptions {
+		subNames[sub.ID()] = true
+	}
+	for i, sub := range cfg.Subscriptions {
+		if _, exists := providers[sub.Provider]; !exists {
+			errs = append(errs, fmt.Errorf(
+				"subscriptions[%d] (%s) references provider %q, which was not instantiated (disabled or missing)",
+				i, sub.ID(), sub.Provider))
+		}
+	}
+	for _, sc := range cfg.Strategies {
+		if sc.Disabled {
+			continue
+		}
+		for _, ref := range sc.Subscriptions {
+			if !subNames[ref] {
+				errs = append(errs, fmt.Errorf(
+					"strategy %q references subscription %q, which is not declared", sc.Type, ref))
+			}
+		}
+	}
+
+	// 5. Resolve engine dependencies. The engine block's own keys stay untouched
 	// under "options"; only resolved instances are injected here.
 	engineOpts := cfg.Engine.Opts()
 	engineOpts["_features"] = features
-	engineOpts["_subscription"] = cfg.Subscription
 
 	depsOK := true
 
-	if prov, exists := providers[cfg.Engine.Provider]; exists {
-		engineOpts["_provider"] = prov
-	} else {
-		errs = append(errs, fmt.Errorf(
-			"engine references provider %q, which was not instantiated (disabled or missing)",
-			cfg.Engine.Provider))
-		depsOK = false
+	// one provider instance per subscription
+	subProviders := make(map[proto.Subscription]proto.DataProvider, len(cfg.Subscriptions))
+	for _, sub := range cfg.Subscriptions {
+		if prov, exists := providers[sub.Provider]; exists {
+			subProviders[sub] = prov
+		} else {
+			depsOK = false // reference error already recorded above
+		}
 	}
+
+	if len(cfg.Subscriptions) == 0 {
+		depsOK = false // already reported by validate()
+	}
+	engineOpts["_subscriptions"] = cfg.Subscriptions
+	engineOpts["_providers"] = subProviders
 
 	engineStrategies := make([]proto.Strategy, 0, len(cfg.Engine.Strategies))
 	for _, name := range cfg.Engine.Strategies {
@@ -184,7 +216,7 @@ func build(cfg *config.Config, log *logger.Logger) (reg.Runnable, []error) {
 	}
 	engineOpts["_strategies"] = engineStrategies
 
-	// 5. Resolve exporter (optional)
+	// 6. Resolve exporter (optional)
 	if exporter, ok, err := buildExporter(cfg, log); err != nil {
 		errs = append(errs, err)
 		depsOK = false
@@ -192,7 +224,7 @@ func build(cfg *config.Config, log *logger.Logger) (reg.Runnable, []error) {
 		engineOpts["_exporter"] = exporter
 	}
 
-	// 6. Create engine. With a dependency unresolved this is a guaranteed
+	// 7. Create engine. With a dependency unresolved this is a guaranteed
 	// failure, so it is skipped rather than attempted — the resulting "missing
 	// _provider" would restate an error already reported. The skip is reported
 	// as a consequence, not counted as a config error of its own.
@@ -244,8 +276,10 @@ func buildExporter(cfg *config.Config, log *logger.Logger) (proto.Exporter, bool
 	for k, v := range exporterCfg {
 		opts[k] = v
 	}
-	opts["_symbol"] = cfg.Subscription.Symbol
-	opts["_timeframe"] = string(cfg.Subscription.Timeframe)
+	// Multi-sub: inject a non-sub-specific label so the filename does not
+	// carry a single subscription's identity.
+	opts["_symbol"] = "multi"
+	opts["_timeframe"] = "multi"
 	opts["_engine"] = cfg.Engine.Type
 
 	exporter, err := reg.Exporters.Create(exporterType, opts)

@@ -10,8 +10,10 @@ import (
 	feat "whatever/internal/domains/features"
 	"whatever/internal/idgen"
 	"whatever/internal/logger"
+	"whatever/internal/pipeline"
 	proto "whatever/internal/protocol"
 	reg "whatever/internal/registry"
+	"whatever/internal/stream"
 	"whatever/internal/timing"
 )
 
@@ -23,12 +25,12 @@ func init() {
 		log := logger.NewLogger(logger.DefaultLoggerConfig()).
 			With("engine", id)
 
-		provider, err := config.Dep[proto.DataProvider](opts, "_provider")
+		subscriptions, err := config.Dep[[]proto.Subscription](opts, "_subscriptions")
 		if err != nil {
 			return nil, err
 		}
 
-		subscription, err := config.Dep[proto.Subscription](opts, "_subscription")
+		providers, err := config.Dep[map[proto.Subscription]proto.DataProvider](opts, "_providers")
 		if err != nil {
 			return nil, err
 		}
@@ -38,15 +40,8 @@ func init() {
 			return nil, err
 		}
 
-		// exporter is optional
 		exporter, _, err := config.OptDep[proto.Exporter](opts, "_exporter")
 		if err != nil {
-			return nil, err
-		}
-
-		featuresChain, err := feat.NewFeatureChain(features)
-		if err != nil {
-			log.Error(err, fmt.Sprintf("%s failed to create feature chain", id))
 			return nil, err
 		}
 
@@ -55,34 +50,35 @@ func init() {
 			return nil, err
 		}
 
-		ticker, err := newTicker(cfg.Ticker)
-		if err != nil {
-			return nil, err
+		// validate every sub has a matching provider
+		for _, sub := range subscriptions {
+			if _, ok := providers[sub]; !ok {
+				return nil, fmt.Errorf(
+					"data_logger: subscription %q has no provider injected", sub.ID())
+			}
 		}
 
 		return &DataLogger{
-			id:           id,
-			provider:     provider,
-			subscription: subscription,
-			features:     featuresChain,
-			ticker:       ticker,
-			exporter:     exporter,
-			logger:       log,
-			cfg:          cfg,
-			done:         make(chan struct{}),
+			id:            id,
+			subscriptions: subscriptions,
+			providers:     providers,
+			features:      features,
+			exporter:      exporter,
+			logger:        log,
+			cfg:           cfg,
+			done:          make(chan struct{}),
 		}, nil
 	})
 }
 
 type DataLogger struct {
-	id           string
-	provider     proto.DataProvider
-	subscription proto.Subscription
-	features     *feat.FeatureChain
-	ticker       timing.Ticker[proto.MarketData]
-	exporter     proto.Exporter
-	logger       *logger.Logger
-	cfg          DataLoggerOptions
+	id            string
+	subscriptions []proto.Subscription
+	providers     map[proto.Subscription]proto.DataProvider
+	features      []proto.Feature
+	exporter      proto.Exporter
+	logger        *logger.Logger
+	cfg           DataLoggerOptions
 
 	done      chan struct{}
 	closeOnce sync.Once
@@ -94,8 +90,6 @@ type DataLoggerOptions struct {
 	Ticker *TickerConfig `json:"ticker"`
 }
 
-// Validate distinguishes an absent ticker block (nil, meaning realtime) from a
-// present but incomplete one, which is a config mistake.
 func (o *DataLoggerOptions) Validate() error {
 	if o.Limit < 0 {
 		return fmt.Errorf("limit must not be negative")
@@ -108,7 +102,6 @@ func (o *DataLoggerOptions) Validate() error {
 
 func parseDataLoggerOptions(opts map[string]any) (DataLoggerOptions, error) {
 	cfg := DataLoggerOptions{}
-	// The caller names the engine; adding it here would duplicate the prefix.
 	if err := config.DecodeOptions(opts, &cfg); err != nil {
 		return cfg, err
 	}
@@ -116,40 +109,61 @@ func parseDataLoggerOptions(opts map[string]any) (DataLoggerOptions, error) {
 }
 
 func (e *DataLogger) Run(ctx context.Context) error {
-	if err := e.provider.Init(e.subscription, e.cfg.Limit); err != nil {
-		return err
-	}
-
-	// initialize exporter if configured
 	if e.exporter != nil {
 		if err := e.exporter.Init(); err != nil {
 			return fmt.Errorf("failed to initialize exporter: %w", err)
 		}
 	}
 
-	data, dataErrs := e.provider.Streams()
-	// gate data through ticker
-	gatedData := e.ticker.Gate(ctx, data)
-	// feature extraction pipeline
-	processedData := e.features.Process(gatedData)
+	// Per-sub lanes: provider → ticker → feature chain.
+	streams := make(map[proto.Subscription]<-chan proto.ExtendedMarketData, len(e.subscriptions))
+	errChans := make([]<-chan error, 0, len(e.subscriptions))
+	tickers := make([]timing.Ticker[proto.MarketData], 0, len(e.subscriptions))
 
-	// log errors
+	for _, sub := range e.subscriptions {
+		prov := e.providers[sub]
+
+		if err := prov.Init(sub, e.cfg.Limit); err != nil {
+			return fmt.Errorf("failed to init provider %s: %w", sub.ID(), err)
+		}
+
+		data, dataErrs := prov.Streams()
+		errChans = append(errChans, dataErrs)
+
+		ticker, err := newTicker(e.cfg.Ticker)
+		if err != nil {
+			return fmt.Errorf("failed to create ticker for %s: %w", sub.ID(), err)
+		}
+		tickers = append(tickers, ticker)
+
+		chain, err := feat.NewFeatureChain(e.features)
+		if err != nil {
+			return fmt.Errorf("failed to create feature chain for %s: %w", sub.ID(), err)
+		}
+
+		streams[sub] = chain.Process(ticker.Gate(ctx, data))
+	}
+
+	syncOut := stream.Synchronize(streams)
+
+	// Collect all provider errors.
 	e.wg.Go(func() {
-		for err := range dataErrs {
+		for err := range pipeline.FanIn(errChans...) {
 			e.logger.Error(err, "provider error")
 		}
 		e.logger.Debug("data logger error stream complete")
 	})
 
-	// log market data
+	// Drain synchronizer: log every SyncEvent and export each Now leg.
 	e.wg.Go(func() {
 		count := 0
-		for emd := range processedData {
-			e.logger.ExtendedMarketData(emd)
-			// export data if exporter is configured
-			if e.exporter != nil {
-				if err := e.exporter.Export(emd.MarketData, emd.Indicators); err != nil {
-					e.logger.Error(err, "exporter error")
+		for ev := range syncOut {
+			e.logger.SyncEvent(ev)
+			for _, emd := range ev.Now {
+				if e.exporter != nil {
+					if err := e.exporter.Export(emd.MarketData, emd.Indicators); err != nil {
+						e.logger.Error(err, "exporter error")
+					}
 				}
 			}
 			count++
@@ -157,16 +171,18 @@ func (e *DataLogger) Run(ctx context.Context) error {
 		e.logger.With("count", count).Info("data logger stream complete")
 	})
 
-	if err := e.provider.Start(); err != nil {
-		e.logger.Error(err, "failed to start provider")
-		e.Close()
-		return err
+	// Start providers and tickers.
+	for _, sub := range e.subscriptions {
+		if err := e.providers[sub].Start(); err != nil {
+			e.logger.Error(err, "failed to start provider")
+			e.Close()
+			return err
+		}
+	}
+	for _, t := range tickers {
+		t.Start()
 	}
 
-	// start ticker
-	e.ticker.Start()
-
-	// close once logging goroutines complete
 	wait := make(chan struct{})
 	go func() {
 		e.wg.Wait()
@@ -174,14 +190,12 @@ func (e *DataLogger) Run(ctx context.Context) error {
 	}()
 
 	select {
-	// handle external cancellations
 	case <-ctx.Done():
 	case <-wait:
 	}
 
 	e.Close()
 
-	// absorb ctrl+c context cancellation errors
 	if err := ctx.Err(); err != nil && err != context.Canceled {
 		return err
 	}
@@ -193,11 +207,8 @@ func (e *DataLogger) Close() {
 		e.logger.Info("data engine close")
 		close(e.done)
 
-		if e.ticker != nil {
-			e.ticker.Stop()
-		}
-		if e.provider != nil {
-			e.provider.Close()
+		for _, sub := range e.subscriptions {
+			e.providers[sub].Close()
 		}
 
 		e.wg.Wait()

@@ -105,6 +105,20 @@ func (l *Logger) ExtendedMarketData(data proto.ExtendedMarketData) {
 	evt.Msg("ExtendedMarketData")
 }
 
+func (l *Logger) SyncEvent(ev proto.SyncEvent) {
+	subs := make([]string, len(ev.Now))
+	for i, e := range ev.Now {
+		subs[i] = e.Subscription.ID()
+	}
+	l.zl.Info().
+		Str("event", "sync_event").
+		Int64("time", ev.Time).
+		Int64("now_count", int64(len(ev.Now))).
+		Int64("fwd_fill_count", int64(len(ev.NowFwdFill))).
+		Any("subscriptions", subs).
+		Msg("SyncEvent")
+}
+
 func (l *Logger) Signal(sig proto.Signal) {
 	l.zl.Info().
 		Str("event", "signal").

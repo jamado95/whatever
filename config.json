@@ -2,7 +2,13 @@
   "providers": [
     {
       "type": "binance_csv",
+      "name": "btcusdt_1h",
       "file": "./data/BTCUSDT/BTCUSDT-1h-2024-01.csv"
+    },
+    {
+      "type": "binance_csv",
+      "name": "btcusdt_5m",
+      "file": "./data/BTCUSDT/BTCUSDT-5m-2024-01.csv"
     },
     {
       "type": "binance_historical",
@@ -55,13 +61,20 @@
       "pullbackPct": 0.02
     }
   ],
-  "subscription": {
-    "symbol": "BTCUSDT",
-    "timeframe": "1h"
-  },
+  "subscriptions": [
+    {
+      "symbol": "BTCUSDT",
+      "timeframe": "1h",
+      "provider": "btcusdt_1h"
+    },
+    {
+      "symbol": "BTCUSDT",
+      "timeframe": "5m",
+      "provider": "btcusdt_5m"
+    }
+  ],
   "engine": {
     "type": "data_logger",
-    "provider": "binance_csv",
     "strategies": [],
     "exporter": {
       "type": "jsonl",
