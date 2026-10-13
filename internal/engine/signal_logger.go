@@ -1,3 +1,5 @@
+//go:build signalengine
+
 package engine
 
 import (

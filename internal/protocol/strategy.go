@@ -11,7 +11,7 @@ type Signal struct {
 
 type Strategy interface {
 	ID() string
-	Init(data <-chan MarketData) error
+	Init(data <-chan SyncEvent) error
 	Streams() (<-chan Signal, <-chan error)
 	Start() error
 	Close()

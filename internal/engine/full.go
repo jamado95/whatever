@@ -1,3 +1,5 @@
+//go:build fullengine
+
 package engine
 
 import (
