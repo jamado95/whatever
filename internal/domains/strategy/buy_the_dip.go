@@ -145,7 +145,7 @@ func (s *BuyTheDip) Close() {
 }
 
 func (s *BuyTheDip) processCandle(md proto.MarketData) {
-	state := s.getOrCreateState(md.Symbol)
+	state := s.getOrCreateState(md.Subscription.Symbol)
 	candle := md.Candle
 
 	// append candle and trim to max
@@ -187,7 +187,7 @@ func (s *BuyTheDip) processCandle(md proto.MarketData) {
 		pullbackDepth := (state.recentHigh - candle.Close) / state.recentHigh
 
 		signal := proto.Signal{
-			Symbol:    md.Symbol,
+			Symbol:    md.Subscription.Symbol,
 			Side:      "BUY",
 			Timestamp: candle.CloseTs,
 			Source:    s.id,

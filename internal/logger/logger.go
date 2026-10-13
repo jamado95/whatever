@@ -69,9 +69,9 @@ func NewLogger(cfg LoggerConfig) *Logger {
 func (l *Logger) MarketData(data proto.MarketData) {
 	l.zl.Info().
 		Str("event", "market_data").
-		Str("symbol", data.Symbol).
-		Str("provider", data.ProviderID).
-		Str("timeframe", data.Timeframe).
+		Str("symbol", data.Subscription.Symbol).
+		Str("provider", data.Subscription.Provider).
+		Str("timeframe", string(data.Subscription.Timeframe)).
 		Float64("open", data.Candle.Open).
 		Float64("high", data.Candle.High).
 		Float64("low", data.Candle.Low).
@@ -85,9 +85,9 @@ func (l *Logger) MarketData(data proto.MarketData) {
 func (l *Logger) ExtendedMarketData(data proto.ExtendedMarketData) {
 	evt := l.zl.Info().
 		Str("event", "extended_market_data").
-		Str("symbol", data.Symbol).
-		Str("provider", data.ProviderID).
-		Str("timeframe", data.Timeframe).
+		Str("symbol", data.Subscription.Symbol).
+		Str("provider", data.Subscription.Provider).
+		Str("timeframe", string(data.Subscription.Timeframe)).
 		Float64("open", data.Candle.Open).
 		Float64("high", data.Candle.High).
 		Float64("low", data.Candle.Low).

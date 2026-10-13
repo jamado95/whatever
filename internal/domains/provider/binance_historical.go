@@ -177,10 +177,8 @@ func (p *BinanceHistoricalProvider) run() {
 			}
 
 			md := proto.MarketData{
-				Symbol:     p.sub.Symbol,
-				ProviderID: p.ID(),
-				Timeframe:  string(p.sub.Timeframe),
-				Candle:     candle,
+				Subscription: p.sub,
+				Candle:       candle,
 			}
 
 			select {

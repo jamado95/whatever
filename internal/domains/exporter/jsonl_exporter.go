@@ -115,8 +115,8 @@ func (e *JSONLExporter) Export(md proto.MarketData, snap *proto.Snapshot) error 
 
 	record := map[string]any{
 		"timestamp": ts,
-		"symbol":    md.Symbol,
-		"timeframe": md.Timeframe,
+		"symbol":    md.Subscription.Symbol,
+		"timeframe": string(md.Subscription.Timeframe),
 		"open":      md.Candle.Open,
 		"high":      md.Candle.High,
 		"low":       md.Candle.Low,

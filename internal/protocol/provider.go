@@ -64,11 +64,9 @@ type Candle struct {
 }
 
 type MarketData struct {
-	Symbol     string
-	ProviderID string
-	Timeframe  string
-	Candle     Candle
-	ReceivedAt *int64
+	Subscription Subscription
+	Candle       Candle
+	ReceivedAt   *int64
 }
 
 func (m MarketData) Timestamp() int64 {
@@ -78,6 +76,13 @@ func (m MarketData) Timestamp() int64 {
 type Subscription struct {
 	Symbol    string
 	Timeframe Timeframe
+	Provider  string
+}
+
+// ID is the canonical identity of a subscription, "symbol:timeframe:provider".
+// It is the reference handle strategies use and the key the seam events carry.
+func (s Subscription) ID() string {
+	return fmt.Sprintf("%s:%s:%s", s.Symbol, s.Timeframe, s.Provider)
 }
 
 type DataError struct {
