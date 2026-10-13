@@ -3,6 +3,7 @@ package proto
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 )
 
 type Side string
@@ -53,6 +54,23 @@ func (t *Timeframe) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+func (t *Timeframe) TimeframeS() int {
+	switch *t {
+	case Timeframe1m:
+		return 60
+	case Timeframe5m:
+		return 5 * 60
+	case Timeframe15m:
+		return 60 * 15
+	case Timeframe1h:
+		return 60 * 60
+	case Timeframe1d:
+		return 24 * 60 * 60
+	}
+
+	return 0
+}
+
 type Candle struct {
 	OpenTs  int64
 	CloseTs int64
@@ -92,6 +110,56 @@ type SyncEvent struct {
 	Now        []ExtendedMarketData                // legs that closed at Time (≥1)
 	NowFwdFill map[Subscription]ExtendedMarketData // forward-filled latest per sub; Now ⊆ NowFwdFill
 }
+
+//////////////////// SYNC V2
+
+type SyncDataFreshness int
+
+const (
+	CurrentMarketData SyncDataFreshness = iota
+	StaleMarketData
+	AheadMarketData
+)
+
+type SyncEventV2 struct {
+	time   int64 // boundary CloseTs the group aligns on
+	status SyncDataFreshness
+	data   []ExtendedMarketData // legs that closed at Time (≥1)
+}
+
+func NewSyncEventV2(status SyncDataFreshness, data []ExtendedMarketData) (*SyncEventV2, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("sync event requires at least one market data entry")
+	}
+
+	// Avoid mutating the caller's slice
+	ordered := slices.Clone(data)
+
+	// oldest to newest
+	slices.SortFunc(ordered, func(a, b ExtendedMarketData) int {
+		return int(a.MarketData.Timestamp() - b.MarketData.Timestamp())
+	})
+
+	return &SyncEventV2{
+		time:   ordered[len(ordered)-1].MarketData.Timestamp(), // newest
+		status: status,
+		data:   ordered,
+	}, nil
+}
+
+func (se *SyncEventV2) Time() int64 {
+	return se.time
+}
+
+func (se *SyncEventV2) Status() SyncDataFreshness {
+	return se.status
+}
+
+func (se *SyncEventV2) Data() []ExtendedMarketData {
+	return slices.Clone(se.data)
+}
+
+//////////////////// SYNC V2
 
 type DataError struct {
 	Code    string
