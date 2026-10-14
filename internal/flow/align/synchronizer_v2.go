@@ -279,9 +279,13 @@ and freshness status stay with the synchronizer.
 Invariants: a frame is complete only when every stream's owning candle exists;
 each event holds one forward-filled leg per stream, closed at or before its
 column; a column dispatches at most once, Current if newest so far, else Stale.
+
+Lanes merge in arrival order (pipe.FanIn) by default, or in CloseTs order via
+NewOrderedSynchronizer.
 */
 type SynchronizerV2 struct {
 	readiness Readiness
+	merge     func(...<-chan proto.ExtendedMarketData) <-chan proto.ExtendedMarketData
 }
 
 // NewSynchronizerV2 builds a synchronizer with the given readiness module,
@@ -290,7 +294,24 @@ func NewSynchronizerV2(rdn Readiness) *SynchronizerV2 {
 	if rdn == nil {
 		rdn = orderedCurrentReadiness{}
 	}
-	return &SynchronizerV2{readiness: rdn}
+	return &SynchronizerV2{readiness: rdn, merge: pipe.FanIn[proto.ExtendedMarketData]}
+}
+
+// NewOrderedSynchronizer builds a SynchronizerV2 that merges lanes in CloseTs
+// order (pipe.OrderedFanIn) instead of arrival order, so lane skew never reaches
+// the window. Replay only: the merge waits while any open lane has no pending
+// datapoint.
+func NewOrderedSynchronizer(rdn Readiness) *SynchronizerV2 {
+	s := NewSynchronizerV2(rdn)
+	s.merge = func(ins ...<-chan proto.ExtendedMarketData) <-chan proto.ExtendedMarketData {
+		return pipe.OrderedFanIn(func(a, b proto.ExtendedMarketData) bool {
+			if a.Timestamp() != b.Timestamp() {
+				return a.Timestamp() < b.Timestamp()
+			}
+			return a.Subscription.ID() < b.Subscription.ID() // deterministic ties
+		}, ins...)
+	}
+	return s
 }
 
 // Sync fan-ins the per-subscription lanes and emits aligned SyncEventV2s.
@@ -307,7 +328,7 @@ func (s *SynchronizerV2) Sync(subs map[proto.Subscription]<-chan proto.ExtendedM
 		list = append(list, sub)
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].ID() < list[j].ID() })
-	return runV2(pipe.FanIn(chans...), list, s.readiness)
+	return runV2(s.merge(chans...), list, s.readiness)
 }
 
 // runV2 is the core alignment loop over a pre-merged channel, so tests can

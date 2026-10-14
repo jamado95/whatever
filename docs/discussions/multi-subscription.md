@@ -20,7 +20,8 @@ or independently. Four subtopics:
 Three clusters are decided — the config scope (§3), the strategy/feature input seam (§5) and the
 synchronizer behind it: **Synchronizer V2** replaces the arrival-order V1. Stages 1–4 of
 `docs/plans/multi-subscription/main.md` are implemented, so `data_logger` runs N subscriptions — still
-through V1. The V2 migration is **blocked** on two issues found while planning it (WIP).
+through V1. The two issues that blocked the V2 migration are resolved for replay; the migration
+itself is pending (WIP).
 
 ## Current Understanding
 
@@ -35,8 +36,8 @@ through V1. The V2 migration is **blocked** on two issues found while planning i
 | `data_logger` | Per sub: `provider → ticker → FeatureChain`; lanes → `align.Synchronize` (V1) → one shared exporter, exporting each `Now` leg. |
 | `FeatureChain` | One `SortedWindow` per chain, one chain per sub — the shared-window blocker below is resolved in `data_logger`. |
 | `Ticker` | One instance per lane. `fixedInterval` releases one value per tick regardless of timeframe; `realtime` does not pace. |
-| `pipe.FanIn` | Merges lanes with no ordering guarantee. |
-| `internal/flow/align` | V1 `Synchronize` → `SyncEvent` (wired). V2 `SynchronizerV2.Sync` → `*SyncEventV2` (unit-tested, not wired). |
+| `pipe.FanIn` / `pipe.OrderedFanIn` | `FanIn` merges lanes in arrival order. `OrderedFanIn` is a k-way merge by a `less` func: it emits the least pending value and blocks while any open input has none. |
+| `internal/flow/align` | V1 `Synchronize` → `SyncEvent` (wired). V2 `SynchronizerV2.Sync` → `*SyncEventV2` (unit-tested, not wired): `NewSynchronizerV2` merges with `FanIn`, `NewOrderedSynchronizer` with `OrderedFanIn` by `CloseTs`. |
 | `Strategy.Init` | `<-chan SyncEvent` (V1). Its callers `signal_logger` / `full` are build-tagged out; `buy_the_dip` (`wip`) still takes `<-chan MarketData`. |
 | `RiskManager.Init` | One `<-chan MarketData`. |
 
@@ -58,13 +59,19 @@ after the chains.
   and cross-asset features read one channel of aligned events; alignment lives in a synchronizer
   combinator upstream. Contract in §5.
 - **Synchronizer V2 is the synchronizer.** V1 (arrival-order, `SyncEvent`) is removed on migration;
-  `Strategy.Init`, `logger.SyncEvent` and `data_logger` move to `*SyncEventV2`. Migration blocked —
+  `Strategy.Init`, `logger.SyncEvent` and `data_logger` move to `*SyncEventV2`. Migration pending —
   see WIP.
 - **V2 columns are in ms (`Timeframe.TimeframeMs()`), mapped by `ceilDiv(CloseTs, strideMs)`** — the
   first boundary at or after the close, so exact-boundary and boundary−1ms (Binance) closes share a
   column. Early closes are absorbed widely: anything in `(B − stride, B]` maps to boundary `B`, so the
   tolerance is a full finest stride (59.999s at 1m, 4m59.999s at 5m), set by the finest timeframe
   present, not the candle's own.
+- **Replay ordering is a k-way merge in front of V2** — `align.NewOrderedSynchronizer` composes
+  `pipe.OrderedFanIn` (by `CloseTs`, ties by `Subscription.ID()`) with V2. Lanes reach V2 in
+  timestamp order, so skew never reaches the window, columns complete in order (all `Current`) and
+  output is reproducible. Works under `realtime` and per-lane `fixedInterval` tickers (a leading lane
+  blocks; ticks are skipped, values kept). Replay only: the merge waits while any open lane has no
+  pending candle.
 - **A stream is identified by `(provider, symbol, timeframe)`.** `proto.Subscription` carries all
   three and is itself the stream key; consumers index the seam by `Subscription`. No separate
   `StreamKey` type.
@@ -166,10 +173,11 @@ Clock models assessed for the seam:
 | **Wall-clock** | Real-time tick (N ms) | Any new data since last tick | Not a concept (`Time` = decision time) | Absorbed into tick |
 | **V2 — buffer matrix (chosen)** | Column grid at finest stride; newest datapoint advances the window | Column complete (every stream's owning candle present) | Accepted while in window — late frame emitted `Stale`; below window dropped | Absorbed by the window (2× coarsest period) |
 
-V2 tolerates *bounded* disorder but does not order streams. In replay, cross-lane order is still set
-by per-lane tickers and `FanIn`, and issue 2 (WIP) shows that leaves skew far outside the window. The
-"actively synchronised" option is therefore back on the table for replay; the live/backtest split
-(V2 alone, or V2 for replay plus a wall-clock emitter live) is open.
+V2 tolerates *bounded* disorder but does not order streams; with `FanIn`, replay cross-lane order
+is set by per-lane tickers and issue 2 (WIP) showed that leaves skew far outside the window. The
+"actively synchronised" option is realised at the seam instead of the ticker: the ordered
+synchronizer merges lanes by `CloseTs` in front of V2 (Decisions). The live/backtest split remains
+open — live keeps `FanIn` for now.
 
 ### 5. Strategy/feature input seam — `SyncEventV2`
 
@@ -224,13 +232,16 @@ it violated its own invariants under out-of-order arrival. V2 replaces it.
 
 **Plans executed:** `docs/plans/multi-subscription/main.md` (stages 1–4), `docs/plans/synchronizer-v2.md`,
 `docs/plans/synchronizer-v2-readiness-split.md`, `docs/plans/synchronizer-v2-test-segregation.md`,
-`docs/plans/synchronizer-v2-ms-columns.md`.
+`docs/plans/synchronizer-v2-ms-columns.md`, `docs/plans/synchronizer-v2-ordered.md`.
 
 ## Open Questions
 
-- How is replay paced across lanes so data-time skew stays inside V2's window — a shared data-time
-  clock, data-time-paced per-lane tickers, or a configurable `width`? (Issue 2; same decision as §4
-  and the [[engine]] fan-out policy.)
+- How does the engine choose the ordered synchronizer (replay) vs `FanIn` (live)? No replay/live
+  switch exists today; the provider type is the obvious signal.
+- Live ordering: a timeframe-aware merge (after a close at T, a lane's next close is ≥ T + timeframe,
+  so earlier data releases without its head), with a deadline for missing candles.
+- Pacing: one ticker on the synchronizer's output (one aligned frame per tick) instead of per-lane
+  tickers?
 - V2 window `width` policy — fixed `2 × coarsest period` gives same-timeframe sets one column of lag
   tolerance.
 - Live: does V2 serve live as well, or does a wall-clock emitter sit beside it (§4)?
@@ -247,12 +258,12 @@ it violated its own invariants under out-of-order arrival. V2 replaces it.
 
 ## WIP
 
-**V2 migration — blocked.** Scope: delete `align/synchronizer.go` and its V1 tests (keeping the
+**V2 migration — unblocked, pending.** Scope: delete `align/synchronizer.go` and its V1 tests (keeping the
 `sub`/`emd`/`ordered` helpers the V2 tests use), remove `proto.SyncEvent`, and move `Strategy.Init`,
 `logger.SyncEvent` and `data_logger` to `*SyncEventV2` (exporting legs with `CloseTs == Time()` keeps
 one record per candle). Build, lint and tests stay green — but with real data the default config
-(BTCUSDT 1h + 5m) emitted **no events**, for two independent reasons; issue 1 is now resolved. No
-test runs an engine, so neither showed up in tests.
+(BTCUSDT 1h + 5m) emitted **no events**, for two independent reasons, both now resolved; the migration
+should use `NewOrderedSynchronizer`. No test runs an engine, so neither showed up in tests.
 
 **Issue 1 — `CloseTs` unit and close offset — resolved** (`docs/plans/synchronizer-v2-ms-columns.md`).
 V2 mapped `col = CloseTs / stride` with `stride` from `TimeframeS()`, assuming `CloseTs` in seconds
@@ -263,18 +274,16 @@ one column back — co-closing streams still share a column, but the grid's phas
 `ready()` never holds. Fixed with ms columns and `ceilDiv` (Decisions); V2 fixtures are now in ms and
 every scenario also runs with boundary−1ms closes.
 
-**Issue 2 — lane skew vs the window.** Each lane has its own ticker. `fixedInterval` releases one
-candle per tick whatever the timeframe, and `realtime` does not pace, so lanes drift apart in data
-time: at `fixed/100ms`, after n ticks the 1h lane is at hour n and the 5m lane at minute 5n — a gap
-that grows linearly. V2's window (24 columns = 2h at a 5m stride) follows the newest datapoint, so
-the leading 1h lane drags `baseCol` forward and `Apply` drops the 5m candles behind it. The first
-complete frame (01:00) needs the 5m lane at 01:00, which it reaches at tick 12 — by then 1h is at
-12:00 and the window starts at 10:05. Zero events even with issue 1 fixed. V1 masked this by emitting
-late arrivals as singletons: everything was exported, nothing was aligned. Directions, undecided —
-this is §4's question: a shared data-time clock across lanes for replay (coordinating ticker or k-way
-merge by `CloseTs`); per-lane tickers paced in data time (interval ∝ timeframe — `SetFactor` hints at
-a simulated ticker that does not exist); or a wider, configurable `width` (moves the threshold, does
-not remove it — replay skew is unbounded).
+**Issue 2 — lane skew vs the window — resolved for replay** (`docs/plans/synchronizer-v2-ordered.md`).
+Each lane has its own ticker. `fixedInterval` releases one candle per tick whatever the timeframe,
+and `realtime` does not pace, so lanes drift apart in data time: at `fixed/100ms`, after n ticks the
+1h lane is at hour n and the 5m lane at minute 5n. V2's window (24 columns = 2h at a 5m stride)
+follows the newest datapoint, so with `FanIn` the leading 1h lane drags `baseCol` forward and `Apply`
+drops the 5m candles behind it — zero events for the default config. The merge has to sit directly
+in front of V2: gating at the tickers is not enough, because the feature chains' 100-candle output
+buffers and `FanIn`'s per-item draining let a backlogged lane lag by more than the window. Fixed by
+the ordered synchronizer (Decisions); a test feeds a whole 1h lane ahead of 5m and gets every column,
+where `FanIn` order loses columns 0–36. Pending: wiring it into `data_logger` and removing V1.
 
 ## Resources
 

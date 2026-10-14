@@ -80,6 +80,56 @@ func FanIn[T any](ins ...<-chan T) <-chan T {
 	return out
 }
 
+// OrderedFanIn merges inputs that are each already ordered by less into one
+// ordered output: it holds one pending value per open input and emits the
+// least, ties going to the earlier input. Blocks while any open input has no
+// pending value, so a silent input stalls the merge. Output closes when all
+// inputs close.
+func OrderedFanIn[T any](less func(a, b T) bool, ins ...<-chan T) <-chan T {
+	out := make(chan T)
+
+	go func() {
+		defer close(out)
+
+		heads := make([]T, len(ins))
+		has := make([]bool, len(ins))
+		open := make([]bool, len(ins))
+		for i := range open {
+			open[i] = true
+		}
+
+		for {
+			// refill every open input without a pending value
+			for i, in := range ins {
+				if !open[i] || has[i] {
+					continue
+				}
+				v, ok := <-in
+				if !ok {
+					open[i] = false
+					continue
+				}
+				heads[i], has[i] = v, true
+			}
+
+			least := -1
+			for i := range heads {
+				if has[i] && (least < 0 || less(heads[i], heads[least])) {
+					least = i
+				}
+			}
+			if least < 0 {
+				return // all inputs closed and drained
+			}
+
+			out <- heads[least]
+			has[least] = false
+		}
+	}()
+
+	return out
+}
+
 // FanInTo combines multiple inputs into a single output.
 // Output closes when all inputs close.
 // No ordering guarantees - values emitted as they arrive.

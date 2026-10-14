@@ -463,3 +463,78 @@ func TestV2DispatchOnce(t *testing.T) {
 		})
 	}
 }
+
+// syncFx runs a fixture through Sync, each subscription on its own lane fully
+// buffered up front, and collects the emitted events.
+func syncFx(s *SynchronizerV2, fx fixture) []*proto.SyncEventV2 {
+	lanes := make(map[proto.Subscription]chan proto.ExtendedMarketData, len(fx.subs))
+	for _, sub := range fx.subs {
+		lanes[sub] = make(chan proto.ExtendedMarketData, len(fx.emds))
+	}
+	for _, e := range fx.emds {
+		lanes[e.Subscription] <- e
+	}
+	in := make(map[proto.Subscription]<-chan proto.ExtendedMarketData, len(lanes))
+	for sub, ch := range lanes {
+		close(ch)
+		in[sub] = ch
+	}
+	var events []*proto.SyncEventV2
+	for ev := range s.Sync(in) {
+		events = append(events, ev)
+	}
+	return events
+}
+
+// fxSkewedLanes: 5m cols 0..60 and 1h cols 0..60, far past the 24-column
+// window, with the whole 1h lane arriving before any 5m.
+func fxSkewedLanes() fixture {
+	return fixture{[]proto.Subscription{btc5m, btc1h}, 300 * sec, seq(
+		[]proto.ExtendedMarketData{
+			emd(btc1h, 0), emd(btc1h, 12*300*sec), emd(btc1h, 24*300*sec),
+			emd(btc1h, 36*300*sec), emd(btc1h, 48*300*sec), emd(btc1h, 60*300*sec),
+		},
+		emdRange(btc5m, 300*sec, 0, 60),
+	)}
+}
+
+// TestOrderedSynchronizerSkew: with lanes skewed far beyond the window, the
+// ordered merge still emits every column, in order, all Current, every run.
+func TestOrderedSynchronizerSkew(t *testing.T) {
+	for name, tc := range map[string]struct {
+		fx     fixture
+		offset int64
+	}{
+		"exact boundary": {fxSkewedLanes(), 0},
+		"binance close":  {binanceClose(fxSkewedLanes()), -1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fx := tc.fx
+			events := syncFx(NewOrderedSynchronizer(nil), fx)
+			assertInvariants(t, events, fx.subs, fx.stride)
+			assertFrames(t, events, fx.stride, frames(0, 60, cur))
+			for h := int64(0); h <= 60; h += 12 {
+				assertLeg(t, events, fx.stride, btc1h, h, h+11, h*fx.stride+tc.offset)
+			}
+
+			want := eventKeys(events)
+			for range 20 {
+				if got := eventKeys(syncFx(NewOrderedSynchronizer(nil), fx)); !slices.Equal(got, want) {
+					t.Fatalf("ordered output differs between runs:\n  %v\nvs\n  %v", got, want)
+				}
+			}
+
+			// Same data in skewed arrival order without the merge loses columns.
+			if n := len(runFx(fx, orderedCurrentReadiness{})); n >= len(events) {
+				t.Errorf("unordered skewed arrival emitted %d frames, want fewer than %d", n, len(events))
+			}
+		})
+	}
+}
+
+// TestOrderedSynchronizerEmpty: no subscriptions yields a closed channel.
+func TestOrderedSynchronizerEmpty(t *testing.T) {
+	if _, ok := <-NewOrderedSynchronizer(nil).Sync(nil); ok {
+		t.Fatal("Sync with no subscriptions must return a closed channel")
+	}
+}
