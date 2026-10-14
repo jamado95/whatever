@@ -1,10 +1,10 @@
-// Package stream provides pipeline combinators that operate across
+// Package align provides pipeline combinators that operate across
 // per-subscription feature chains — the synchronizer that aligns
 // independent streams into SyncEvents.
-package stream
+package align
 
 import (
-	"whatever/internal/pipeline"
+	"whatever/internal/flow/pipe"
 	proto "whatever/internal/protocol"
 )
 
@@ -23,7 +23,7 @@ func Synchronize(streams map[proto.Subscription]<-chan proto.ExtendedMarketData)
 	for _, ch := range streams {
 		chans = append(chans, ch)
 	}
-	return synchronize(pipeline.FanIn(chans...))
+	return synchronize(pipe.FanIn(chans...))
 }
 
 // synchronize is the core flush-on-advance logic, accepting a pre-merged

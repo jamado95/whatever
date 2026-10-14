@@ -8,11 +8,11 @@ import (
 	"sync"
 
 	"whatever/internal/config"
+	"whatever/internal/flow/pipe"
+	"whatever/internal/flow/timing"
 	"whatever/internal/logger"
-	"whatever/internal/pipeline"
 	proto "whatever/internal/protocol"
 	reg "whatever/internal/registry"
-	"whatever/internal/timing"
 )
 
 const FullEngineID = "full"
@@ -69,7 +69,7 @@ type Engine struct {
 
 // fillsRelayBuffer decouples the executors' fill emission from the risk
 // manager's consumption of it. Channel capacities are not engine config; see
-// pipeline.DefaultFanOutBuffer for the equivalent on fan-out.
+// pipe.DefaultFanOutBuffer for the equivalent on fan-out.
 const fillsRelayBuffer = 1000
 
 type FullEngineOptions struct {
@@ -157,7 +157,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	data, providerErrs := e.provider.Streams()
 	eErrors = append(eErrors, providerErrs)
 	// gate data through e.ticker and broadcast to strats and riskmgr
-	dataOuts := pipeline.FanOut(e.ticker.Gate(ctx, data), len(e.strategies)+1)
+	dataOuts := pipe.FanOut(e.ticker.Gate(ctx, data), len(e.strategies)+1)
 
 	/*
 		Init strategy modules
@@ -174,7 +174,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 
 	// aggregate strat signals
-	signalsIn := pipeline.FanIn(stratSignals...)
+	signalsIn := pipe.FanIn(stratSignals...)
 	eErrors = append(eErrors, stratErrs...)
 
 	/*
@@ -189,7 +189,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	orders, orderErrs := e.risk.Streams()
 	eErrors = append(eErrors, orderErrs)
 	// broadcast to execution layer
-	orderOuts := pipeline.FanOut(orders, len(e.executors))
+	orderOuts := pipe.FanOut(orders, len(e.executors))
 
 	/*
 		Init execution layer
@@ -205,7 +205,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 
 	// merge exec fills into fillsRelay (input to riskmgr)
-	fillsRelayWg := pipeline.FanInTo(fillsRelay, fills...)
+	fillsRelayWg := pipe.FanInTo(fillsRelay, fills...)
 	eErrors = append(eErrors, fillErrs...)
 
 	// finalize plumbing: close fillsRelay when all execs close
@@ -216,7 +216,7 @@ func (e *Engine) Run(ctx context.Context) error {
 
 	// error handling: log and close engine after threshold
 	go func() {
-		errCh := pipeline.FanIn(eErrors...)
+		errCh := pipe.FanIn(eErrors...)
 		errorCount := 0
 
 		for err := range errCh {

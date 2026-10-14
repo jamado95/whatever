@@ -1,12 +1,12 @@
-// Package stream provides pipeline combinators that operate across
+// Package align provides pipeline combinators that operate across
 // per-subscription feature chains — the synchronizer that aligns
 // independent streams into SyncEvents.
-package stream
+package align
 
 import (
 	"sort"
 
-	pipe "whatever/internal/pipeline"
+	"whatever/internal/flow/pipe"
 	proto "whatever/internal/protocol"
 )
 

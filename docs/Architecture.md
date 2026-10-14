@@ -14,7 +14,7 @@ Entry Point
 Core Architecture
 - internal/domains: domain logic (execution, market, monitor, features, provider, risk, strategy)
 - internal/engine: orchestration (backtesting, logging, full runtime)
-- internal/pipeline: fanout + pipeline execution
+- internal/flow: data-flow primitives — pipe (generic combinators, fanout), align (cross-stream synchronizers), timing (tickers)
 - internal/protocol: domain interfaces
 - internal/registry: registers all internal component factories
 
@@ -24,7 +24,7 @@ Design Rules
   - Backtesting strat param optimisation needs many instances (how to handle TBD)
 - Engine wires domains together
 - Protocol defines contracts; implementations live in domains
-- Pipeline is the primary data/control flow mechanism
+- `flow/pipe` is the primary data/control flow mechanism
 - Factories must not perform I/O. Construction is inert; all I/O belongs in `Init()`. This is what
   makes `--validate-only` a genuine dry run.
 - Each component declares a config struct beside its factory and decodes into it with
@@ -42,7 +42,7 @@ Utilities
 Constraints
 - Prefer localized changes
 - Avoid cross-domain refactors unless requested
-- Do not modify pipeline or protocol unless explicitly planned and asked for
+- Do not modify protocol unless explicitly planned and asked for
 
 
 ## Backtesting

@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"whatever/internal/config"
+	"whatever/internal/flow/timing"
 	proto "whatever/internal/protocol"
-	"whatever/internal/timing"
 )
 
 // TickerType is a string rather than an iota so that "absent" is

@@ -55,7 +55,7 @@ mutex-guarded `map[string]Factory[T]`, populated by `init()` side-effect imports
 
 ### Timing
 
-`internal/timing/timing.go` defines `Ticker[T]` with `Gate(ctx, in) <-chan T`, plus `Tick`,
+`internal/flow/timing/timing.go` defines `Ticker[T]` with `Gate(ctx, in) <-chan T`, plus `Tick`,
 `SetFactor`, `Start`, `Stop`. Two implementations:
 
 - `realtime` — `Gate` returns the input channel unchanged, everything else is a no-op.
@@ -67,7 +67,7 @@ mutex-guarded `map[string]Factory[T]`, populated by `init()` side-effect imports
 
 1. **Ticker type falls back silently.** ~~Resolved~~ — see [[config]]. `TickerType` is now a
 string enum with a validating `UnmarshalJSON`; there is no realtime fallback path.
-2. **`FanOut` drops data.** On a full output buffer it evicts the oldest value (`pipeline/fanout.go:41`). Silent, non-deterministic loss — acceptable for a live feed where
+2. **`FanOut` drops data.** On a full output buffer it evicts the oldest value (`flow/pipe/fanout.go:41`). Silent, non-deterministic loss — acceptable for a live feed where
 staleness beats lag, fatal for backtesting reproducibility, and fatal for any strategy whose state depends on seeing every candle.
 3. **`signal_logger` goroutine leak.** `eErrs := make([]<-chan error, len(strategies)+1)` followed by `append` (`signal_logger.go:143`) produces a slice with `n+1` leading `nil` channels. Ranging over a `nil` channel blocks forever, so the `FanIn` wait group never completes and its output is never closed. Uses `make(..., 0, n+1)`.
 4. **Config parsing is triplicated.** ~~Resolved~~ — see [[config]]. The three parsers are gone;
@@ -80,7 +80,7 @@ the decoding contract that closed them.
 9. **Single provider per engine.** Every engine takes exactly one `_provider` with one `Subscription`, so the "hundreds of concurrent streams" goal in `Architecture.md` is architecturally unreachable today.
 10. **Features only run in `data_logger`.** Neither `signal_logger` nor `full` constructs a `FeatureChain`, so in the only engine that reaches strategies, strategies see raw candles.
 11. **Thin test coverage.** `internal/config`, `internal/engine` and `internal/domains/provider`
-have tests as of the config work; `pipeline`, `timing` and the feature maths still have none.
+have tests as of the config work; `flow/pipe`, `flow/timing` and the feature maths still have none.
 
 ## Decisions
 
@@ -148,12 +148,12 @@ closed by that work.
 - `WIP.md` ToDo "adapt 'data_logger' and 'full' engine to new domain/processors layer" is partly
   done — `data_logger` runs the feature chain, `full` does not.
 - Defects 1, 4, 5 and 6 are closed by the config work ([[config]]). Remaining near-term order:
-  fix defects 2–3 → add tests for `pipeline` and `timing` → settle fan-out policy → design the
+  fix defects 2–3 → add tests for `flow/pipe` and `flow/timing` → settle fan-out policy → design the
   backtesting engine.
 
 ## Resources
 
-- `internal/engine/`, `internal/pipeline/`, `internal/timing/`, `internal/registry/`,
+- `internal/engine/`, `internal/flow/`, `internal/registry/`,
   `internal/config/`, `cmd/main.go`, `config.json`
 - `docs/Protocol.md` § Engine, `docs/Architecture.md`, `docs/Backtesting.md`
 - Related: every other protocol discussion — [[data-layer]], [[features]], [[strategy-layer]],

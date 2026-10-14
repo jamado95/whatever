@@ -64,7 +64,7 @@ block surface on the next run, once the dependency is fixed.
 
 | Command | Description |
 |---|---|
-| `make test` | Run the Go test suite — covers `cmd`, `internal/config`, `internal/engine`, `internal/protocol`, `internal/stream`, features and providers; the remaining packages report "no test files". |
+| `make test` | Run the Go test suite — covers `cmd`, `internal/config`, `internal/engine`, `internal/protocol`, `internal/flow/align`, features and providers; the remaining packages report "no test files". |
 | `make fmt` | Format all Go sources and fix imports with `goimports -w`. |
 | `make tidy` | Prune and sync `go.mod` / `go.sum`. |
 | `make lint` | Run `staticcheck` over every package. |

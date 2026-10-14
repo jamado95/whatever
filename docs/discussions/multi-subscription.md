@@ -47,7 +47,7 @@ Notably, `subscription` has already been hoisted out of the engine block to the 
   name for yet.
 - **`SortedWindow[T]` is generic over `TimeStamped`**, not tied to `MarketData`, so a per-stream or
   keyed window needs no change to the buffer itself.
-- **`pipeline` already has the combinators** — `FanOut`, `FanIn`, `FanInTo` — though `FanIn`
+- **`flow/pipe` already has the combinators** — `FanOut`, `FanIn`, `FanInTo` — though `FanIn`
   explicitly makes no ordering guarantee, which matters for subtopic 4.
 - **`buy_the_dip` already keys its state by symbol**, anticipating multi-symbol strategies even
   though nothing can feed it more than one.
@@ -188,7 +188,7 @@ decision into a single combinator.
 ### 5. Strategy/feature input seam — `SyncEvent`
 
 **Decided (increment 1 / Path A).** Synchronization is pulled out of every consumer into a
-`pipeline`-level combinator sitting between the per-stream feature chains and their consumers.
+`flow`-level combinator sitting between the per-stream feature chains and their consumers.
 Strategies and cross-asset features both read one channel of aligned events; neither aligns streams
 itself. This resolves the strategy input contract left open in [[strategy-layer]].
 
@@ -272,7 +272,7 @@ Phasing — same `SyncEvent` contract both times, only the watermark changes:
 - `internal/protocol/provider.go` (`Subscription`, `DataProvider`, `MarketData`)
 - `internal/config/config.go` (top-level `subscription`), `config.json`
 - `internal/domains/features/feature.go` (`FeatureChain`, shared window)
-- `internal/timing/timing.go` (`Ticker`, `Gate`), `internal/pipeline/fanout.go`
+- `internal/flow/timing/timing.go` (`Ticker`, `Gate`), `internal/flow/pipe/fanout.go`
 - `docs/Architecture.md` (concurrent-stream and multi-asset goals), `docs/Backtesting.md`
 - Related: [[data-layer]], [[features]], [[strategy-layer]], [[engine]], [[risk-management]],
   [[config]]

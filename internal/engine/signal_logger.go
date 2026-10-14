@@ -9,12 +9,12 @@ import (
 	"time"
 
 	"whatever/internal/config"
+	"whatever/internal/flow/pipe"
+	"whatever/internal/flow/timing"
 	"whatever/internal/idgen"
 	"whatever/internal/logger"
-	"whatever/internal/pipeline"
 	proto "whatever/internal/protocol"
 	reg "whatever/internal/registry"
-	"whatever/internal/timing"
 )
 
 const SignalLoggerID = "signal_logger"
@@ -129,7 +129,7 @@ func (e *SignalLogger) Run(ctx context.Context) error {
 
 	// log errors
 	go func() {
-		for err := range pipeline.FanIn(eErrs...) {
+		for err := range pipe.FanIn(eErrs...) {
 			e.logger.Error(err, "provider error")
 		}
 		e.logger.Debug("data logger error stream complete")
@@ -138,7 +138,7 @@ func (e *SignalLogger) Run(ctx context.Context) error {
 	// log market data
 	e.wg.Go(func() {
 		count := 0
-		for sig := range pipeline.FanIn(signals...) {
+		for sig := range pipe.FanIn(signals...) {
 			e.logger.Signal(sig)
 			count++
 		}

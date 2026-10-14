@@ -8,13 +8,13 @@ import (
 
 	"whatever/internal/config"
 	feat "whatever/internal/domains/features"
+	"whatever/internal/flow/align"
+	"whatever/internal/flow/pipe"
+	"whatever/internal/flow/timing"
 	"whatever/internal/idgen"
 	"whatever/internal/logger"
-	"whatever/internal/pipeline"
 	proto "whatever/internal/protocol"
 	reg "whatever/internal/registry"
-	"whatever/internal/stream"
-	"whatever/internal/timing"
 )
 
 const DataLoggerID = "data_logger"
@@ -144,11 +144,11 @@ func (e *DataLogger) Run(ctx context.Context) error {
 		streams[sub] = chain.Process(ticker.Gate(ctx, data))
 	}
 
-	syncOut := stream.Synchronize(streams)
+	syncOut := align.Synchronize(streams)
 
 	// Collect all provider errors.
 	e.wg.Go(func() {
-		for err := range pipeline.FanIn(errChans...) {
+		for err := range pipe.FanIn(errChans...) {
 			e.logger.Error(err, "provider error")
 		}
 		e.logger.Debug("data logger error stream complete")

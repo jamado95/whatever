@@ -97,7 +97,7 @@ Options for the state problem:
 Option 2 looks strongest, but this should be decided against a concrete venue API rather than in the
 abstract. Binance spot is the obvious first target since the data layer already integrates with it.
 
-**Reliability requirements** from `Protocol.md`, none of which have a home yet: backoff and retry policy, idempotency on retry (a retried order must not double-submit — needs a client order ID), rate limiting, circuit breaking, and availability/latency reporting. Where retry policy lives is itself a question: per-executor, or a shared middleware the way `internal/pipeline` provides shared stream combinators?
+**Reliability requirements** from `Protocol.md`, none of which have a home yet: backoff and retry policy, idempotency on retry (a retried order must not double-submit — needs a client order ID), rate limiting, circuit breaking, and availability/latency reporting. Where retry policy lives is itself a question: per-executor, or a shared middleware the way `internal/flow/pipe` provides shared stream combinators?
 
 ## Open Questions
 
