@@ -42,8 +42,11 @@ func TestOrderedCurrentSequence(t *testing.T) {
 		{"gap in window", fxGapInWindow(), append(append(frames(12, 23, cur), frame{36, cur}), frames(24, 35, stale)...)},
 	}
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.name+"/regular-close", func(t *testing.T) {
 			assertFrames(t, runFx(tc.fx, orderedCurrentReadiness{}), tc.fx.stride, tc.want)
+		})
+		t.Run(tc.name+"/close-minus-1ms", func(t *testing.T) {
+			assertFrames(t, runFx(binanceClose(tc.fx), orderedCurrentReadiness{}), tc.fx.stride, tc.want)
 		})
 	}
 }
@@ -99,16 +102,16 @@ func TestOrderedCurrentScopeMatchesFullScan(t *testing.T) {
 	var base []proto.ExtendedMarketData
 	for c := int64(0); c <= 60; c++ {
 		if c != 20 {
-			base = append(base, emd(btc5m, c*300))
+			base = append(base, emd(btc5m, c*300*sec))
 		}
 		if c != 41 {
-			base = append(base, emd(eth5m, c*300))
+			base = append(base, emd(eth5m, c*300*sec))
 		}
 		if c%12 == 0 {
 			if c != 24 {
-				base = append(base, emd(btc1h, c*300))
+				base = append(base, emd(btc1h, c*300*sec))
 			}
-			base = append(base, emd(eth1h, c*300))
+			base = append(base, emd(eth1h, c*300*sec))
 		}
 	}
 	for seed := uint64(0); seed < 50; seed++ {
@@ -119,7 +122,7 @@ func TestOrderedCurrentScopeMatchesFullScan(t *testing.T) {
 			j := min(i+r.IntN(30), len(emds)-1)
 			emds[i], emds[j] = emds[j], emds[i]
 		}
-		fxs[fmt.Sprintf("random seed %d", seed)] = fixture{multi, 300, emds}
+		fxs[fmt.Sprintf("random seed %d", seed)] = fixture{multi, 300 * sec, emds}
 	}
 
 	total := 0

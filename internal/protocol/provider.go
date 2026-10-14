@@ -71,6 +71,10 @@ func (t *Timeframe) TimeframeS() int {
 	return 0
 }
 
+func (t *Timeframe) TimeframeMs() int64 {
+	return int64(t.TimeframeS()) * 1000
+}
+
 type Candle struct {
 	OpenTs  int64
 	CloseTs int64

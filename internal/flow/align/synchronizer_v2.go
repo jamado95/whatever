@@ -31,10 +31,12 @@ forward-fill carry-in for in-window columns whose owning candle precedes the
 window. A column dispatches only once every stream's owning candle exists, so
 intra-stream gaps hold frames rather than leaking partial or stale ones.
 
-Assumes every timeframe is an integer multiple of the finest present timeframe.
+Assumes every timeframe is an integer multiple of the finest present timeframe,
+and CloseTs in ms; a close at or up to one stride before a boundary owns that
+boundary's column.
 */
 type syncState struct {
-	stride int64                // seconds per column = finest timeframe present
+	stride int64                // ms per column = finest timeframe present
 	subs   []proto.Subscription // stable order (sorted by ID)
 	period map[string]int64     // subID -> columns per candle
 
@@ -63,21 +65,21 @@ func newSyncState(subs []proto.Subscription) *syncState {
 	}
 
 	// stride = finest timeframe present; its multiples cover every other.
-	minS := int64(-1)
+	minMs := int64(-1)
 	for _, s := range subs {
 		tf := s.Timeframe
-		secs := int64(tf.TimeframeS())
-		if minS == -1 || secs < minS {
-			minS = secs
+		ms := tf.TimeframeMs()
+		if minMs == -1 || ms < minMs {
+			minMs = ms
 		}
 	}
-	st.stride = minS
+	st.stride = minMs
 
 	var maxPeriod int64 = 1
 	for _, s := range subs {
 		id := s.ID()
 		tf := s.Timeframe
-		p := int64(tf.TimeframeS()) / st.stride
+		p := tf.TimeframeMs() / st.stride
 		st.period[id] = p
 		st.cell[id] = make(map[int64]int)
 		if p > maxPeriod {
@@ -88,6 +90,13 @@ func newSyncState(subs []proto.Subscription) *syncState {
 	// lag slack; a stream lagging past this has its stalled frames dropped.
 	st.width = maxPeriod + maxPeriod
 	return st
+}
+
+// column maps a timestamp to the first column boundary at or after it, so an
+// exact-boundary close and one just before the boundary share a column.
+// Assumes non-negative ts.
+func column(ts, stride int64) int64 {
+	return (ts + stride - 1) / stride
 }
 
 // owningCol is the latest column at or before c where the stream closes.
@@ -103,7 +112,7 @@ func (st *syncState) owningCol(id string, c int64) int64 {
 // dropped (ok=false).
 func (st *syncState) Apply(emd proto.ExtendedMarketData) (id string, col int64, ok bool) {
 	id = emd.Subscription.ID()
-	col = emd.Timestamp() / st.stride
+	col = column(emd.Timestamp(), st.stride)
 
 	switch {
 	case st.baseCol < 0 || col >= st.baseCol:

@@ -43,3 +43,11 @@ func TestNewSyncEventV2Ordering(t *testing.T) {
 		t.Error("mutating Data() result changed the event")
 	}
 }
+
+func TestTimeframeMs(t *testing.T) {
+	for _, tf := range ValidTimeframes() {
+		if got, want := tf.TimeframeMs(), int64(tf.TimeframeS())*1000; got != want {
+			t.Errorf("%s: TimeframeMs = %d, want %d", tf, got, want)
+		}
+	}
+}

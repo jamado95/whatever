@@ -2,13 +2,13 @@
 
 ## Topic
 
-Every flow in the engine today carries exactly one `Subscription` — one symbol at one timeframe.
 `Architecture.md` targets hundreds to thousands of concurrent streams, correlated-asset signals and
-multi-asset portfolios, none of which are reachable from a single-subscription pipeline.
+multi-asset portfolios. The engine started out carrying exactly one `Subscription` — one symbol at
+one timeframe — end to end.
 
 Objective of this discussion: work out how multiple subscriptions enter the design — where they are
 declared, how they are carried through the pipeline, and whether they advance under a shared clock
-or independently. Four subtopics are under active research:
+or independently. Four subtopics:
 
 1. Multiple timeframes for the same symbol.
 2. Fully independent multi-subscription flows.
@@ -17,71 +17,62 @@ or independently. Four subtopics are under active research:
 4. Actively synchronising subscriptions (through the ticker module, for example) versus letting them
    flow freely from providers and resolving synchronicity downstream.
 
-This is a research topic. Two clusters are now decided — the config scope (Solution §3) and the
-strategy/feature input seam (Solution §5); the rest remains open and no implementation plan exists
-yet.
+Three clusters are decided — the config scope (§3), the strategy/feature input seam (§5) and the
+synchronizer behind it: **Synchronizer V2** replaces the arrival-order V1. Stages 1–4 of
+`docs/plans/multi-subscription/main.md` are implemented, so `data_logger` runs N subscriptions — still
+through V1. The V2 migration is **blocked** on two issues found while planning it (WIP).
 
 ## Current Understanding
 
-### What is single-subscription today
+### State of the code
 
 | Site | Shape |
 |---|---|
-| `proto.Subscription` | `{Symbol string, Timeframe Timeframe}` — one of each. |
-| `proto.DataProvider.Init(sub, limit)` | Binds a provider **instance** to one subscription. |
-| `config.Config.Subscription` | One top-level `subscription` block, injected as `_subscription`. |
-| `EngineConfig.Provider` | A single provider name per engine. |
-| `FeatureChain` | One shared `SortedWindow[MarketData]` across all features. |
-| `Ticker.Gate(ctx, in)` | Gates one channel; `fixedInterval` releases one value per tick. |
-| `RiskManager.Init(data, …)` | One market-data channel. |
-| `Strategy.Init(data)` | One market-data channel. |
+| `proto.Subscription` | `{Symbol, Timeframe, Provider}`; `ID()` = `symbol:timeframe:provider`. It is the stream key. |
+| `proto.MarketData` | `{Subscription, Candle, ReceivedAt}`. `Candle.CloseTs` is the venue's close time verbatim — for Binance **ms, 1ms before the boundary**. `Timeframe` exposes `TimeframeS()` and `TimeframeMs()`. |
+| `config.Config.Subscriptions` | Top-level list; required fields, unique `ID()`, provider reference resolved at the composition root. |
+| Provider instances | Keyed by instance `name`; each sub is injected the instance its `provider` names (`_providers map[Subscription]DataProvider`). Subs naming the same block **share one instance** and `Init` overwrites its sub — the per-sub materialisation decided in §3 is not implemented. The default config sidesteps it with one block per sub. |
+| `data_logger` | Per sub: `provider → ticker → FeatureChain`; lanes → `align.Synchronize` (V1) → one shared exporter, exporting each `Now` leg. |
+| `FeatureChain` | One `SortedWindow` per chain, one chain per sub — the shared-window blocker below is resolved in `data_logger`. |
+| `Ticker` | One instance per lane. `fixedInterval` releases one value per tick regardless of timeframe; `realtime` does not pace. |
+| `pipe.FanIn` | Merges lanes with no ordering guarantee. |
+| `internal/flow/align` | V1 `Synchronize` → `SyncEvent` (wired). V2 `SynchronizerV2.Sync` → `*SyncEventV2` (unit-tested, not wired). |
+| `Strategy.Init` | `<-chan SyncEvent` (V1). Its callers `signal_logger` / `full` are build-tagged out; `buy_the_dip` (`wip`) still takes `<-chan MarketData`. |
+| `RiskManager.Init` | One `<-chan MarketData`. |
 
-Notably, `subscription` has already been hoisted out of the engine block to the top level of
-`config.json` — a directional hint about scope, but not a decision about multiplicity.
+### Shared-window blocker and its consequence
 
-### What already helps
+`FeatureChain` holds one window sized to the maximum `Lookback()`; pushing two subscriptions through
+one chain interleaves symbols and timeframes silently. Resolved by one chain per sub (see
+[[features]]).
 
-- **Streams are self-describing.** `MarketData` carries `Symbol`, `Timeframe` and `ProviderID`, so
-  an interleaved stream can be demultiplexed downstream with no side channel. The identity of a
-  stream is effectively the triple `(provider, symbol, timeframe)` — a "stream key" the code has no
-  name for yet.
-- **`SortedWindow[T]` is generic over `TimeStamped`**, not tied to `MarketData`, so a per-stream or
-  keyed window needs no change to the buffer itself.
-- **`flow/pipe` already has the combinators** — `FanOut`, `FanIn`, `FanInTo` — though `FanIn`
-  explicitly makes no ordering guarantee, which matters for subtopic 4.
-- **`buy_the_dip` already keys its state by symbol**, anticipating multi-symbol strategies even
-  though nothing can feed it more than one.
-
-### The hard blocker
-
-`FeatureChain` holds **one** window shared by every feature, sized to the maximum `Lookback()`. Push
-two subscriptions into one chain and every feature reads a window with interleaved symbols and
-timeframes — silently wrong output, not an error. Any multi-subscription design must either run one
-chain per stream or make the window key-aware. See [[features]].
-
-The second-order consequence: per-stream chains mean memory scales as
-`streams × max_lookback × sizeof(MarketData)`, which is the real constraint on "hundreds of streams",
-and they make cross-asset features (correlation, spread, beta) structurally impossible — `Feature.Update`
-receives a single window. Cross-asset features are the explicit motivation for multi-stream support in
-`Architecture.md`, so this tension sits at the centre of the topic rather than at its edge.
+The consequence stands: per-stream chains make memory scale as
+`streams × max_lookback × sizeof(MarketData)` — the real constraint on "hundreds of streams" — and
+make cross-asset features (correlation, spread, beta) impossible *inside* a chain, since
+`Feature.Update` sees one window. Cross-asset features therefore consume the seam (§5) as a stage
+after the chains.
 
 ## Decisions
 
-Two clusters are committed: the **config scope** (Solution §3) and the **strategy/feature input
-seam** (`SyncEvent`, Solution §5). The constraints below still bound the rest of the design space and
-are load-bearing:
-
-- **Cross-stream synchronization is a detached pipeline stage, not the strategy's job.** Strategies
-  and cross-asset features consume one `<-chan SyncEvent`; alignment lives in a synchronizer
-  combinator upstream. Full contract in §5.
-- **A stream is identified by `(provider, symbol, timeframe)`.** Demux downstream is always possible
-  because `MarketData` carries all three; no design needs a parallel identity channel. Reified in
-  `protocol` as `StreamKey{Provider, Subscription}`; consumers index the seam by `StreamKey` (§5).
-- **One subscription per provider instance** — kept for increment 1 (a provider block is a template
-  materialised once per sub, subtopic 3); increment 2's multiplexing venues may take many subs per
-  instance via `Init([]Subscription)`.
-- **Feature state is per-stream, not per-engine.** Forced by the shared-window blocker above,
-  regardless of which option the rest of the design takes.
+- **Cross-stream synchronization is a detached pipeline stage, not the consumer's job.** Strategies
+  and cross-asset features read one channel of aligned events; alignment lives in a synchronizer
+  combinator upstream. Contract in §5.
+- **Synchronizer V2 is the synchronizer.** V1 (arrival-order, `SyncEvent`) is removed on migration;
+  `Strategy.Init`, `logger.SyncEvent` and `data_logger` move to `*SyncEventV2`. Migration blocked —
+  see WIP.
+- **V2 columns are in ms (`Timeframe.TimeframeMs()`), mapped by `ceilDiv(CloseTs, strideMs)`** — the
+  first boundary at or after the close, so exact-boundary and boundary−1ms (Binance) closes share a
+  column. Early closes are absorbed widely: anything in `(B − stride, B]` maps to boundary `B`, so the
+  tolerance is a full finest stride (59.999s at 1m, 4m59.999s at 5m), set by the finest timeframe
+  present, not the candle's own.
+- **A stream is identified by `(provider, symbol, timeframe)`.** `proto.Subscription` carries all
+  three and is itself the stream key; consumers index the seam by `Subscription`. No separate
+  `StreamKey` type.
+- **One subscription per provider instance** for increment 1 (a provider block is a template
+  materialised once per sub, §3); increment 2's multiplexing venues may take many subs per instance
+  via `Init([]Subscription)`.
+- **Feature state is per-stream, not per-engine.** Forced by the shared-window blocker.
+- **Config scope** — top-level subscription list (§3).
 
 ## Solution
 
@@ -112,167 +103,187 @@ feature chain → strategy — sharing only the singleton risk manager and the e
 - Does **not** get cross-asset features or correlated signals: the flows never meet before risk.
 - Pushes the fan-in problem entirely onto `RiskManager.Init`, which takes one data channel today.
 
-Worth treating as the likely first increment even if it is not the destination, because it is the
-only option that is additive rather than structural.
+Superseded as the first increment by the seam (§5), but still the shape `RiskManager` fan-in faces.
 
 ### 3. Scope of subscriptions in config — decided
 
-**Decided.** Subscriptions are a **top-level named list**, siblings of providers/features/strategies,
-each naming the provider that serves it:
+**Decided.** Subscriptions are a **top-level list**, siblings of providers/features/strategies, each
+naming the provider that serves it:
 
 ```json
 "providers":     [ { "type": "binance_csv", "name": "binance" } ],
-"subscriptions": [ { "name": "btc_1m", "symbol": "BTCUSDT", "timeframe": "1m", "provider": "binance" },
-                   { "name": "btc_1h", "symbol": "BTCUSDT", "timeframe": "1h", "provider": "binance" } ],
-"strategies":    [ { "type": "pairs_trade", "subscriptions": ["btc_1m", "btc_1h"] } ]
+"subscriptions": [ { "symbol": "BTCUSDT", "timeframe": "1m", "provider": "binance" },
+                   { "symbol": "BTCUSDT", "timeframe": "1h", "provider": "binance" } ],
+"strategies":    [ { "type": "pairs_trade",
+                     "subscriptions": ["BTCUSDT:1m:binance", "BTCUSDT:1h:binance"] } ]
 ```
 
 The load-bearing choices:
 
-- **Named, top-level.** A sub is independent of who serves it (repoint by changing one field), and
-  strategies reference subs by name — a stable handle beats a positional index or a bare
-  `(symbol, timeframe)` tuple. Generalises today's singular top-level `subscription`; `engine.provider`
-  and the singular `subscription` block are removed.
-- **Each sub names its provider.** Providers gain an instance `name` (default = `type`) so assignment
-  is general — the one new addressability primitive, since the composition root keys providers by
-  `type` today. The reference resolves in the composition root, the same static check already emitted
-  for `engine.provider`.
+- **No name; identity from fields.** A subscription is `{symbol, timeframe, provider}`; its `ID()` —
+  the canonical `symbol:timeframe:provider` — is the reference handle, and the `(symbol, timeframe,
+  provider)` tuple must be unique across the list. The config subscription *is* `proto.Subscription`.
+- **Each sub names its provider.** Providers have an instance `name` (default = `type`); the
+  reference resolves in the composition root.
 - **A provider block is a config template.** Increment 1 materialises one provider instance per
-  subscription bound to it (→ N instances), leaving `Init(sub, limit)` untouched. Increment 2's
-  multiplexing venue (`Init([]Subscription)`, [[data-layer]]) can collapse many subs onto one
-  instance *without changing the config model* — only the instantiation strategy changes.
-- **Features: global set, one chain per sub** — every sub runs the same feature set as an independent
-  chain instance. Per-sub feature sets are a clean later addition (a sub gains an optional `features`
-  ref), enabled by named subs.
-- **Strategy→sub assignment is composition-root level.** The strategy's config block lists its
-  subscription names; the composition root validates each reference and wires the matching feature
-  chains into that strategy's `SyncEvent` synchronizer (§5).
+  subscription bound to it (→ N instances), leaving `Init(sub, limit)` untouched — *not yet
+  implemented*, see State of the code. Increment 2's multiplexing venue (`Init([]Subscription)`,
+  [[data-layer]]) can collapse many subs onto one instance without changing the config model.
+- **Features: global set, one chain per sub.** Per-sub feature sets are a clean later addition (a
+  sub gains an optional `features` ref).
+- **Strategy→sub assignment is composition-root level.** The strategy's block lists subscription
+  IDs; the composition root validates each and wires the matching chains into that strategy's
+  synchronizer (§5).
 
-**Validation split** — this is what keeps subscription checks out of `Init`: every cross-reference
-(sub→provider, strategy→sub, engine→strategy) resolves and is checked in the composition root /
-`--validate-only`, no I/O. Only *capability* validation (does the venue actually carry this symbol at
-this timeframe) stays at `Init`, because it is a network/file call and factories may not do I/O. The
-strict per-component decoding from [[config]] extends unchanged — a typo in a symbol or timeframe
-remains a startup error.
+**Validation split:** every cross-reference (sub→provider, strategy→sub, engine→strategy) resolves in
+the composition root / `--validate-only`, no I/O. Only *capability* validation (does the venue carry
+this symbol at this timeframe) stays at `Init`. Strict decoding from [[config]] applies unchanged.
 
-Rejected: **per-provider** and **per-engine** scoping — a provider cannot validate symbol existence
-without I/O anyway, so nesting subs under it buys no earlier validation. **Top-level named-map with
-by-name references everywhere** was folded down to the list-with-`name` above: same static-validation
-benefit, less indirection, consistent with the existing array-of-blocks config style.
+Rejected: **per-provider** and **per-engine** scoping (no earlier validation, since a provider cannot
+check symbols without I/O); **named-map with by-name references** (same validation benefit, more
+indirection).
 
 ### 4. Active synchronisation versus free flow
 
-This is the deepest of the four, and it is the [[engine]] fan-out policy question in a new guise —
-the same determinism-versus-liveness axis called out as a cross-cutting theme in the index.
+The [[engine]] fan-out policy question in a new guise — the determinism-versus-liveness axis.
 
-- **Actively synchronised, e.g. through the ticker.** A coordinating ticker advances a single logical
-  clock and releases values across all streams in timestamp order. Deterministic and reproducible,
-  which the methodology in `docs/Backtesting.md` requires. It is also the only way to prevent
-  look-ahead in a multi-stream backtest: without a shared clock a strategy can see a 1h bar closing
-  at `t+1` while still processing 1m bars at `t`. Costs: the slowest stream paces everything, it
-  needs bounded lookahead buffering to order across streams at all, and `Ticker` grows from a
-  single-channel gate into a scheduler aware of many streams — a substantially larger interface than
-  `Gate(ctx, in)`.
-- **Free flow, synchronicity resolved downstream.** Providers emit independently; consumers align
-  what they receive. Matches live trading, where the market cannot be made to wait, and keeps
-  `Ticker` as-is. Costs: non-reproducible ordering, and every consumer that cares about alignment
-  re-implements it.
+- **Actively synchronised, e.g. through the ticker.** A coordinating clock releases values across all
+  streams in timestamp order. Deterministic and reproducible, as `docs/Backtesting.md` requires, and
+  the only way to prevent look-ahead in a multi-stream backtest. Costs: the slowest stream paces
+  everything, it needs bounded lookahead buffering, and `Ticker` grows from a single-channel gate into
+  a multi-stream scheduler.
+- **Free flow, synchronicity resolved downstream.** Providers emit independently; the seam aligns.
+  Matches live trading and keeps `Ticker` as-is. Costs: non-reproducible ordering.
 - **Hybrid by mode** — free flow live, coordinated replay clock in backtest. Correct in both, at the
   cost of two paths that can drift, and it forces the alignment semantics to be specified twice.
 
-The hybrid is probably where this lands, but it should be settled together with the fan-out policy
-rather than separately, since both are the same decision about whether the pipeline is allowed to be
-non-deterministic. Its concrete home is the input seam in §5, which localises the whole determinism
-decision into a single combinator.
+Clock models assessed for the seam:
 
-### 5. Strategy/feature input seam — `SyncEvent`
+| Model | Clock | Emission gate | Out-of-order | Jitter |
+|---|---|---|---|---|
+| **A — arrival-order (V1, superseded)** | Next-higher `CloseTs` arrival | Arrival of an advancing candle | Singleton at current time; breaks `Now ⊆ NowFwdFill` and `Time = leg CloseTs` | Immediate, no coalescing |
+| **B — data-driven** | Min `CloseTs` > current across subs | New data from any sub | Discarded (immutable boundaries) | Deadline per boundary |
+| **Wall-clock** | Real-time tick (N ms) | Any new data since last tick | Not a concept (`Time` = decision time) | Absorbed into tick |
+| **V2 — buffer matrix (chosen)** | Column grid at finest stride; newest datapoint advances the window | Column complete (every stream's owning candle present) | Accepted while in window — late frame emitted `Stale`; below window dropped | Absorbed by the window (2× coarsest period) |
 
-**Decided (increment 1 / Path A).** Synchronization is pulled out of every consumer into a
-`flow`-level combinator sitting between the per-stream feature chains and their consumers.
-Strategies and cross-asset features both read one channel of aligned events; neither aligns streams
-itself. This resolves the strategy input contract left open in [[strategy-layer]].
+V2 tolerates *bounded* disorder but does not order streams. In replay, cross-lane order is still set
+by per-lane tickers and `FanIn`, and issue 2 (WIP) shows that leaves skew far outside the window. The
+"actively synchronised" option is therefore back on the table for replay; the live/backtest split
+(V2 alone, or V2 for replay plus a wall-clock emitter live) is open.
+
+### 5. Strategy/feature input seam — `SyncEventV2`
+
+**Decided.** Synchronization is a `flow/align` combinator between the per-stream feature chains and
+their consumers. This settles the strategy input contract left open in [[strategy-layer]].
 
 ```go
-// StreamKey and SyncEvent live in protocol, under the subscription types (beside Subscription).
-type StreamKey struct {
-    Provider     string
-    Subscription Subscription // {Symbol, Timeframe} — full runtime stream identity
+type SyncDataFreshness int
+
+const (
+    CurrentMarketData SyncDataFreshness = iota // column after the latest dispatched one
+    StaleMarketData                            // column completed behind the latest dispatched one
+    AheadMarketData                            // defined, unused
+)
+
+// Built by NewSyncEventV2(status, data); read through Time(), Status(), Data().
+type SyncEventV2 struct {
+    time   int64                // newest leg's CloseTs — the column's time
+    status SyncDataFreshness
+    data   []ExtendedMarketData // one forward-filled leg per stream, oldest → newest
 }
 
-type SyncEvent struct {
-    Time       int64                                // boundary CloseTs the group aligns on
-    Now        []ExtendedMarketData                 // legs that closed at Time (≥1), stably ordered
-    NowFwdFill map[StreamKey]ExtendedMarketData     // as-of latest per stream; Now ⊆ NowFwdFill
-}
+// SynchronizerV2.Sync(map[Subscription]<-chan ExtendedMarketData) <-chan *SyncEventV2
 
-// consumer contract (strategies, cross-asset feature stages)
-Init(in <-chan SyncEvent) error
+// consumer contract (strategies, cross-asset feature stages) — target of the migration
+Init(in <-chan *SyncEventV2) error
 ```
-
-`StreamKey` (provider + subscription) is the stream's identity everywhere — at wiring, inside the
-synchronizer, and as the key consumers index `NowFwdFill` by. A consumer declares its inputs by
-subscription *name* (config); the engine resolves each to a `StreamKey` at wiring and hands the
-consumer that mapping, so it indexes the event and keeps two streams sharing `(symbol, timeframe)`
-across venues distinct — cross-venue arbitrage on the same instrument stays expressible. Feature-key
-dependencies are declared per `StreamKey` too.
 
 Semantics:
 
-- **Grouping is by candle close time.** All legs whose `Candle.CloseTs == Time` land in one event; a
-  single-stream boundary emits a one-element `Now`. The finest stream paces emission (1m + 1h ⇒ one
-  event per minute; on the hour both close and `Now` carries two).
-- **`Now` is what just closed; `NowFwdFill` is the full aligned picture** — exactly one (latest) EMD
-  per stream, non-advancing legs forward-filled from their last close. `Now` is always a
-  subset of `NowFwdFill`. Example at a 10:37 1m boundary: `Now = [1m@10:37]`,
-  `NowFwdFill = {1m@10:37, 1h@10:00}`.
+- **Column grid.** Time is cut into ms columns at the finest timeframe present (`stride`); every other
+  timeframe must be an integer multiple. A candle's column is the first boundary at or after its
+  `CloseTs`. A stream's *owning column* at `c` is the latest column ≤ `c`
+  at which it closes.
+- **Complete frames only.** A column dispatches once every stream's owning candle exists. Cold
+  start, gaps and stalled streams hold frames rather than emit partial or stale-filled ones.
+- **`Data()` is the aligned picture** — one forward-filled leg per stream (V1's `NowFwdFill`). Legs
+  with `CloseTs == Time()` are what just closed (V1's `Now`).
+- **Dispatch-once, freshness-tagged.** The runner emits each column at most once: `Current` past the
+  latest dispatched column, `Stale` for a frame completed behind it. A `Readiness` policy picks which
+  complete columns ship and in what order, through read-only state queries; default
+  `orderedCurrentReadiness`.
+- **Bounded window.** `width = 2 × coarsest period` columns. Below it, data survives only as each
+  stream's forward-fill floor; older datapoints are dropped and frames evicted before completing never
+  emit.
 - **One value per stream, never history.** Lookback stays the consumer's own window — a `corr(a,b)`
-  feature buffers the aligned pairs itself, as features already own their window ([[features]]). The
-  seam aligns *across* streams at one instant; the window buffers *within* a stream over time.
+  feature buffers the aligned pairs itself ([[features]]). The seam aligns *across* streams at one
+  instant; the window buffers *within* a stream over time.
 
-Phasing — same `SyncEvent` contract both times, only the watermark changes:
+History: V1 (arrival-order, flush-on-advance) was increment 1 — live-correct, not backtest-safe, and
+it violated its own invariants under out-of-order arrival. V2 replaces it.
 
-- **Increment 1 — arrival-order, flush-on-advance.** Buffer by `Time`, flush when a later `CloseTs`
-  arrives. Cheap, live-correct, and knowingly *not* backtest-safe (arrival order ≠ timestamp order,
-  so a replay can reorder or leak look-ahead). Accepted for increment 1 — see the determinism theme
-  in [[engine]].
-- **Increment 2 — timestamp-ordered k-way merge.** Strong watermark, deterministic, backtest-safe;
-  swaps in behind the same contract with no consumer change, and becomes the single home of the
-  determinism-vs-liveness policy (subtopic 4).
+**Plans executed:** `docs/plans/multi-subscription/main.md` (stages 1–4), `docs/plans/synchronizer-v2.md`,
+`docs/plans/synchronizer-v2-readiness-split.md`, `docs/plans/synchronizer-v2-test-segregation.md`,
+`docs/plans/synchronizer-v2-ms-columns.md`.
 
 ## Open Questions
 
+- How is replay paced across lanes so data-time skew stays inside V2's window — a shared data-time
+  clock, data-time-paced per-lane tickers, or a configurable `width`? (Issue 2; same decision as §4
+  and the [[engine]] fan-out policy.)
+- V2 window `width` policy — fixed `2 × coarsest period` gives same-timeframe sets one column of lag
+  tolerance.
+- Live: does V2 serve live as well, or does a wall-clock emitter sit beside it (§4)?
 - Derive coarse timeframes by aggregation, or subscribe to each independently? If aggregation, what
   component owns it?
 - Should `Lookback()` become duration-based rather than candle-based once one engine sees several
   timeframes?
-- ~~Where are subscriptions declared, and does a provider instance bind to one subscription or many?~~
-  **Decided** — top-level named list, one provider instance per sub in increment 1 (subtopic 3);
-  many-per-instance (`Init([]Subscription)`) stays open for increment 2's multiplexing venues.
 - Does `RiskManager.Init` take one merged data channel or a keyed set? A merged channel is a smaller
   change but discards the provenance risk needs for per-symbol marking.
-- A cross-asset feature consumes `SyncEvent` as a stage after the per-stream chains (§5); still open
-  is what it *emits* — a plain `ExtendedMarketData`, or another `SyncEvent` for chaining?
-- ~~Where does `StreamKey` live?~~ **Decided** — `protocol`, beside `Subscription`, as
-  `StreamKey{Provider, Subscription}`; `SyncEvent` alongside it. Consumers index by `StreamKey` (§5).
-- What is the memory and goroutine budget per stream, and at what stream count does the current
-  channel-per-stage topology stop paying? Nothing measures throughput or occupancy today
-  ([[engine]]), so the "hundreds of streams" target cannot currently be evaluated.
+- A cross-asset feature consumes `SyncEventV2` after the per-stream chains; what does it *emit* — a
+  plain `ExtendedMarketData`, or another `SyncEventV2` for chaining?
+- What is the memory and goroutine budget per stream, and at what stream count does the
+  channel-per-stage topology stop paying? Nothing measures throughput or occupancy ([[engine]]).
 
 ## WIP
 
-- Seam contract decided (§5); no implementation, no plan, no code yet.
-- Still entangled with two decisions elsewhere: the fan-out determinism policy ([[engine]]), which
-  increment 2's synchronizer converges with, and the multi-symbol provider shape ([[data-layer]]).
-  The strategy input contract ([[strategy-layer]]) is now settled by §5.
-- The per-stream feature chains plus the increment-1 (arrival-order) synchronizer are the
-  prerequisites an implementation plan would start from.
+**V2 migration — blocked.** Scope: delete `align/synchronizer.go` and its V1 tests (keeping the
+`sub`/`emd`/`ordered` helpers the V2 tests use), remove `proto.SyncEvent`, and move `Strategy.Init`,
+`logger.SyncEvent` and `data_logger` to `*SyncEventV2` (exporting legs with `CloseTs == Time()` keeps
+one record per candle). Build, lint and tests stay green — but with real data the default config
+(BTCUSDT 1h + 5m) emitted **no events**, for two independent reasons; issue 1 is now resolved. No
+test runs an engine, so neither showed up in tests.
+
+**Issue 1 — `CloseTs` unit and close offset — resolved** (`docs/plans/synchronizer-v2-ms-columns.md`).
+V2 mapped `col = CloseTs / stride` with `stride` from `TimeframeS()`, assuming `CloseTs` in seconds
+on the boundary; Binance `CloseTs` is ms, 1ms before the boundary. Seconds vs ms put consecutive
+candles 1000 columns apart. Switching to ms alone is not enough: rounding down shifts every candle
+one column back — co-closing streams still share a column, but the grid's phase moves, and
+`owningCol` (`c - c%p`, anchored at epoch column 0) looks 11 columns before every 1h candle, so
+`ready()` never holds. Fixed with ms columns and `ceilDiv` (Decisions); V2 fixtures are now in ms and
+every scenario also runs with boundary−1ms closes.
+
+**Issue 2 — lane skew vs the window.** Each lane has its own ticker. `fixedInterval` releases one
+candle per tick whatever the timeframe, and `realtime` does not pace, so lanes drift apart in data
+time: at `fixed/100ms`, after n ticks the 1h lane is at hour n and the 5m lane at minute 5n — a gap
+that grows linearly. V2's window (24 columns = 2h at a 5m stride) follows the newest datapoint, so
+the leading 1h lane drags `baseCol` forward and `Apply` drops the 5m candles behind it. The first
+complete frame (01:00) needs the 5m lane at 01:00, which it reaches at tick 12 — by then 1h is at
+12:00 and the window starts at 10:05. Zero events even with issue 1 fixed. V1 masked this by emitting
+late arrivals as singletons: everything was exported, nothing was aligned. Directions, undecided —
+this is §4's question: a shared data-time clock across lanes for replay (coordinating ticker or k-way
+merge by `CloseTs`); per-lane tickers paced in data time (interval ∝ timeframe — `SetFactor` hints at
+a simulated ticker that does not exist); or a wider, configurable `width` (moves the threshold, does
+not remove it — replay skew is unbounded).
 
 ## Resources
 
-- `internal/protocol/provider.go` (`Subscription`, `DataProvider`, `MarketData`)
-- `internal/config/config.go` (top-level `subscription`), `config.json`
-- `internal/domains/features/feature.go` (`FeatureChain`, shared window)
-- `internal/flow/timing/timing.go` (`Ticker`, `Gate`), `internal/flow/pipe/fanout.go`
-- `docs/Architecture.md` (concurrent-stream and multi-asset goals), `docs/Backtesting.md`
+- `internal/protocol/provider.go` (`Subscription`, `MarketData`, `SyncEvent`, `SyncEventV2`)
+- `internal/flow/align/synchronizer_v2.go`, `internal/flow/align/synchronizer.go` (V1, to be removed)
+- `internal/engine/data_logger.go`, `cmd/main.go` (provider injection), `internal/config/config.go`
+- `internal/domains/features/feature.go` (`FeatureChain`), `internal/flow/timing/timing.go`
+  (`Ticker`), `internal/flow/pipe/fanout.go`
+- `internal/domains/provider/binance_csv.go` (`CloseTs` parsing), `config.json`
+- `docs/Architecture.md`, `docs/Backtesting.md`
 - Related: [[data-layer]], [[features]], [[strategy-layer]], [[engine]], [[risk-management]],
   [[config]]
