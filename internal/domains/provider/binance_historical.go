@@ -74,7 +74,6 @@ type BinanceHistoricalProvider struct {
 	sub       proto.Subscription
 	startTime int64
 	endTime   int64
-	limit     int
 	data      chan proto.MarketData
 	errs      chan error
 	done      chan struct{}
@@ -88,9 +87,8 @@ func (p *BinanceHistoricalProvider) ID() string {
 	return p.id
 }
 
-func (p *BinanceHistoricalProvider) Init(sub proto.Subscription, limit int) error {
+func (p *BinanceHistoricalProvider) Init(sub proto.Subscription) error {
 	p.sub = sub
-	p.limit = limit
 
 	if !sub.Timeframe.IsValid() {
 		return fmt.Errorf("invalid timeframe: %s", sub.Timeframe)
@@ -146,7 +144,6 @@ func (p *BinanceHistoricalProvider) run() {
 
 	interval := timeframeMap[p.sub.Timeframe]
 	currentStart := p.startTime
-	fetched := 0
 
 	for {
 		select {
@@ -183,11 +180,6 @@ func (p *BinanceHistoricalProvider) run() {
 
 			select {
 			case p.data <- md:
-				fetched++
-				if p.limit > 0 && fetched >= p.limit {
-					p.logger.Info("limit reached, stopping provider")
-					return
-				}
 			case <-p.done:
 				return
 			}

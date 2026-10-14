@@ -25,7 +25,7 @@ them in that order and is the only place that knows the topology.
 
 | Engine | File | State |
 |---|---|---|
-| `data_logger` | `internal/engine/data_logger.go` | **Working.** provider → ticker → feature chain → log + export. The only exercised path in the repo. |
+| `data_logger` | `internal/engine/data_logger.go` | **Working.** provider → ticker → feature chain → ordered synchronizer → log + export. `limit` caps synchronizer frames; reaching it closes providers for a graceful shutdown. The only exercised path in the repo. |
 | `signal_logger` | `internal/engine/signal_logger.go` | Wired, but has no strategies to run and a goroutine-leak bug (below). No feature chain. |
 | `full` | `internal/engine/full.go` | **Cannot be instantiated.** Requires `_risk` and `_executors`; `cmd/main.go` never provides them, and neither component exists. |
 | `backtesting` | `internal/engine/backtesting.go` | A single comment line. |
@@ -118,6 +118,11 @@ comparisons are meaningless if two runs on the same data differ. Options:
 
 Option 2 is the likely answer; option 4 should happen either way.
 
+**Run length.** Bounded by the engine, not the provider (`docs/plans/data-logger-frame-limit.md`).
+`data_logger` counts synchronizer frames up to `limit`, then closes providers and cancels the ticker
+gates so the pipeline unwinds. `DataProvider.Init` no longer takes a limit; `signal_logger` and
+`full` dropped their `limit` option.
+
 **Config typing.** Resolved and moved to [[config]] — component config structs decoded strictly by
 `config.Decode`, validating enums, and a `--validate-only` dry run. Defects 1, 4 and 6 below are
 closed by that work.
@@ -147,6 +152,8 @@ closed by that work.
   [[execution-layer]]; `backtesting` is unstarted.
 - `WIP.md` ToDo "adapt 'data_logger' and 'full' engine to new domain/processors layer" is partly
   done — `data_logger` runs the feature chain, `full` does not.
+- `data_logger` has engine-level tests (`internal/engine/data_logger_test.go`) covering the frame
+  limit and shutdown; `signal_logger` and `full` take no `limit` until they need one.
 - Defects 1, 4, 5 and 6 are closed by the config work ([[config]]). Remaining near-term order:
   fix defects 2–3 → add tests for `flow/pipe` and `flow/timing` → settle fan-out policy → design the
   backtesting engine.

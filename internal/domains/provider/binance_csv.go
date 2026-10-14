@@ -54,7 +54,6 @@ type BinanceCSVProvider struct {
 	sub     proto.Subscription
 	file    string
 	started bool
-	limit   int
 	data    chan proto.MarketData
 	errs    chan error
 	done    chan struct{}
@@ -66,9 +65,8 @@ func (p *BinanceCSVProvider) ID() string {
 	return p.id
 }
 
-func (p *BinanceCSVProvider) Init(sub proto.Subscription, limit int) error {
+func (p *BinanceCSVProvider) Init(sub proto.Subscription) error {
 	p.sub = sub
-	p.limit = limit
 
 	if p.file == "" {
 		return fmt.Errorf("no file configured")
@@ -134,9 +132,8 @@ func (p *BinanceCSVProvider) run() {
 	}()
 
 	reader := csv.NewReader(file)
-	count := 0
 
-	for p.limit <= 0 || count < p.limit {
+	for {
 		select {
 		case <-p.done:
 			return
@@ -167,7 +164,6 @@ func (p *BinanceCSVProvider) run() {
 
 		select {
 		case p.data <- md:
-			count++
 		case <-p.done:
 			return
 		}

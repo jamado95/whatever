@@ -67,6 +67,7 @@ func init() {
 			logger:        log,
 			cfg:           cfg,
 			done:          make(chan struct{}),
+			limitHit:      make(chan struct{}),
 		}, nil
 	})
 }
@@ -81,12 +82,18 @@ type DataLogger struct {
 	cfg           DataLoggerOptions
 
 	done      chan struct{}
+	limitHit  chan struct{} // closed once Limit frames are drained
 	closeOnce sync.Once
-	wg        sync.WaitGroup
+
+	gateMu      sync.Mutex
+	cancelGates context.CancelFunc // stops ticker gates; set by Run
+	wg          sync.WaitGroup
 }
 
 type DataLoggerOptions struct {
-	Limit  int           `json:"limit"` // 0 = unlimited
+	// Limit caps synchronizer frames; reaching it closes providers and shuts
+	// down. 0 = unlimited.
+	Limit  int           `json:"limit"`
 	Ticker *TickerConfig `json:"ticker"`
 }
 
@@ -109,6 +116,13 @@ func parseDataLoggerOptions(opts map[string]any) (DataLoggerOptions, error) {
 }
 
 func (e *DataLogger) Run(ctx context.Context) error {
+	// Cancelled on shutdown so gates stop instead of draining buffers per tick.
+	gateCtx, cancelGates := context.WithCancel(ctx)
+	defer cancelGates()
+	e.gateMu.Lock()
+	e.cancelGates = cancelGates
+	e.gateMu.Unlock()
+
 	if e.exporter != nil {
 		if err := e.exporter.Init(); err != nil {
 			return fmt.Errorf("failed to initialize exporter: %w", err)
@@ -123,7 +137,7 @@ func (e *DataLogger) Run(ctx context.Context) error {
 	for _, sub := range e.subscriptions {
 		prov := e.providers[sub]
 
-		if err := prov.Init(sub, e.cfg.Limit); err != nil {
+		if err := prov.Init(sub); err != nil {
 			return fmt.Errorf("failed to init provider %s: %w", sub.ID(), err)
 		}
 
@@ -141,7 +155,7 @@ func (e *DataLogger) Run(ctx context.Context) error {
 			return fmt.Errorf("failed to create feature chain for %s: %w", sub.ID(), err)
 		}
 
-		streams[sub] = chain.Process(ticker.Gate(ctx, data))
+		streams[sub] = chain.Process(ticker.Gate(gateCtx, data))
 	}
 
 	syncOut := align.NewOrderedSynchronizer(nil).Sync(streams)
@@ -155,10 +169,14 @@ func (e *DataLogger) Run(ctx context.Context) error {
 	})
 
 	// Drain synchronizer: log every frame and export each leg that closed at
-	// its time, so every candle is exported once.
+	// its time, so every candle is exported once. Past Limit, discard the rest
+	// so upstream can unwind after providers close.
 	e.wg.Go(func() {
 		count := 0
 		for ev := range syncOut {
+			if e.cfg.Limit > 0 && count >= e.cfg.Limit {
+				continue
+			}
 			e.logger.SyncEvent(ev)
 			for _, emd := range ev.Data() {
 				if emd.Timestamp() != ev.Time() {
@@ -171,6 +189,10 @@ func (e *DataLogger) Run(ctx context.Context) error {
 				}
 			}
 			count++
+			if e.cfg.Limit > 0 && count == e.cfg.Limit {
+				e.logger.With("count", count).Info("limit reached")
+				close(e.limitHit)
+			}
 		}
 		e.logger.With("count", count).Info("data logger stream complete")
 	})
@@ -190,12 +212,13 @@ func (e *DataLogger) Run(ctx context.Context) error {
 	wait := make(chan struct{})
 	go func() {
 		e.wg.Wait()
-		wait <- struct{}{}
+		close(wait)
 	}()
 
 	select {
 	case <-ctx.Done():
 	case <-wait:
+	case <-e.limitHit:
 	}
 
 	e.Close()
@@ -210,6 +233,12 @@ func (e *DataLogger) Close() {
 	e.closeOnce.Do(func() {
 		e.logger.Info("data engine close")
 		close(e.done)
+
+		e.gateMu.Lock()
+		if e.cancelGates != nil {
+			e.cancelGates()
+		}
+		e.gateMu.Unlock()
 
 		for _, sub := range e.subscriptions {
 			e.providers[sub].Close()

@@ -73,15 +73,11 @@ type Engine struct {
 const fillsRelayBuffer = 1000
 
 type FullEngineOptions struct {
-	Limit          int           `json:"limit"`          // 0 = unlimited
 	ErrorThreshold int           `json:"errorThreshold"` // errors tolerated before shutdown
 	Ticker         *TickerConfig `json:"ticker"`
 }
 
 func (o *FullEngineOptions) Validate() error {
-	if o.Limit < 0 {
-		return fmt.Errorf("limit must not be negative")
-	}
 	if o.ErrorThreshold <= 0 {
 		return fmt.Errorf("errorThreshold is required and must be positive")
 	}
@@ -149,7 +145,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	/*
 		Init data provider layer
 	*/
-	if err := e.provider.Init(e.subscription, e.cfg.Limit); err != nil {
+	if err := e.provider.Init(e.subscription); err != nil {
 		e.Close()
 		return fmt.Errorf("failed to init provider %s: %w", e.provider.ID(), err)
 	}

@@ -4,7 +4,6 @@ package engine
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -87,14 +86,10 @@ type SignalLogger struct {
 }
 
 type SignalLoggerOptions struct {
-	Limit  int           `json:"limit"` // 0 = unlimited
 	Ticker *TickerConfig `json:"ticker"`
 }
 
 func (o *SignalLoggerOptions) Validate() error {
-	if o.Limit < 0 {
-		return fmt.Errorf("limit must not be negative")
-	}
 	if o.Ticker != nil {
 		return o.Ticker.Validate()
 	}
@@ -102,7 +97,7 @@ func (o *SignalLoggerOptions) Validate() error {
 }
 
 func (e *SignalLogger) Run(ctx context.Context) error {
-	if err := e.provider.Init(e.subscription, e.cfg.Limit); err != nil {
+	if err := e.provider.Init(e.subscription); err != nil {
 		return err
 	}
 	data, dataErrs := e.provider.Streams()

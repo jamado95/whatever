@@ -15,7 +15,7 @@ current contract will break as we add live streams, multiple assets and non-cand
 `proto.DataProvider` (`internal/protocol/provider.go:70`) is a four-phase lifecycle:
 
 ```
-Init(sub Subscription, limit int) -> Streams() (<-chan MarketData, <-chan error) -> Start() -> Close()
+Init(sub Subscription) -> Streams() (<-chan MarketData, <-chan error) -> Start() -> Close()
 ```
 
 `Init` allocates channels and validates configuration; `Streams` hands out the read ends; `Start`
@@ -38,8 +38,8 @@ Normalised types (`internal/protocol/provider.go`):
 | `binance_historical` | `internal/domains/provider/binance_historical.go` | Compiles and runs, but see "start/end window" below. |
 | live / websocket | — | Does not exist. |
 
-Both providers push into a 100-buffered `data` channel and a 10-buffered `errs` channel, honour
-`limit`, and select on `done` to abort. `binance_historical` paginates by 1000-candle pages,
+Both providers push into a 100-buffered `data` channel and a 10-buffered `errs` channel, and
+select on `done` to abort. `binance_historical` paginates by 1000-candle pages,
 advancing `startTime` to `lastCandle.CloseTs + 1`.
 
 Auxiliary tooling exists outside the engine: `cmd/scripts/binance_download_klines` fetches the CSVs
@@ -75,6 +75,8 @@ that `binance_csv` reads, and `cmd/scripts/binance_market_info/` queries symbols
 - **Providers are registry-constructed from `map[string]any` options**, uniform with every other
   component; each declares a config struct decoded strictly — see [[config]], and [[engine]] for
   the DI side.
+- **Providers are unbounded streams.** `Init` takes no limit; run length is bounded by the engine
+  (e.g. the `data_logger` frame limit), which closes providers — see [[engine]].
 
 ## Solution
 

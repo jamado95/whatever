@@ -134,7 +134,7 @@ The load-bearing choices:
 - **Each sub names its provider.** Providers have an instance `name` (default = `type`); the
   reference resolves in the composition root.
 - **A provider block is a config template.** Increment 1 materialises one provider instance per
-  subscription bound to it (→ N instances), leaving `Init(sub, limit)` untouched — *not yet
+  subscription bound to it (→ N instances), leaving `Init(sub)` untouched — *not yet
   implemented*, see State of the code. Increment 2's multiplexing venue (`Init([]Subscription)`,
   [[data-layer]]) can collapse many subs onto one instance without changing the config model.
 - **Features: global set, one chain per sub.** Per-sub feature sets are a clean later addition (a
@@ -234,7 +234,7 @@ it violated its own invariants under out-of-order arrival. V2 replaces it.
 **Plans executed:** `docs/plans/multi-subscription/main.md` (stages 1–4), `docs/plans/synchronizer-v2.md`,
 `docs/plans/synchronizer-v2-readiness-split.md`, `docs/plans/synchronizer-v2-test-segregation.md`,
 `docs/plans/synchronizer-v2-ms-columns.md`, `docs/plans/synchronizer-v2-ordered.md`,
-`docs/plans/synchronizer-v2-migration.md`.
+`docs/plans/synchronizer-v2-migration.md`, `docs/plans/data-logger-frame-limit.md`.
 
 ## Open Questions
 
@@ -262,8 +262,12 @@ it violated its own invariants under out-of-order arrival. V2 replaces it.
 
 **V2 migration — done** (`docs/plans/synchronizer-v2-migration.md`). V1 and `proto.SyncEvent` are
 removed; `data_logger` runs `NewOrderedSynchronizer`. A manual run of the default config (limit 300)
-emits 289 frames, all `Current`, and exports 289 5m + 25 1h records with no duplicates. No test runs
-an engine; that run is the only end-to-end check. Two issues had blocked it — the default config
+emitted 289 frames, all `Current`, and exported 289 5m + 25 1h records with no duplicates.
+
+**Frame limit — done** (`docs/plans/data-logger-frame-limit.md`). `limit` now counts synchronizer
+frames rather than per-provider candles (the old provider cap ran lanes dry at `limit − 11` frames);
+reaching it closes providers and shuts down. `internal/engine/data_logger_test.go` runs the engine
+end to end against fake providers. Two issues had blocked it — the default config
 emitted **no events** on V2:
 
 **Issue 1 — `CloseTs` unit and close offset — resolved** (`docs/plans/synchronizer-v2-ms-columns.md`).
