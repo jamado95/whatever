@@ -1,6 +1,6 @@
 // Package align provides pipeline combinators that operate across
 // per-subscription feature chains — the synchronizer that aligns
-// independent streams into SyncEvents.
+// independent streams into SyncEventV2 frames.
 package align
 
 import (

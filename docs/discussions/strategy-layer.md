@@ -13,11 +13,11 @@ Objective of this discussion: define the intent/order boundary, record why strat
 `proto.Strategy` (`internal/protocol/strategy.go:12`) mirrors the provider lifecycle:
 
 ```
-Init(data <-chan MarketData) -> Streams() (<-chan Signal, <-chan error) -> Start() -> Close()
+Init(data <-chan *SyncEventV2) -> Streams() (<-chan Signal, <-chan error) -> Start() -> Close()
 ```
 
-The input element type is decided to change from `MarketData` to `SyncEvent` (multi-stream, featured,
-aligned — [[multi-subscription]] §5); the code still shows `MarketData` today.
+The input element is `*SyncEventV2` (multi-stream, featured, aligned — [[multi-subscription]] §5).
+No strategy implements it yet: `buy_the_dip` still takes `<-chan MarketData`.
 
 ```go
 type Signal struct {
@@ -74,32 +74,32 @@ Points 3 and 5 are the interesting ones: they are symptoms of the interface gap,
 Current shape — one goroutine per strategy, `select` on `done` and the data channel, signals pushed to a buffered channel, merged by the engine via `pipeline.FanIn`.
 
 The input contract is **decided** in [[multi-subscription]] §5: a strategy receives a single
-`<-chan SyncEvent` carrying featured `ExtendedMarketData` for the subscriptions it declares, aligned
+`<-chan *SyncEventV2` carrying featured `ExtendedMarketData` for the subscriptions it declares, aligned
 across streams by a synchronizer stage upstream. This subsumes the "receive `ExtendedMarketData`"
-option below (`SyncEvent.Now` / `NowFwdFill` hold EMDs) while detaching cross-stream alignment from
-the strategy. The options weighed, kept for context:
+option below (`SyncEventV2.Data()` holds one forward-filled EMD per stream) while detaching
+cross-stream alignment from the strategy. The options weighed, kept for context:
 
 - **`ExtendedMarketData`** (the `WIP.md` ToDo). Minimal change: swap the channel element type in
   `Strategy.Init`. Strategy pulls what it needs via `GetSnapshot`. Simple, but every strategy sees every feature, and a missing key is a runtime miss rather than a startup error.
 - **Declared feature dependencies, like features have.** Strategy declares `[]KeyRef`; the engine validates at wiring time that the configured feature set satisfies every strategy. Catches misconfiguration before the first candle, and makes the strategy's inputs self-documenting. More interface surface.
 - **Typed per-strategy input structs**, built by the engine from the snapshot. Compile-time safety, but requires codegen or heavy boilerplate and couples the engine to individual strategies.
 
-The live remnant of the "declared dependencies" option is **feature-key** validation: `SyncEvent`
+The live remnant of the "declared dependencies" option is **feature-key** validation: `SyncEventV2`
 settles *which streams* a strategy receives (declared subscriptions, resolved at the composition
 root — [[multi-subscription]] §3), but not *which feature keys* within them. A missing `ema_20` is
 still a runtime miss unless a strategy also declares `[]KeyRef`. That stays open below.
 
 **Multi-symbol** is likewise settled: one strategy instance receives many streams through the single
-`SyncEvent` channel and keys its state by `StreamKey`. `buy_the_dip` already keys state by symbol,
+`SyncEventV2` channel and keys its state by `Subscription`. `buy_the_dip` already keys state by symbol,
 so this widens the key rather than changing the model.
 
 ## Open Questions
 
-- ~~Which input contract?~~ **Decided** — `<-chan SyncEvent` ([[multi-subscription]] §5). Still open:
+- ~~Which input contract?~~ **Decided** — `<-chan *SyncEventV2` ([[multi-subscription]] §5). Still open:
   whether a strategy also declares `[]KeyRef` feature dependencies for startup validation of the keys
   it reads (the live remnant of the "declared dependencies" option).
 - ~~One strategy instance per symbol, or many?~~ **Decided** — one instance, many streams, state keyed
-  by `StreamKey` ([[multi-subscription]] §5).
+  by `Subscription` ([[multi-subscription]] §5).
 - Should `Signal` carry a confidence / strength scalar so risk management can size proportionally, or is that leaking sizing concerns back into the strategy?
 - Should `Side` be extended (close, reduce, flat) or is exit intent expressed as an opposite-side signal? Currently there is no way for a strategy to say "close my position" distinct from "open the opposite".
 - Reset semantics for backtesting: walk-forward re-optimisation needs strategies re-instantiated or reset between windows. Does `Strategy` need `Reset()`, or is construction-per-window sufficient?
@@ -109,7 +109,7 @@ so this widens the key rather than changing the model.
 
 - Nothing works. Zero strategies in the default build, `signal_logger` has no input.
 - `buy_the_dip` needs: the `isSwingHigh` fix, swing detection moved to the `swing_highlow` feature, config wired through the factory, `Side` constants used, and the build tag removed.
-- Recommended order: input contract settled (`SyncEvent`, [[multi-subscription]] §5) → fix `swing_highlow` in [[features]] → rewrite `buy_the_dip` against features → un-tag → exercise via `signal_logger`.
+- Recommended order: input contract settled (`*SyncEventV2`, [[multi-subscription]] §5) → fix `swing_highlow` in [[features]] → rewrite `buy_the_dip` against features → un-tag → exercise via `signal_logger`.
 
 ## Resources
 

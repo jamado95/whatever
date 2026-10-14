@@ -105,16 +105,22 @@ func (l *Logger) ExtendedMarketData(data proto.ExtendedMarketData) {
 	evt.Msg("ExtendedMarketData")
 }
 
-func (l *Logger) SyncEvent(ev proto.SyncEvent) {
-	subs := make([]string, len(ev.Now))
-	for i, e := range ev.Now {
-		subs[i] = e.Subscription.ID()
+// SyncEvent logs an aligned frame; subscriptions lists the legs that closed at
+// its time, the rest being forward-filled.
+func (l *Logger) SyncEvent(ev *proto.SyncEventV2) {
+	legs := ev.Data()
+	subs := make([]string, 0, len(legs))
+	for _, e := range legs {
+		if e.Timestamp() == ev.Time() {
+			subs = append(subs, e.Subscription.ID())
+		}
 	}
 	l.zl.Info().
 		Str("event", "sync_event").
-		Int64("time", ev.Time).
-		Int64("now_count", int64(len(ev.Now))).
-		Int64("fwd_fill_count", int64(len(ev.NowFwdFill))).
+		Int64("time", ev.Time()).
+		Int("status", int(ev.Status())).
+		Int64("now_count", int64(len(subs))).
+		Int64("leg_count", int64(len(legs))).
 		Any("subscriptions", subs).
 		Msg("SyncEvent")
 }

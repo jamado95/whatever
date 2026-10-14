@@ -144,7 +144,7 @@ func (e *DataLogger) Run(ctx context.Context) error {
 		streams[sub] = chain.Process(ticker.Gate(ctx, data))
 	}
 
-	syncOut := align.Synchronize(streams)
+	syncOut := align.NewOrderedSynchronizer(nil).Sync(streams)
 
 	// Collect all provider errors.
 	e.wg.Go(func() {
@@ -154,12 +154,16 @@ func (e *DataLogger) Run(ctx context.Context) error {
 		e.logger.Debug("data logger error stream complete")
 	})
 
-	// Drain synchronizer: log every SyncEvent and export each Now leg.
+	// Drain synchronizer: log every frame and export each leg that closed at
+	// its time, so every candle is exported once.
 	e.wg.Go(func() {
 		count := 0
 		for ev := range syncOut {
 			e.logger.SyncEvent(ev)
-			for _, emd := range ev.Now {
+			for _, emd := range ev.Data() {
+				if emd.Timestamp() != ev.Time() {
+					continue // forward-filled leg
+				}
 				if e.exporter != nil {
 					if err := e.exporter.Export(emd.MarketData, emd.Indicators); err != nil {
 						e.logger.Error(err, "exporter error")

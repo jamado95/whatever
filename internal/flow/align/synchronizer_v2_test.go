@@ -2,10 +2,57 @@ package align
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	proto "whatever/internal/protocol"
 )
+
+// sub is a test helper that creates a Subscription. Provider is always non-empty
+// so subscription IDs are distinct and comparable.
+func sub(symbol string, tf proto.Timeframe) proto.Subscription {
+	return proto.Subscription{Symbol: symbol, Timeframe: tf, Provider: "test"}
+}
+
+// emd constructs a stub ExtendedMarketData carrying the given subscription and
+// the given CloseTs. The Candle is empty except for CloseTs.
+func emd(sub proto.Subscription, closeTs int64) proto.ExtendedMarketData {
+	return proto.ExtendedMarketData{
+		MarketData: proto.MarketData{
+			Subscription: sub,
+			Candle:       proto.Candle{CloseTs: closeTs},
+		},
+	}
+}
+
+// ordered creates a buffered channel and sends the given EMDs in order, then
+// closes it. Returns a receive-only channel so the call site is clearly the
+// data source.
+func ordered(emds ...proto.ExtendedMarketData) <-chan proto.ExtendedMarketData {
+	ch := make(chan proto.ExtendedMarketData, len(emds))
+	for _, e := range emds {
+		ch <- e
+	}
+	close(ch)
+	return ch
+}
+
+func TestHelperShapes(t *testing.T) {
+	s := sub("BTCUSDT", proto.Timeframe1m)
+	if s.Symbol != "BTCUSDT" || s.Timeframe != proto.Timeframe1m || s.Provider != "test" {
+		t.Errorf("helper sub = %+v, want BTCUSDT/1m/test", s)
+	}
+	if !strings.Contains(s.ID(), ":test") {
+		t.Errorf("ID() must contain provider: got %q", s.ID())
+	}
+	e := emd(s, 42)
+	if e.Timestamp() != 42 {
+		t.Errorf("emd timestamp = %d, want 42", e.Timestamp())
+	}
+	if e.Subscription != s {
+		t.Errorf("emd subscription = %+v, want %+v", e.Subscription, s)
+	}
+}
 
 // fixture is a scenario input: subscriptions, column stride and arrival order.
 type fixture struct {

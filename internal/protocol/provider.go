@@ -107,14 +107,6 @@ func (s Subscription) ID() string {
 	return fmt.Sprintf("%s:%s:%s", s.Symbol, s.Timeframe, s.Provider)
 }
 
-// SyncEvent is the aligned boundary event the seam emits. Defined now; first
-// consumed in stage 3 by the arrival-order synchronizer.
-type SyncEvent struct {
-	Time       int64                               // boundary CloseTs the group aligns on
-	Now        []ExtendedMarketData                // legs that closed at Time (≥1)
-	NowFwdFill map[Subscription]ExtendedMarketData // forward-filled latest per sub; Now ⊆ NowFwdFill
-}
-
 //////////////////// SYNC V2
 
 type SyncDataFreshness int

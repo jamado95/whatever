@@ -18,10 +18,9 @@ or independently. Four subtopics:
    flow freely from providers and resolving synchronicity downstream.
 
 Three clusters are decided — the config scope (§3), the strategy/feature input seam (§5) and the
-synchronizer behind it: **Synchronizer V2** replaces the arrival-order V1. Stages 1–4 of
-`docs/plans/multi-subscription/main.md` are implemented, so `data_logger` runs N subscriptions — still
-through V1. The two issues that blocked the V2 migration are resolved for replay; the migration
-itself is pending (WIP).
+synchronizer behind it: **Synchronizer V2**, which replaced the arrival-order V1 (now removed).
+Stages 1–4 of `docs/plans/multi-subscription/main.md` are implemented, so `data_logger` runs N
+subscriptions through the ordered V2 synchronizer.
 
 ## Current Understanding
 
@@ -33,12 +32,12 @@ itself is pending (WIP).
 | `proto.MarketData` | `{Subscription, Candle, ReceivedAt}`. `Candle.CloseTs` is the venue's close time verbatim — for Binance **ms, 1ms before the boundary**. `Timeframe` exposes `TimeframeS()` and `TimeframeMs()`. |
 | `config.Config.Subscriptions` | Top-level list; required fields, unique `ID()`, provider reference resolved at the composition root. |
 | Provider instances | Keyed by instance `name`; each sub is injected the instance its `provider` names (`_providers map[Subscription]DataProvider`). Subs naming the same block **share one instance** and `Init` overwrites its sub — the per-sub materialisation decided in §3 is not implemented. The default config sidesteps it with one block per sub. |
-| `data_logger` | Per sub: `provider → ticker → FeatureChain`; lanes → `align.Synchronize` (V1) → one shared exporter, exporting each `Now` leg. |
+| `data_logger` | Per sub: `provider → ticker → FeatureChain`; lanes → `align.NewOrderedSynchronizer` → one shared exporter, exporting each leg with `CloseTs == Time()`. |
 | `FeatureChain` | One `SortedWindow` per chain, one chain per sub — the shared-window blocker below is resolved in `data_logger`. |
 | `Ticker` | One instance per lane. `fixedInterval` releases one value per tick regardless of timeframe; `realtime` does not pace. |
 | `pipe.FanIn` / `pipe.OrderedFanIn` | `FanIn` merges lanes in arrival order. `OrderedFanIn` is a k-way merge by a `less` func: it emits the least pending value and blocks while any open input has none. |
-| `internal/flow/align` | V1 `Synchronize` → `SyncEvent` (wired). V2 `SynchronizerV2.Sync` → `*SyncEventV2` (unit-tested, not wired): `NewSynchronizerV2` merges with `FanIn`, `NewOrderedSynchronizer` with `OrderedFanIn` by `CloseTs`. |
-| `Strategy.Init` | `<-chan SyncEvent` (V1). Its callers `signal_logger` / `full` are build-tagged out; `buy_the_dip` (`wip`) still takes `<-chan MarketData`. |
+| `internal/flow/align` | V2 only: `SynchronizerV2.Sync` → `*SyncEventV2`. `NewOrderedSynchronizer` merges with `OrderedFanIn` by `CloseTs` (wired in `data_logger`); `NewSynchronizerV2` merges with `FanIn` (not wired). |
+| `Strategy.Init` | `<-chan *SyncEventV2`. Its callers `signal_logger` / `full` are build-tagged out; `buy_the_dip` (`wip`) still takes `<-chan MarketData`. |
 | `RiskManager.Init` | One `<-chan MarketData`. |
 
 ### Shared-window blocker and its consequence
@@ -58,9 +57,11 @@ after the chains.
 - **Cross-stream synchronization is a detached pipeline stage, not the consumer's job.** Strategies
   and cross-asset features read one channel of aligned events; alignment lives in a synchronizer
   combinator upstream. Contract in §5.
-- **Synchronizer V2 is the synchronizer.** V1 (arrival-order, `SyncEvent`) is removed on migration;
-  `Strategy.Init`, `logger.SyncEvent` and `data_logger` move to `*SyncEventV2`. Migration pending —
-  see WIP.
+- **Synchronizer V2 is the synchronizer.** V1 (arrival-order, `SyncEvent`) is removed;
+  `Strategy.Init`, `logger.SyncEvent` and `data_logger` take `*SyncEventV2`.
+- **`data_logger` exports each leg with `CloseTs == Time()`** — one record per candle. Candles in
+  columns that never complete are not exported: cold start (before every stream has an owning
+  candle) and data after one lane ends.
 - **V2 columns are in ms (`Timeframe.TimeframeMs()`), mapped by `ceilDiv(CloseTs, strideMs)`** — the
   first boundary at or after the close, so exact-boundary and boundary−1ms (Binance) closes share a
   column. Early closes are absorbed widely: anything in `(B − stride, B]` maps to boundary `B`, so the
@@ -168,7 +169,7 @@ Clock models assessed for the seam:
 
 | Model | Clock | Emission gate | Out-of-order | Jitter |
 |---|---|---|---|---|
-| **A — arrival-order (V1, superseded)** | Next-higher `CloseTs` arrival | Arrival of an advancing candle | Singleton at current time; breaks `Now ⊆ NowFwdFill` and `Time = leg CloseTs` | Immediate, no coalescing |
+| **A — arrival-order (V1, removed)** | Next-higher `CloseTs` arrival | Arrival of an advancing candle | Singleton at current time; breaks `Now ⊆ NowFwdFill` and `Time = leg CloseTs` | Immediate, no coalescing |
 | **B — data-driven** | Min `CloseTs` > current across subs | New data from any sub | Discarded (immutable boundaries) | Deadline per boundary |
 | **Wall-clock** | Real-time tick (N ms) | Any new data since last tick | Not a concept (`Time` = decision time) | Absorbed into tick |
 | **V2 — buffer matrix (chosen)** | Column grid at finest stride; newest datapoint advances the window | Column complete (every stream's owning candle present) | Accepted while in window — late frame emitted `Stale`; below window dropped | Absorbed by the window (2× coarsest period) |
@@ -177,7 +178,7 @@ V2 tolerates *bounded* disorder but does not order streams; with `FanIn`, replay
 is set by per-lane tickers and issue 2 (WIP) showed that leaves skew far outside the window. The
 "actively synchronised" option is realised at the seam instead of the ticker: the ordered
 synchronizer merges lanes by `CloseTs` in front of V2 (Decisions). The live/backtest split remains
-open — live keeps `FanIn` for now.
+open — `data_logger` uses the ordered merge unconditionally, since every provider today is replay.
 
 ### 5. Strategy/feature input seam — `SyncEventV2`
 
@@ -202,7 +203,7 @@ type SyncEventV2 struct {
 
 // SynchronizerV2.Sync(map[Subscription]<-chan ExtendedMarketData) <-chan *SyncEventV2
 
-// consumer contract (strategies, cross-asset feature stages) — target of the migration
+// consumer contract (strategies, cross-asset feature stages)
 Init(in <-chan *SyncEventV2) error
 ```
 
@@ -232,7 +233,8 @@ it violated its own invariants under out-of-order arrival. V2 replaces it.
 
 **Plans executed:** `docs/plans/multi-subscription/main.md` (stages 1–4), `docs/plans/synchronizer-v2.md`,
 `docs/plans/synchronizer-v2-readiness-split.md`, `docs/plans/synchronizer-v2-test-segregation.md`,
-`docs/plans/synchronizer-v2-ms-columns.md`, `docs/plans/synchronizer-v2-ordered.md`.
+`docs/plans/synchronizer-v2-ms-columns.md`, `docs/plans/synchronizer-v2-ordered.md`,
+`docs/plans/synchronizer-v2-migration.md`.
 
 ## Open Questions
 
@@ -258,37 +260,26 @@ it violated its own invariants under out-of-order arrival. V2 replaces it.
 
 ## WIP
 
-**V2 migration — unblocked, pending.** Scope: delete `align/synchronizer.go` and its V1 tests (keeping the
-`sub`/`emd`/`ordered` helpers the V2 tests use), remove `proto.SyncEvent`, and move `Strategy.Init`,
-`logger.SyncEvent` and `data_logger` to `*SyncEventV2` (exporting legs with `CloseTs == Time()` keeps
-one record per candle). Build, lint and tests stay green — but with real data the default config
-(BTCUSDT 1h + 5m) emitted **no events**, for two independent reasons, both now resolved; the migration
-should use `NewOrderedSynchronizer`. No test runs an engine, so neither showed up in tests.
+**V2 migration — done** (`docs/plans/synchronizer-v2-migration.md`). V1 and `proto.SyncEvent` are
+removed; `data_logger` runs `NewOrderedSynchronizer`. A manual run of the default config (limit 300)
+emits 289 frames, all `Current`, and exports 289 5m + 25 1h records with no duplicates. No test runs
+an engine; that run is the only end-to-end check. Two issues had blocked it — the default config
+emitted **no events** on V2:
 
 **Issue 1 — `CloseTs` unit and close offset — resolved** (`docs/plans/synchronizer-v2-ms-columns.md`).
-V2 mapped `col = CloseTs / stride` with `stride` from `TimeframeS()`, assuming `CloseTs` in seconds
-on the boundary; Binance `CloseTs` is ms, 1ms before the boundary. Seconds vs ms put consecutive
-candles 1000 columns apart. Switching to ms alone is not enough: rounding down shifts every candle
-one column back — co-closing streams still share a column, but the grid's phase moves, and
-`owningCol` (`c - c%p`, anchored at epoch column 0) looks 11 columns before every 1h candle, so
-`ready()` never holds. Fixed with ms columns and `ceilDiv` (Decisions); V2 fixtures are now in ms and
-every scenario also runs with boundary−1ms closes.
+V2 assumed `CloseTs` in seconds on the boundary; Binance's is ms, 1ms before it. Fixed with ms
+columns and `ceilDiv` (Decisions).
 
 **Issue 2 — lane skew vs the window — resolved for replay** (`docs/plans/synchronizer-v2-ordered.md`).
-Each lane has its own ticker. `fixedInterval` releases one candle per tick whatever the timeframe,
-and `realtime` does not pace, so lanes drift apart in data time: at `fixed/100ms`, after n ticks the
-1h lane is at hour n and the 5m lane at minute 5n. V2's window (24 columns = 2h at a 5m stride)
-follows the newest datapoint, so with `FanIn` the leading 1h lane drags `baseCol` forward and `Apply`
-drops the 5m candles behind it — zero events for the default config. The merge has to sit directly
-in front of V2: gating at the tickers is not enough, because the feature chains' 100-candle output
-buffers and `FanIn`'s per-item draining let a backlogged lane lag by more than the window. Fixed by
-the ordered synchronizer (Decisions); a test feeds a whole 1h lane ahead of 5m and gets every column,
-where `FanIn` order loses columns 0–36. Pending: wiring it into `data_logger` and removing V1.
+Per-lane tickers let lanes drift apart in data time, and with `FanIn` the leading lane dragged the
+window past the lagging one. The merge has to sit directly in front of V2 — gating at the tickers is
+not enough, since the chains' 100-candle output buffers let a backlogged lane lag by more than the
+window. Fixed by the ordered synchronizer (Decisions).
 
 ## Resources
 
-- `internal/protocol/provider.go` (`Subscription`, `MarketData`, `SyncEvent`, `SyncEventV2`)
-- `internal/flow/align/synchronizer_v2.go`, `internal/flow/align/synchronizer.go` (V1, to be removed)
+- `internal/protocol/provider.go` (`Subscription`, `MarketData`, `SyncEventV2`)
+- `internal/flow/align/synchronizer_v2.go`
 - `internal/engine/data_logger.go`, `cmd/main.go` (provider injection), `internal/config/config.go`
 - `internal/domains/features/feature.go` (`FeatureChain`), `internal/flow/timing/timing.go`
   (`Ticker`), `internal/flow/pipe/fanout.go`
