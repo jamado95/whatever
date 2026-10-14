@@ -51,3 +51,10 @@ func TestTimeframeMs(t *testing.T) {
 		}
 	}
 }
+
+func TestSubscriptionID(t *testing.T) {
+	s := Subscription{Symbol: "BTCUSDT", Timeframe: Timeframe5m, Provider: "binance_csv"}
+	if got, want := s.ID(), "BTCUSDT:5m:binance_csv"; got != want {
+		t.Fatalf("ID() = %q, want %q", got, want)
+	}
+}

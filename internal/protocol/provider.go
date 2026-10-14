@@ -104,7 +104,7 @@ type Subscription struct {
 // ID is the canonical identity of a subscription, "symbol:timeframe:provider".
 // It is the reference handle strategies use and the key the seam events carry.
 func (s Subscription) ID() string {
-	return fmt.Sprintf("%s:%s:%s", s.Symbol, s.Timeframe, s.Provider)
+	return s.Symbol + ":" + string(s.Timeframe) + ":" + s.Provider
 }
 
 //////////////////// SYNC V2
