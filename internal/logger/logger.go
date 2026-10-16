@@ -107,7 +107,7 @@ func (l *Logger) ExtendedMarketData(data proto.ExtendedMarketData) {
 
 // SyncEvent logs an aligned frame; subscriptions lists the legs that closed at
 // its time, the rest being forward-filled.
-func (l *Logger) SyncEvent(ev *proto.SyncEventV2) {
+func (l *Logger) SyncEvent(ev proto.SyncEventV2) {
 	legs := ev.Data()
 	subs := make([]string, 0, len(legs))
 	for _, e := range legs {

@@ -65,16 +65,16 @@ func (c *TickerConfig) Validate() error {
 
 // newTicker builds the ticker for a config block. A nil block means no ticker
 // was configured, which is an explicit request for realtime pacing.
-func newTicker(c *TickerConfig) (timing.Ticker[proto.MarketData], error) {
+func newTicker(c *TickerConfig) (timing.Ticker[proto.SyncEventV2], error) {
 	if c == nil {
-		return timing.Realtime[proto.MarketData](), nil
+		return timing.Realtime[proto.SyncEventV2](), nil
 	}
 
 	switch c.Type {
 	case FixedInterval:
-		return timing.FixedInterval[proto.MarketData](c.Interval.Duration()), nil
+		return timing.FixedInterval[proto.SyncEventV2](c.Interval.Duration()), nil
 	case Realtime:
-		return timing.Realtime[proto.MarketData](), nil
+		return timing.Realtime[proto.SyncEventV2](), nil
 	default:
 		return nil, fmt.Errorf("unsupported ticker type %q", c.Type)
 	}

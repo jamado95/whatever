@@ -315,9 +315,9 @@ func NewOrderedSynchronizer(rdn Readiness) *SynchronizerV2 {
 }
 
 // Sync fan-ins the per-subscription lanes and emits aligned SyncEventV2s.
-func (s *SynchronizerV2) Sync(subs map[proto.Subscription]<-chan proto.ExtendedMarketData) <-chan *proto.SyncEventV2 {
+func (s *SynchronizerV2) Sync(subs map[proto.Subscription]<-chan proto.ExtendedMarketData) <-chan proto.SyncEventV2 {
 	if len(subs) == 0 {
-		out := make(chan *proto.SyncEventV2)
+		out := make(chan proto.SyncEventV2)
 		close(out)
 		return out
 	}
@@ -334,8 +334,8 @@ func (s *SynchronizerV2) Sync(subs map[proto.Subscription]<-chan proto.ExtendedM
 // runV2 is the core alignment loop over a pre-merged channel, so tests can
 // inject a controlled arrival order. A column after the latest dispatched one is
 // Current; a column dispatched behind it (a late-completed frame) is Stale.
-func runV2(merged <-chan proto.ExtendedMarketData, subs []proto.Subscription, rdn Readiness) <-chan *proto.SyncEventV2 {
-	out := make(chan *proto.SyncEventV2)
+func runV2(merged <-chan proto.ExtendedMarketData, subs []proto.Subscription, rdn Readiness) <-chan proto.SyncEventV2 {
+	out := make(chan proto.SyncEventV2)
 	go func() {
 		defer close(out)
 		st := newSyncState(subs)
@@ -360,7 +360,7 @@ func runV2(merged <-chan proto.ExtendedMarketData, subs []proto.Subscription, rd
 				if err != nil {
 					continue // unreachable: a ready column has one leg per stream
 				}
-				out <- ev
+				out <- *ev
 			}
 		}
 	}()

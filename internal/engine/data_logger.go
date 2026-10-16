@@ -10,7 +10,6 @@ import (
 	feat "whatever/internal/domains/features"
 	"whatever/internal/flow/align"
 	"whatever/internal/flow/pipe"
-	"whatever/internal/flow/timing"
 	"whatever/internal/idgen"
 	"whatever/internal/logger"
 	proto "whatever/internal/protocol"
@@ -129,10 +128,9 @@ func (e *DataLogger) Run(ctx context.Context) error {
 		}
 	}
 
-	// Per-sub lanes: provider → ticker → feature chain.
+	// Per-sub lanes: provider → feature chain
 	streams := make(map[proto.Subscription]<-chan proto.ExtendedMarketData, len(e.subscriptions))
 	errChans := make([]<-chan error, 0, len(e.subscriptions))
-	tickers := make([]timing.Ticker[proto.MarketData], 0, len(e.subscriptions))
 
 	for _, sub := range e.subscriptions {
 		prov := e.providers[sub]
@@ -144,21 +142,16 @@ func (e *DataLogger) Run(ctx context.Context) error {
 		data, dataErrs := prov.Streams()
 		errChans = append(errChans, dataErrs)
 
-		ticker, err := newTicker(e.cfg.Ticker)
-		if err != nil {
-			return fmt.Errorf("failed to create ticker for %s: %w", sub.ID(), err)
-		}
-		tickers = append(tickers, ticker)
-
 		chain, err := feat.NewFeatureChain(e.features)
 		if err != nil {
 			return fmt.Errorf("failed to create feature chain for %s: %w", sub.ID(), err)
 		}
 
-		streams[sub] = chain.Process(ticker.Gate(gateCtx, data))
+		streams[sub] = chain.Process(data)
 	}
 
-	syncOut := align.NewOrderedSynchronizer(nil).Sync(streams)
+	ticker, _ := newTicker(e.cfg.Ticker)
+	syncOut := ticker.Gate(gateCtx, align.NewOrderedSynchronizer(nil).Sync(streams))
 
 	// Collect all provider errors.
 	e.wg.Go(func() {
@@ -197,7 +190,7 @@ func (e *DataLogger) Run(ctx context.Context) error {
 		e.logger.With("count", count).Info("data logger stream complete")
 	})
 
-	// Start providers and tickers.
+	// Start providers and ticker
 	for _, sub := range e.subscriptions {
 		if err := e.providers[sub].Start(); err != nil {
 			e.logger.Error(err, "failed to start provider")
@@ -205,9 +198,8 @@ func (e *DataLogger) Run(ctx context.Context) error {
 			return err
 		}
 	}
-	for _, t := range tickers {
-		t.Start()
-	}
+
+	ticker.Start()
 
 	wait := make(chan struct{})
 	go func() {

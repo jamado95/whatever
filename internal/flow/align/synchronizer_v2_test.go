@@ -66,7 +66,7 @@ type fixture struct {
 func runFx(fx fixture, rdn Readiness) []*proto.SyncEventV2 {
 	var events []*proto.SyncEventV2
 	for ev := range runV2(ordered(fx.emds...), fx.subs, rdn) {
-		events = append(events, ev)
+		events = append(events, &ev)
 	}
 	return events
 }
@@ -528,7 +528,7 @@ func syncFx(s *SynchronizerV2, fx fixture) []*proto.SyncEventV2 {
 	}
 	var events []*proto.SyncEventV2
 	for ev := range s.Sync(in) {
-		events = append(events, ev)
+		events = append(events, &ev)
 	}
 	return events
 }
