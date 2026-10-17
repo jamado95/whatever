@@ -48,7 +48,7 @@ triggers `Close()`.
 
 ### Dependency injection
 
-`cmd/main.go` is a hand-written composition root: read `config.json`, instantiate enabled providers, strategies and features from the registries, then stuff resolved instances into the engine's option map under underscore-prefixed keys (`_provider`, `_strategies`, `_features`, `_exporter`). The engine factory type-asserts them back out.
+`cmd/` is a hand-written composition root, split into two phases joined by a `components` struct (`docs/plans/composition-root-split.md`). `instantiate` (`cmd/instantiate.go`) creates enabled providers, strategies, features and the exporter from the registries. `wire` (`cmd/wire.go`) validates cross-references, then stuffs resolved instances into the engine's option map under underscore-prefixed keys (`_subscriptions`, `_providers`, `_strategies`, `_features`, `_exporter`) and creates the engine. `build` (`cmd/main.go`) runs both and merges their errors. The engine factory type-asserts the instances back out.
 
 The registry (`internal/registry/registry.go`) is a set of package-level, generic,
 mutex-guarded `map[string]Factory[T]`, populated by `init()` side-effect imports in `main.go`.
@@ -122,6 +122,8 @@ Option 2 is the likely answer; option 4 should happen either way.
 `data_logger` counts synchronizer frames up to `limit`, then closes providers and cancels the ticker
 gates so the pipeline unwinds. `DataProvider.Init` no longer takes a limit; `signal_logger` and
 `full` dropped their `limit` option.
+
+**Composition root.** Instantiation and wiring split into separate phases (`docs/plans/composition-root-split.md`).
 
 **Config typing.** Resolved and moved to [[config]] — component config structs decoded strictly by
 `config.Decode`, validating enums, and a `--validate-only` dry run. Defects 1, 4 and 6 below are

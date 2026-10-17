@@ -8,7 +8,7 @@ build:
 	$(GO) build -o whatever ./cmd
 
 run:
-	$(GO) run ./cmd/main.go --config $(CONFIG)
+	$(GO) run ./cmd --config $(CONFIG)
 
 lint:
 	staticcheck ./...
@@ -16,7 +16,7 @@ lint:
 # Validate a config without running the engine. No market data is fetched and
 # no export files are written.
 validate:
-	$(GO) run ./cmd/main.go --config $(CONFIG) --validate-only
+	$(GO) run ./cmd --config $(CONFIG) --validate-only
 
 # Script paths
 BINANCE_KLINES := cmd/scripts/binance_download_klines/binance_download_klines.go
