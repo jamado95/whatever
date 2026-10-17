@@ -8,6 +8,10 @@ pipeline. It is the boundary between third-party data formats and the engine's d
 Objective of this discussion: establish what the data layer currently guarantees, where the
 current contract will break as we add live streams, multiple assets and non-candle data, and what should change before the backtesting engine is built on top of it.
 
+**Continued in [[data-layer-v2]] (WIP)** — the data layer as the engine's first layer, the
+`internal/engine/data` module: ingestion, alignment, rolling aggregation, ordering, frame readiness
+and the `FrameBuffer`. This document remains the reference for providers and venue normalisation.
+
 ## Current Understanding
 
 ### Contract
@@ -117,6 +121,7 @@ option 2 or 3 substantially more natural, so this should be settled before that 
 
 ## WIP
 
+- Data layer V2 under discussion in [[data-layer-v2]]; nothing implemented.
 - Working end to end: `binance_csv` → feature chain → JSONL export via the `data_logger` engine.
   This is the only exercised path in the codebase.
 - `binance_historical` is wired and registered but disabled in `config.json`, and its time-window bug means it has probably never run against a bounded range.
@@ -127,4 +132,5 @@ option 2 or 3 substantially more natural, so this should be settled before that 
 - `internal/protocol/provider.go`, `internal/domains/provider/`
 - `docs/Protocol.md` § Data layer
 - `cmd/scripts/binance_download_klines/`, `cmd/scripts/README.md`
-- Related: [[features]] (consumer of `MarketData`), [[engine]] (lifecycle and timing gate)
+- Related: [[data-layer-v2]] (continuation), [[features]] (consumer of `MarketData`), [[engine]]
+  (lifecycle and timing gate)
