@@ -90,6 +90,7 @@ Always notify the user when documentation is modified.
 Implementation checklist:
 
 - Follow the approved implementation plan.
+- Commit messages are one-line only, no description or co-author by tag.
 - Prefer extending existing abstractions over introducing new patterns.
 - Make the smallest change that satisfies the requirement.
 - Keep comments brief, no in-depth explanations. Functions can be described in more depth.
