@@ -64,6 +64,10 @@ that `binance_csv` reads, and `cmd/scripts/binance_market_info/` queries symbols
 6. **CSV parsing assumes headerless files.** Binance has added header rows to some newer archive
    files; those would emit a parse error per file rather than being skipped. Currently benign
    because the local `data/` archives are headerless.
+7. **2025+ archives use µs timestamps.** Binance spot kline archives from 2025-01 onwards carry
+   microsecond `OpenTime`/`CloseTime` (e.g. `data/BTCUSDC/BTCUSDC-5m-2025-01.csv`).
+   `parseCsvRecordToCandle` passes them through unscaled, so `Candle` timestamps for those files
+   are 1000× the ms contract. Not yet handled. `scripts/csv_quality.py` reports the unit per file.
 
 ## Decisions
 

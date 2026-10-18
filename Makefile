@@ -134,6 +134,29 @@ quick-plot:
 	echo "$(PYTHON) scripts/plot_market_data.py $$latest"; \
 	$(PYTHON) scripts/plot_market_data.py $$latest
 
+# ------------------------
+# CSV data quality
+# ------------------------
+# Report completeness and continuity of a kline CSV. INTERVAL overrides the
+# interval parsed from the filename.
+# Usage:
+# make csv-quality FILE=data/BTCUSDT/BTCUSDT-1h-2024-01.csv [INTERVAL=1h]
+.PHONY: csv-quality
+csv-quality:
+	@if [ -z "$(FILE)" ]; then \
+		echo "Error: FILE parameter required"; \
+		echo "Usage: make csv-quality FILE=data/<SYMBOL>/<SYMBOL>-<INTERVAL>-<YYYY-MM>.csv [INTERVAL=1h]"; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(FILE)" ]; then \
+		echo "Error: File not found: $(FILE)"; \
+		exit 1; \
+	fi
+	@cmd="$(PYTHON) scripts/csv_quality.py $(FILE)"; \
+	if [ -n "$(INTERVAL)" ]; then cmd="$$cmd --interval $(INTERVAL)"; fi; \
+	echo "$$cmd"; \
+	$$cmd
+
 # Clean virtual environment
 .PHONY: clean-venv
 clean-venv:

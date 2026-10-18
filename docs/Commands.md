@@ -104,6 +104,45 @@ make binance-tickers QUOTE=USDT JSON=1
 
 ---
 
+## Data quality
+
+`scripts/csv_quality.py` checks one kline CSV (as produced by `binance-klines`) and prints a
+completeness and continuity report to the terminal. It uses only the standard library and is run
+through `uv` like the other Python scripts.
+
+| Command | Description |
+|---|---|
+| `make csv-quality FILE= [INTERVAL=]` | Report completeness and continuity of a kline CSV. |
+| `uv run scripts/csv_quality.py <file> [--interval]` | Same, invoked directly. |
+
+The report always starts with the **start and end of the analysed period** — the first and last
+`open_time` in the file, in UTC — and the span between them. Then:
+
+- **Completeness** — per column and in total, the count and percentage of missing cells. A cell is
+  missing if it is absent (short row), empty, non-numeric or `nan`. Rows whose column count isn't 12
+  are also counted as malformed.
+- **Continuity** — expected candles from first to last `open_time` at the file's interval, how many
+  are present, and the gaps (count, largest, top 10). **Continuity score = present / expected.**
+  Duplicates, out-of-order rows, and timestamps that don't fall on the interval (e.g. Binance's
+  off-grid candles after the February 2018 outage) are reported, but do not count as present.
+
+The interval comes from `INTERVAL` / `--interval` if given, else the filename
+(`{SYMBOL}-{INTERVAL}-{YYYY-MM}.csv`), else the most common gap between timestamps. Calendar-month
+intervals (`1M`) skip the continuity check. Microsecond timestamps (Binance archives from 2025-01)
+are scaled to ms, and an optional header row is skipped. Missing data before the first or after the
+last row cannot be detected. The exit code is 0 whenever a report is printed, whatever the quality.
+
+```bash
+# Check one archive
+make csv-quality FILE=data/BTCUSDT/BTCUSDT-1h-2024-01.csv
+
+# Override the interval for a file whose name doesn't carry it
+make csv-quality FILE=path/to/klines.csv INTERVAL=5m
+uv run scripts/csv_quality.py path/to/klines.csv --interval 5m
+```
+
+---
+
 ## Visualisation
 
 The engine writes the JSONL export itself (via the `exporter` configured in `config.json`);
