@@ -101,22 +101,24 @@ network, the alignment wait and the order round trip — unmeasured, plausibly m
 ## Decisions
 
 - **The engine's first layer is a frame-based data layer.** It owns (1) ingestion from providers,
-  (2) frame alignment — ordering and readiness, and (3) defines the `FrameBuffer` every other layer
-  reads, which the engine operates.
-  The rest of the engine runs as a synchronous step per frame.
+  (2) frame alignment — ordering and readiness, and (3) the `FrameBuffer` every other layer reads
+  and writes through. The rest of the engine runs as a synchronous step per frame.
 - **Feature outputs live in the frame buffer**, giving every consumer implicit feature history
   (a z-score of RSI reads RSI's history).
 - **The data layer emits status-tagged frame events on a channel**; components declare which
   statuses they consume.
-- **`Late` is one status** — a column first dispatched behind newer ones, or an already-dispatched
-  column whose data changed. It replaces V2's `Stale` and exists so state-keeping consumers can
-  update toward complete, higher-quality data.
+- **Frames are released strictly in column order.** `Late` is a revision of an already-released
+  column; it replaces V2's `Stale` and exists so state-keeping consumers can update toward complete,
+  higher-quality data.
+- **Completeness is a separate flag** — `Complete` / `Partial` — orthogonal to the status. Both reach
+  every component; each decides what to do with a `Partial` frame ([[data-layer-v2]] § Release).
 - **Features consume `Late` and recompute; strategies and downstream skip it.**
 - **A frame is the full per-step record:** aligned multi-stream featured data plus strategy, order,
   execution and other downstream outputs.
-- **The engine is the `FrameBuffer`'s only writer** — market data via `Commit`, plus the feature,
-  strategy and execution sections. Fills and order updates are written there by the engine and do not
-  pass through the data layer ([[data-layer-v2]]).
+- **The data layer owns the `FrameBuffer`** and exposes write access: each engine phase receives a
+  read-only view plus only its own section's writer (capability passing). Fills and order updates are
+  written through the execution section's writer and do not pass through ingestion or alignment
+  ([[data-layer-v2]]).
 - **The data layer is the module `internal/engine/data`** ([[data-layer-v2]]).
 
 These reverse recorded positions not yet updated in their own documents:
@@ -135,18 +137,20 @@ strictly increasing output — are subsumed here; strictly increasing output was
 ### Shape
 
 ```
-             ┌──────────────── data layer ───────────────┐
-providers ──▶│ ingest ──▶ aligner (readiness, watermark)  │── frame events ──▶ engine step loop
-             │               staging window               │   (status-tagged)   commit → FrameBuffer
-             └────────────────────────────────────────────┘                          │
+             ┌──────────────────────── data layer ─────────────────────────┐
+providers ──▶│ ingest ──▶ aligner (readiness, watermark) ──▶ commit ──▶ events │──▶ engine step loop
+             │      stages into FrameBuffer rows beyond the released head     │  Next(): materialise
+             └─────────────────────────────────────────────────────────────────┘        │
                                 features ──▶ strategies ──▶ portfolio/risk ──▶ execution ──▶ fills
 ```
 
-1. **Ingestion** — one provider instance per sub. Concurrent; never blocks a provider's socket reader.
-2. **Alignment** — readiness and the watermark decide when a column is released and with which
-   status (Clock below).
-3. **`FrameBuffer`** — per-stream raw data, feature outputs and per-step records, written only by the
-   engine. `Late` revisions land here.
+1. **Ingestion** — one provider instance per direct subscription, all at one timeframe. Concurrent;
+   under backpressure the provider's buffered output absorbs, then drops ([[data-layer-v2]] §
+   Capacity).
+2. **Alignment** — readiness and the watermark decide when a column is released, with which status
+   and completeness (Clock below).
+3. **`FrameBuffer`** — every stream's legs, feature entries and per-step records, one row per column;
+   also the staging area. Revisions and aggregation are applied when the engine dequeues each event.
 
 Stage-level detail in [[data-layer-v2]].
 
@@ -165,13 +169,14 @@ for {
 - **The engine is the channel's only consumer** and dispatches by each component's accepted
   statuses. Components reading the channel directly would restore channel-per-stage and lose the
   step barrier.
-- **Commit, then compute.** The aligner writes only its staging window. The engine loop commits a
-  frame event into the buffer, then runs the phases; the buffer is immutable during phases, so reads
-  need no locks and there is one writer goroutine.
+- **Release, materialise, compute.** The data layer stages and releases ahead in rows beyond the
+  released head. On dequeue, `data.Next()` applies the event's revisions and aggregates, then the
+  engine runs the phases and reads the next event only once they finish. The data layer writes only
+  rows beyond the released head and the engine side only released rows, so no locks are needed.
 - **Dirty sets drive work.** A frame event carries the legs that closed and the cells revised.
   Features step only dirty streams, cross features run when an input is dirty and their sampling
-  clock fires, strategies wake when their subs or keys change. Without this every frame costs
-  N × F — a 1d stream beside 1m streams would recompute 1440× per candle.
+  clock fires, strategies wake when their subs or keys change. Without this a `Late` frame would
+  recompute every stream instead of the revised ones.
 - **Determinism** holds at any worker count provided every phase merges its outputs in a fixed order.
 
 ### Frame record rules
@@ -188,11 +193,12 @@ for {
 
 | Status | Meaning | Features | Strategies / downstream |
 |---|---|---|---|
-| `Current` | Newest column, first dispatch | Step | Step |
-| `Late` | Column dispatched behind newer ones, or revised | Recompute range | Skip |
+| `Current` | Newest column, first release | Step | Step |
+| `Late` | Revision of a released column | Recompute range | Skip |
 | `Backfill` | Startup warm-up; catch-up after reconnect or overrun | Step | Skip |
 
-`Backfill` bypasses the pacer; the first frame after catch-up is `Current`. Overrun is frames
+Each status combines with `Complete` / `Partial`. `Backfill` bypasses the pacer; the first frame
+after catch-up is `Current`. Overrun is frames
 arriving faster than steps complete — rare in steady state at candle timeframes, routine during
 warm-up and reconnect backfills.
 
@@ -215,8 +221,9 @@ warm-up and reconnect backfills.
   node) runs after a barrier.
 - **`Dependencies()` becomes `(key, depth)`**, so the buffer sizes each feature's ring to its deepest
   reader.
-- **Cross features declare a sampling clock** (close of all legs, or a named timeframe). Forward-filled
-  legs otherwise bias them — a 1h correlation in a group with a 5m stream sees each value 12×.
+- **Cross features declare a sampling clock** (every column, or a window step). Rolling legs update
+  every column, so a correlation of rolling 1h returns sampled every minute uses overlapping
+  windows; sampling at the window step avoids it.
 - Running tier 0 on arrival, before alignment, was considered for latency; unnecessary at candle
   timeframes, where compute is far below the alignment wait.
 
@@ -241,8 +248,9 @@ API, storage layout, write discipline and invariants of the `FrameBuffer` are in
 Rule: whatever changes frame content or status belongs to the data layer; whatever changes only when
 frames are consumed belongs to the engine. Replay output is therefore identical under any pacing.
 
-- **Watermark (data layer).** A column is released when complete (fast path) or when the watermark
-  passes it (deadline path, with the legs present); data for a column below the watermark is `Late`.
+- **Watermark (data layer).** A column is released when complete (fast path) or once every missing
+  stream is proven or presumed missing (`Partial`); data for an already-released column is `Late`.
+  Release rule in [[data-layer-v2]] § Release.
   - Live: wall clock − allowed lateness, per venue or timeframe; needs timers, since a deadline can
     expire with no data arriving.
   - Replay: data time — the minimum next-candle `CloseTs` across lanes. Exact; nothing is ever late.
@@ -284,12 +292,11 @@ type Watermark interface {
 
 ### Live specifics
 
-1. Never block a provider's socket reader: the provider → aligner channel holds at least one boundary
-   burst (N), and the aligner sustains it (~1 ms per burst with counter readiness). A slow engine
-   queues frame events — the `Backfill` case — rather than stalling ingestion.
+1. Backpressure reaches the providers: each provider's buffered output absorbs a slow data layer,
+   then drops once full, so its source is never blocked. Sized for at least one boundary burst; the
+   aligner sustains a burst in ~1 ms with counter readiness.
 2. The frame-event queue normally holds 0–1; its depth measures overrun.
-3. Aligner and ring storage in each stream's own candle units.
-4. Allocation-free hot path, to keep GC out of tail latency.
+3. Allocation-free hot path, to keep GC out of tail latency.
 
 Live compute matters only for heavy cross features — a 1000×1000 covariance update is ~500k pair
 updates per frame, PCA is O(n³) — which run asynchronously with results landing in a later frame, or
@@ -307,9 +314,9 @@ Readiness alone accounts for ~34 min of a 1000-stream backtest run.
 - **Recursive features under `Late`** — save state per column across the window, or accept revisions
   going forward only?
 - **Overrun policy** — coalesce pending frames into one step (union of dirty sets; features see every
-  close, strategies the latest) versus queue and process each.
-- **Allowed lateness** — values per venue / timeframe; what a deadline-released frame records for a
-  missing leg (forward-fill with a per-leg freshness flag?).
+  close, strategies the latest) versus queue and process each. Bounded by the `FrameBuffer` headroom
+  and its live policy when exhausted ([[data-layer-v2]] § Capacity).
+- **Allowed lateness** — values per venue / timeframe; hardcoded for now ([[data-layer-v2]]).
 - **Live sharding** — what is an independent stream group once cross features link streams?
   Connected components of the feature / strategy dependency graph?
 - **Frame view and dirty-set representation** at scale.

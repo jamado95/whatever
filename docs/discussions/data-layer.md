@@ -117,7 +117,7 @@ option 2 or 3 substantially more natural, so this should be settled before that 
 - Gap and integrity handling: missing candles, exchange halts, duplicate timestamps, and malformed candles (e.g. zero `CloseTs`). `SortedWindow` accepts out-of-order and duplicate entries, and rejects only zero-timestamp candles — which the feature chain now drops-and-warns defensively ([[features]]), a downstream stopgap rather than validation. Robustness work to review: should the provider guarantee a contiguous, deduplicated, monotonic, well-formed sequence at ingestion, or should the engine validate? Ingestion is the natural boundary, since a candle that fails here should never reach features at all.
 - Does the data layer own historical warm-up (fetch N candles before live start so features have
   lookback), or is that the engine's job?
-- FX and equities need session/calendar awareness (market hours, holidays) that crypto does not. Does that belong here or in a separate calendar service?
+- FX and equities need session/calendar awareness (market hours, holidays) that crypto does not. Does that belong here or in a separate calendar service? Deferred: to be added later as a module inside the data layer ([[data-layer-v2]]).
 
 ## WIP
 
