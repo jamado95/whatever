@@ -88,7 +88,7 @@ end-to-end.
 | Bound by | CPU throughput | Waiting on data and venue |
 | Clock | Data-driven, as fast as possible | Wall clock / venue |
 | Backpressure | Pull, to the source | Never upstream of the aligner |
-| Ordering | Precomputed frame index or heap merge, no deadline | Window + deadline |
+| Ordering | `OrderedFanIn` (heap) over provider outputs, no deadline | Arrival order + deadline |
 | `Late` | Never occurs | Bounded recompute |
 | Buffers | Rings; shared memory-mapped dataset | Rings + aligner window + frame-event queue |
 | Parallelism | Across runs; share data, frame index, fixed features | Within a step, only for heavy features |
@@ -144,7 +144,8 @@ providers ──▶│ ingest ──▶ aligner (readiness, watermark) ──▶
                                 features ──▶ strategies ──▶ portfolio/risk ──▶ execution ──▶ fills
 ```
 
-1. **Ingestion** — one provider instance per direct subscription, all at one timeframe. Concurrent;
+1. **Ingestion** — one provider instance per direct subscription, at the grid timeframe or a
+   multiple of it ([[data-layer-v2]] § Cadence). Concurrent;
    under backpressure the provider's buffered output absorbs, then drops ([[data-layer-v2]] §
    Capacity).
 2. **Alignment** — readiness and the watermark decide when a column is released, with which status
