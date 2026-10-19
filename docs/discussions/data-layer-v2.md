@@ -19,11 +19,11 @@ Opened 2026-10-17.
 | Provider injection, one instance per sub | `cmd/wire.go` (`_providers`) | Module input |
 | `FeatureChain`'s `SortedWindow`, one per chain | `internal/domains/features/feature.go` | `FrameBuffer` history |
 | `syncState` matrix, `runV2`, readiness | `internal/flow/align/synchronizer_v2.go` | Staging and release stages |
-| `OrderedFanIn` linear-scan merge | `internal/flow/pipe/fanout.go` | Ordering stage (heap merge / precomputed index) |
+| `OrderedFanIn` linear-scan merge | `internal/flow/pipe/fanout.go` | Replay ordering stage: `OrderedFanIn` over all provider outputs, heap-based |
 | `Ticker` gate on the synchronizer output | `internal/engine/ticker.go` | Engine-side pacer ([[pipeline-runtime]]) |
 | Per-candle `map[string]any` snapshot | `internal/protocol/snapshot.go` | `FrameBuffer` feature entries |
-| Independent subscriptions per timeframe | `config.json` | One timeframe for all direct subscriptions; coarser ones derived |
-| Multi-timeframe column machinery (period map, owning columns, `2 × coarsest` window) | `internal/flow/align/synchronizer_v2.go` | One candle per stream per column |
+| Independent subscriptions per timeframe | `config.json` | Direct subscriptions at the grid timeframe or a multiple; derivations declared inside the direct subscription |
+| Multi-timeframe column machinery (period map, owning columns, `2 × coarsest` window) | `internal/flow/align/synchronizer_v2.go` | Per-stream cadence (due columns, last close); the window gives way to replay ordering ahead of staging |
 
 ### Rolling aggregation semantics
 
@@ -32,10 +32,12 @@ base time. Built only from closed base candles, so it is consistent with [[data-
 closed-candles-only decision.
 
 - **Window ≠ cadence.** Rolling 1h from 1m covers 60 minutes, updates every minute, and occupies the
-  grid as a 1m stream. The derived subscription's `Timeframe` is the window.
+  grid as a 1m stream. A derived stream updates at every close of its source — rolling 1d from a
+  direct 1h updates hourly. The derived subscription's `Timeframe` is the window.
 - **Stepped history.** Consecutive rolling candles share `W−1` base candles. 14 hourly periods
   ending now means every 60th rolling candle (`t, t−60, t−120, …`) — hourly bars phase-shifted to the
-  current minute, not the last 14 rolling candles.
+  current minute, not the last 14 rolling candles. Reads derive this step from the timeframe
+  (Decisions § FrameBuffer).
 - **Closed bars come free.** For UTC-aligned windows the rolling candle at a boundary column is the
   closed bar. Session-defined FX / equity days need a calendar (out of scope, see Decisions).
 - **A revised base candle at `c` revises `W` derived candles** — columns `c … c+W−1`.
@@ -44,17 +46,40 @@ closed-candles-only decision.
 - **Statistics:** returns over overlapping windows are autocorrelated by construction; backtest
   significance tests on them must account for it.
 
-### Why a single direct timeframe
+### Cadence: direct streams coarser than the grid
 
-All direct streams share one timeframe — the finest data, and the grid — and every coarser series is
-derived. This removes cold-start skew between a symbol's timeframes (all start at the base's first
-column), removes coarse-candle gaps (a derived stream's gaps are exactly its base's), keeps
-timeframes consistent by construction and needs one provider stream per symbol. Every direct stream
-closes in every column, so the multi-timeframe machinery of today's synchronizer disappears:
-readiness is a per-column count against the active direct streams, and each column has one deadline.
+The grid is the finest direct timeframe. A direct subscription may be coarser — a source without
+finer data — and each stream updates at its own cadence:
 
-Consequence: a source with only coarse history sets the resolution for the whole run — a 1d-only
-venue means a 1d grid, or leaving that source out.
+```
+column          10:58  10:59  11:00  11:01 … 11:59  12:00
+BTC 1m            F      F      F      F       F      F
+X 1h  (direct)    c      c      F      c       c      F    F = updates here
+X 1h  (rolling)   F      F      F      F       F      F    c = carries its last update
+```
+
+- **Placement is unchanged.** A 1h bar closing at 10:59:59.999 lands in column 11:00 (`ceilDiv`), the
+  frame of the 1m bars closing at the same instant. It becomes visible when 11:00 is released — never
+  at 10:30.
+- **A coarse direct stream is expected only at its due columns**; between them it carries its last
+  close. Readiness stays a per-column count, against the streams due at that column.
+- **Two proofs that a coarse stream has nothing at a non-due column:** its cadence (both modes), and
+  in replay its next bar waiting in the merge. Leg states need the cadence in both modes; live has
+  nothing else.
+- **Replay skew is the merge's job.** Fed at equal candles/s, a 1h lane runs 60× faster in data time
+  than a 1m lane. `OrderedFanIn` pulls by data time: the 1h lane's next bar waits in the merge and its
+  provider blocks, so lanes advance together whatever their feed speed. Per-lane tickers are gone;
+  pacing is engine-side.
+- **Staging cannot absorb skew.** Under arrival order the fast lane fills headroom beyond the released
+  head, which only the slow lane's data advances; the data layer blocks, the slow lane can no longer
+  deliver, and the run deadlocks (today's V2 window evicts instead — incomplete frames). Ordering
+  must precede staging; with it, staging runs about one column ahead of the released head.
+- **Live has no such skew** — a lane cannot run ahead of the wall clock — except startup history (Open
+  Questions § Warm-up ownership).
+
+**Derive where possible.** Coarser series of a (symbol, provider) that has finer data are derived,
+not subscribed: no cold-start skew between its timeframes, gaps exactly the base's, consistent by
+construction, one provider stream.
 
 ## Decisions
 
@@ -70,14 +95,18 @@ venue means a 1d grid, or leaving that source out.
 
 ### Subscriptions and the grid
 
-- **One timeframe for all direct subscriptions** — the finest data, and the grid. One direct
-  subscription per (symbol, provider). Every coarser timeframe is a derived rolling subscription
-  whose window is an integer multiple of it. Both are validated at the composition root.
-- **Derived subscriptions** name their source with `"from"` and have no provider. ID:
+- **The grid is the finest direct timeframe.** Every direct timeframe is an integer multiple of it.
+  One direct subscription per (symbol, provider). Validated at the composition root.
+- **Derivations are declared inside the direct subscription's config** — rolling windows, each an
+  integer multiple of the source's timeframe; a coarse direct stream is a source like any other. ID:
   `symbol:timeframe:derived_<source ID>`, e.g. `BTCUSDT:1h:derived_BTCUSDT:1m:binance`.
 - **A frame is the state of every registered stream at one moment** — market legs plus their
-  features, strategy signals and other records — on a grid at the direct timeframe. Every direct
-  stream closes in every column; streams are always time-aligned within a frame.
+  features, strategy signals and other records — on the grid. Streams are always time-aligned within
+  a frame; each updates at its own cadence.
+- **Cadence.** A direct stream of period `P` is due at columns where `c % P == 0`: bars are assumed
+  UTC-aligned, crypto style. A derived stream updates at every close of its source. Between updates a
+  leg carries its last update; fresh versus carried is inferred from the stream's kind (direct /
+  derived) and cadence — no extra leg state.
 
 ### Aggregation
 
@@ -89,24 +118,41 @@ venue means a 1d grid, or leaving that source out.
 
 - **Frames are emitted strictly in column order**, each with a status — `Current`, `Late`,
   `Backfill` — and a separate completeness flag — `Complete`, `Partial`.
-- **A column is released once every expected stream is decided at it**: present, proven missing (the
-  stream already has data beyond it), or presumed missing (live deadline passed). `Complete` if all
-  present, otherwise `Partial`.
+- **A column is released once every direct stream due at it is decided**: present, proven missing
+  (the stream already has data beyond it), or presumed missing (live deadline passed). Streams not due
+  are not waited on; a live deadline applies only at a stream's due columns.
+- **Completeness is by last due candle:** `Complete` if every active stream's latest due candle at or
+  before the column is present, otherwise `Partial`. A missing 1h bar makes its whole hour `Partial`.
 - **`Current` is the newest column; `Late` is a revision of a released column and carries that
   column.** If `c+1` is complete while `c` is not, `c` is already decided: `c` goes out
   `Current` + `Partial`, then `c+1` `Current` + `Complete`. Data later arriving for `c` re-emits it
   `Late` + `Complete` / `Partial`.
-- **One release stage, one rule; ordering and watermark are injected per mode.** Replay: heap merge
-  and data watermark (minimum next close across lanes). Live: arrival order and clock − lateness.
+- **One release stage, one rule; ordering and watermark are injected per mode.** Replay: ordered merge,
+  watermark from the merged stream's order. Live: arrival order (`FanIn`) and clock − lateness.
+- **Replay ordering is `OrderedFanIn` across all provider output channels**, its output channelled to
+  the release stage. The merged stream is globally time-ordered, so the first candle beyond column `c`
+  proves no lane has anything left at or before `c`: `c` is decided, and any stream without a candle
+  at `c` is `Gap`. The merge requires:
+  - an **end-of-lane marker**, so a closed lane's stream leaves the expected set instead of reading as
+    missing in every later column;
+  - **releasing the final column when the merged channel closes**, since no later candle will arrive;
+  - a **heap** in place of the linear scan of heads (56 vs 356 ns per candle at 1000 streams).
+- **Replay ordering precedes staging** and covers coarse lanes with no special case; staging only
+  bounds skew, it cannot absorb it (Cadence).
+- **Live does not use `OrderedFanIn`:** it waits while any open lane has no pending candle, so one
+  silent stream would stall all of them.
 - **Live has two release triggers** feeding one in-order release loop: the *data trigger* releases
   columns that are complete or whose gaps are proven, as data arrives; the *clock trigger* releases
   every unreleased column up to `now − lateness` when a deadline expires, marking still-undecided
   legs `Pending`. Replay uses only the data trigger.
 - **Partial and Complete frames reach every component**; each decides what to do with them.
-- **Lanes are assumed time-ordered.** Replay relies on it — gaps are proven from merge heads and no
-  `Late` occurs; a live lane delivering out of order is repaired by `Late`.
-- **An ended stream leaves the expected set.** A stream that has not started yet counts as missing —
-  frames before its first candle are `Partial`.
+- **Lanes are assumed time-ordered.** Replay relies on it — gaps are proven from the merged order and
+  no `Late` occurs; a live lane delivering out of order is repaired by `Late`.
+- **An ended stream leaves the expected set**; its leg is `Ended` from then on and does not count
+  toward completeness. A stream that has not started yet counts as missing — frames before its first
+  candle are `Partial`.
+- **Leg states:** `Fresh`, `Gap` (proven missing), `Pending` (presumed missing at a live deadline),
+  `Ended`.
 - **Live lateness is a hardcoded value** for now.
 - **Session calendars are out of scope.** Closed markets look like silent streams (`Pending`,
   `Partial`) until a calendar exists; it can be added later as a module inside the data layer.
@@ -150,6 +196,18 @@ venue means a 1d grid, or leaving that source out.
 - **Revision metadata** records whether a column was revised and which legs changed.
 - **Fills and order updates** are written through the execution section's writer; they do not pass
   through ingestion or alignment.
+- **Stream-major layout:** each stream's rows are contiguous in time, so history reads are
+  contiguous and a cross-stream read at one column is strided. Internal to the buffer, behind `View`.
+- **Typed record sections via generics** — `Section[Signal]`, `Section[Order]`, `Section[Fill]`,
+  written through `RecordWriter[T]` and read with `Records(view, section)` (Go methods cannot take type
+  parameters).
+- **Writers are scoped to their owner:** a feature's writer writes only its own key; a strategy's
+  signal writer stamps its own ID.
+- **History reads derive their step from the stream's timeframe** — timeframe ÷ grid, counted back
+  from the stream's latest update at or before the view's column. A rolling 1h reads `c, c−60, …`; a
+  direct 1h at 10:30 reads `10:00, 9:00, …`. Feature history takes its stream's step, so a recursive
+  feature on a rolling stream reads its previous same-phase value. Reads are declared in bars;
+  rows = bars × step.
 
 ## Solution
 
@@ -172,9 +230,9 @@ providers ─▶ ingest ─▶ normalise ─▶ order ─▶ stage ─▶ ready 
 |---|---|---|---|
 | Ingest | Provider ingestion | Provider goroutine | Provider lifecycle, `ReceivedAt`, errors. Under backpressure the provider's buffered output absorbs, then drops |
 | Normalise | Alignment | Lane | Validate, map `CloseTs` to its column (`ceilDiv`), drop identical duplicates, scale µs timestamps ([[data-layer]] defect 7) |
-| Order | Buffer ordering logic | Aligner | Replay: heap merge or precomputed frame index. Live: arrival order |
+| Order | Buffer ordering logic | Merge goroutine → aligner | Replay: `OrderedFanIn` (heap) over provider outputs, with end-of-lane markers. Live: `FanIn`, arrival order |
 | Stage | Buffer ordering logic | Aligner | Write base candles into `FrameBuffer` rows beyond the released head; per-row presence count and each stream's latest column replace `syncState` |
-| Ready | Frame alignment / readiness | Aligner | Decide each base stream per column; set completeness and leg states |
+| Ready | Frame alignment / readiness | Aligner | Decide each direct stream due at the column; set completeness (last due candles) and leg states |
 | Commit | Commit | Aligner | Mark ready columns released and emit their events in column order; a candle for a released column becomes a `Late` event |
 | Materialise | Aggregation | Engine goroutine, in `Next()` | `Late`: write revised base candles, recompute affected derived rows up to the last processed column, record revision metadata. Otherwise: aggregate the column's derived legs |
 
@@ -184,7 +242,7 @@ providers ─▶ ingest ─▶ normalise ─▶ order ─▶ stage ─▶ ready 
   their own event is processed, so they pick up revisions without extra work.
 - **Publication.** Rows staged by the data layer become visible to the engine through the event's
   channel send; views are pinned at or below the engine's column, never ahead of the released head.
-- **Only base (direct) streams are in the expected set.** Derived legs are functions of base legs and
+- **Only direct streams, at their due columns, are in the expected set.** Derived legs are functions of base legs and
   inherit their state, so aggregating after readiness changes no release decision.
 - Release follows the watermark model in [[pipeline-runtime]] § Clock. The aligner never reads
   `time.Now()`.
@@ -192,7 +250,7 @@ providers ─▶ ingest ─▶ normalise ─▶ order ─▶ stage ─▶ ready 
 
 ### Release rule
 
-For column `c`, each expected base stream is:
+For column `c`, each direct stream due at `c` is:
 
 | State | Condition | Leg state |
 |---|---|---|
@@ -233,15 +291,17 @@ for next := head + 1; decided(next) || next <= watermark; next++ {
 | Stream skips a candle, then sends the next | Proven gap: `Current` + `Partial` immediately |
 | Stream goes silent (live) | Deadline: `Current` + `Partial` (`Pending`); arrival re-emits `Late` |
 | Stream not started yet | `Partial` until its first candle |
+| Coarse direct stream between closes | Not waited on; carries its last close |
+| Coarse bar missing at its due column | `Gap` / `Pending` there; frames `Partial` until its next close |
 | Stream ends | Leaves the expected set |
 | Live lane out of order (`t+1 → t+3 → t+2`) | `t+2` `Current` + `Partial` (`Gap`), `t+3` `Current` + `Complete`; `t+2`'s arrival re-emits it `Late` + `Complete` |
 | Several streams miss one column | `Partial` with each missing leg; one `Late` per arrival (`Partial` until the last, then `Complete`); other streams' columns unaffected |
-| Replay | Gaps proven instantly from the merge; no deadline, no `Pending`, no `Late` |
+| Replay | A gap is proven by the first merged candle beyond its column; no deadline, no `Pending`, no `Late` |
 
 | | Backtest | Live |
 |---|---|---|
-| Ordering | Heap merge or precomputed frame index | Arrival order into staging |
-| Gap proof | Instant, from merge heads | Stream's follow-up arrival |
+| Ordering | `OrderedFanIn` (heap) over provider outputs | `FanIn`, arrival order into staging |
+| Gap proof | First merged candle beyond the column | Stream's follow-up arrival |
 | Deadline | None | Hardcoded lateness |
 | Revisions | Never | Any column still in the buffer |
 
@@ -278,20 +338,39 @@ column" is checked rather than assumed by consumers.
 ### FrameBuffer
 
 ```go
-// Owned by the data layer; engine phases receive a View plus one writer, never the buffer.
+// Stream-major ring: legs[s*depth + slot], one feature array per key.
+type FrameBuffer struct {
+    depth    int64
+    cols     []int64      // [depth] column held by each slot; -1 = empty
+    meta     []rowMeta    // [depth] released, complete, presence count, revised bitset
+    legs     []leg        // [S*depth]
+    feats    [][]float64  // [K][S*depth]
+    recs     sections     // typed per-row record lists
+    consumed atomic.Int64 // last column the engine fully processed
+}
+
+type leg struct {
+    c     proto.Candle
+    state LegState // Fresh | Gap | Pending | Ended
+    age   uint32   // rows since the stream's last Fresh candle
+    count uint16   // derived streams: base candles in the window
+}
+
+// Components receive a View plus their own writer, never the buffer.
 type View interface { // pinned: sees only columns ≤ Col()
     Col() int64
-    Status() Status
     Complete() bool
-    Leg(stream int) (proto.MarketData, LegState)
-    Candles(stream, n, step int) []proto.Candle // step > 1 for rolling windows
-    Feature(stream, slot, n, step int) []float64
-    Records(sec Section) []Record
+    Leg(stream int) (c proto.Candle, s LegState, age int) // missing: last Fresh candle and its age
+    Candles(stream, n int, dst []proto.Candle) []proto.Candle // n bars; step from the stream's timeframe
+    Feature(key FeatureKey, stream, n int, dst []float64) []float64
     Revised() []int // streams whose legs changed at Col; empty if never revised
 }
 
-type FeatureWriter interface{ Set(stream, slot int, v float64) } // features phase, current column
-type RecordWriter interface{ Append(recs ...Record) }             // one per section: signals, orders, fills
+type FeatureWriter interface{ Set(stream int, v float64) } // bound to one feature key
+
+type Section[T any] struct{ id int }                   // Signals, Orders, Fills
+type RecordWriter[T any] interface{ Append(recs ...T) } // bound to the current column and the owner's ID
+func Records[T any](v View, s Section[T]) []T
 ```
 
 - **Pinned views** stop look-ahead: a phase at column `c` cannot read `c+1`.
@@ -299,15 +378,23 @@ type RecordWriter interface{ Append(recs ...Record) }             // one per sec
   Feature workers may write disjoint cells in parallel; the phase barrier publishes them. Tests run
   with `go test -race`.
 - **Layout is built before `Start`:** the stream table from the data layer, feature slots and each
-  reader's `(depth, step)` from the feature graph and strategies.
+  reader's depth in bars from the feature graph and strategies; the step comes from the stream's
+  timeframe.
 - **Depth must also cover** the largest rolling window `W`, since aggregation reads base history from
   the buffer.
 - **Headroom keeps staging off readable history.** Staged writes wrap the ring onto the oldest rows;
   headroom ensures those rows are beyond every declared read of the column being processed.
 - **A declared depth beyond the 365-day cap** is a construction error, not a silent truncation.
+- **Reads copy into a caller-supplied slice** (`dst`): a ring wrap splits history into two segments,
+  and the hot path should not allocate.
+- **Mixed-timeframe cross reads.** A rolling and a direct stream of one timeframe line up only at the
+  direct stream's closes, so a cross feature mixing them samples there ([[pipeline-runtime]] § Features
+  phase, sampling clock).
 - **Memory.** A row holds every stream, so the cost is rows × streams × (candle + feature entries) at
   the finest grid. E.g. a 200-day read on a rolling 1d over a 1m grid needs 288,000 rows; at 200
-  streams and 10 features that is ≈ 7.8 GB. The physical layout is an implementation detail.
+  streams and 10 features that is ≈ 7.8 GB. A deep read on a coarse direct stream costs the same grid
+  rows for every stream; the stream-major layout leaves room for a per-stream stride. The physical
+  layout is an implementation detail.
 
 ## Open Questions
 
@@ -322,10 +409,15 @@ type RecordWriter interface{ Append(recs ...Record) }             // one per sec
   and units undecided.
 - **Provider drop contract** — buffer size per provider, whether drops are reported (e.g. on the
   error channel), and whether sustained drops raise an overload signal so risk can halt trading.
-- **Ended stream's leg** — what a frame shows for a stream after it leaves the expected set.
 - **Warm-up ownership** — `Backfill` implies the data layer drives historical warm-up ([[data-layer]]).
-- **`Layout` declaration** — how features and strategies declare `(depth, step)`.
-- **`Record` typing** — typed sections for signals, orders and fills, or a generic record.
+  Startup history has replay's skew — a 1h lane's history spans 60× the data time of a 1m lane's —
+  so under arrival order it deadlocks staging (Cadence); it must go through the ordered merge.
+- **`Layout` declaration** — how features and strategies declare depth in bars per stream.
+- **Derivation config** — key name and shape of the derivations declared inside a direct
+  subscription.
+- **Non-UTC-aligned bars** (deferred) — FX / equity daily bars close at a session time that moves in
+  UTC with daylight saving. Options: infer an offset per stream, or place each bar at the next UTC
+  due column (a delay, never early).
 - **Multiplexing providers** — `Init([]Subscription)` from [[data-layer]] still open; the module's
   input edge should not preclude it.
 - **Exporter** — read from the `FrameBuffer` directly?
