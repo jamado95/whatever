@@ -89,3 +89,16 @@ func TestBuildUnresolvedStrategySubscription(t *testing.T) {
 		t.Fatalf("expected an unresolved-subscription error, got: %v", errs)
 	}
 }
+
+func TestBuildDataLoggerRejectsDerivations(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []config.ComponentConfig{csvProvider("binance_csv")},
+		Subscriptions: []proto.Subscription{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe5m, Provider: "binance_csv",
+			Derive: proto.NewTimeframeDerivationSet(proto.Timeframe1h)}},
+		Engine: config.EngineConfig{Type: "data_logger"},
+	}
+	_, errs := build(cfg, testLogger())
+	if !hasError(errs, "derived subscriptions are not supported") {
+		t.Fatalf("expected a derivations-not-supported error, got: %v", errs)
+	}
+}

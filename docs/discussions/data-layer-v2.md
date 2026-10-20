@@ -95,11 +95,20 @@ construction, one provider stream.
 
 ### Subscriptions and the grid
 
-- **The grid is the finest direct timeframe.** Every direct timeframe is an integer multiple of it.
-  One direct subscription per (symbol, provider). Validated at the composition root.
-- **Derivations are declared inside the direct subscription's config** — rolling windows, each an
-  integer multiple of the source's timeframe; a coarse direct stream is a source like any other. ID:
-  `symbol:timeframe:derived_<source ID>`, e.g. `BTCUSDT:1h:derived_BTCUSDT:1m:binance`.
+- **The grid is the finest direct timeframe**, computed when the stream table is built. Every
+  direct timeframe is a multiple of it by the closed timeframe enum.
+- **Derivations are declared on the direct subscription** — `"derive": ["1h", "1d"]`, held in
+  `proto.Subscription.Derive` as a `TimeframeDerivationSet` (a `uint8` bitmap, so `Subscription`
+  stays small and comparable). Rolling windows only; a coarse direct stream is a source like any
+  other.
+- **Config parsing validates subscriptions:** stream IDs are unique — a symbol may have several
+  direct timeframes on one provider; each derived window is coarser than its source and a multiple of
+  it; provider names may not start with `derived_`.
+- **The stream table is built by the data layer** (`data.NewStreams`), never by the composition
+  root: one stream per direct subscription and per derived window, direct streams first, then
+  derived, each sorted by ID. A derived stream's ID is `symbol:timeframe:derived_<source ID>`, e.g.
+  `BTCUSDT:1h:derived_BTCUSDT:1m:binance`, assigned only there. Strategy references stay direct-only
+  until the strategy layer decides otherwise.
 - **A frame is the state of every registered stream at one moment** — market legs plus their
   features, strategy signals and other records — on the grid. Streams are always time-aligned within
   a frame; each updates at its own cadence.
@@ -413,8 +422,6 @@ func Records[T any](v View, s Section[T]) []T
   Startup history has replay's skew — a 1h lane's history spans 60× the data time of a 1m lane's —
   so under arrival order it deadlocks staging (Cadence); it must go through the ordered merge.
 - **`Layout` declaration** — how features and strategies declare depth in bars per stream.
-- **Derivation config** — key name and shape of the derivations declared inside a direct
-  subscription.
 - **Non-UTC-aligned bars** (deferred) — FX / equity daily bars close at a session time that moves in
   UTC with daylight saving. Options: infer an offset per stream, or place each bar at the next UTC
   due column (a delay, never early).
@@ -424,7 +431,8 @@ func Records[T any](v View, s Section[T]) []T
 
 ## WIP
 
-- Nothing implemented, no plan.
+- Plan: `docs/plans/data-layer-v2/main.md`. Stage 1 (subscription model, stream table)
+  implemented — `docs/plans/data-layer-v2/stage-1-streams.md`.
 
 ## Resources
 
