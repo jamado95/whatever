@@ -151,3 +151,58 @@ func TestNoSubscriptionsRejected(t *testing.T) {
 		t.Fatalf("expected an empty-subscriptions error, got: %v", err)
 	}
 }
+
+func TestLoadDerive(t *testing.T) {
+	body := `{
+      "providers": [{ "type": "binance_csv", "file": "x.csv" }],
+      "subscriptions": [{ "symbol": "BTCUSDT", "timeframe": "5m", "provider": "binance_csv", "derive": ["1h", "1d"] }],
+      "engine": { "type": "data_logger" }
+    }`
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := cfg.Subscriptions[0].Derive, proto.NewTimeframeDerivationSet(proto.Timeframe1h, proto.Timeframe1d); got != want {
+		t.Errorf("derive = %v, want %v", got.List(), want.List())
+	}
+}
+
+func TestDeriveNotCoarserRejected(t *testing.T) {
+	for _, derive := range []string{"1h", "5m"} {
+		body := `{
+      "providers": [{ "type": "binance_csv", "file": "x.csv" }],
+      "subscriptions": [{ "symbol": "BTCUSDT", "timeframe": "1h", "provider": "binance_csv", "derive": ["` + derive + `"] }],
+      "engine": { "type": "data_logger" }
+    }`
+		_, err := Load(writeConfig(t, body))
+		if err == nil || !strings.Contains(err.Error(), "must be coarser") {
+			t.Errorf("derive %s from 1h: expected a must-be-coarser error, got: %v", derive, err)
+		}
+	}
+}
+
+func TestSymbolTimeframesOnOneProviderAccepted(t *testing.T) {
+	body := `{
+      "providers": [{ "type": "binance_csv", "file": "x.csv" }],
+      "subscriptions": [
+        { "symbol": "BTCUSDT", "timeframe": "5m", "provider": "binance_csv" },
+        { "symbol": "BTCUSDT", "timeframe": "1h", "provider": "binance_csv" }
+      ],
+      "engine": { "type": "data_logger" }
+    }`
+	if _, err := Load(writeConfig(t, body)); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+}
+
+func TestDerivedProviderPrefixRejected(t *testing.T) {
+	body := `{
+      "providers": [{ "type": "binance_csv", "name": "derived_x", "file": "x.csv" }],
+      "subscriptions": [{ "symbol": "BTCUSDT", "timeframe": "1h", "provider": "derived_x" }],
+      "engine": { "type": "data_logger" }
+    }`
+	_, err := Load(writeConfig(t, body))
+	if err == nil || !strings.Contains(err.Error(), "must not start with") {
+		t.Fatalf("expected a reserved-prefix error, got: %v", err)
+	}
+}

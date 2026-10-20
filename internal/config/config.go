@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	proto "whatever/internal/protocol"
 )
@@ -155,6 +156,18 @@ func (c *Config) validate() error {
 			return fmt.Errorf("subscriptions[%d]: duplicate subscription %q", i, s.ID())
 		}
 		seen[s.ID()] = true
+
+		// Each derived window must be coarser than its source and a multiple of it.
+		for _, tf := range s.Derive.List() {
+			if tf.TimeframeMs() <= s.Timeframe.TimeframeMs() {
+				return fmt.Errorf("subscriptions[%d] (%s): derive %q must be coarser than %q",
+					i, s.ID(), tf, s.Timeframe)
+			}
+			if tf.TimeframeMs()%s.Timeframe.TimeframeMs() != 0 {
+				return fmt.Errorf("subscriptions[%d] (%s): derive %q must be a multiple of %q",
+					i, s.ID(), tf, s.Timeframe)
+			}
+		}
 	}
 
 	// Provider instance names must be unique so a subscription's provider
@@ -166,6 +179,11 @@ func (c *Config) validate() error {
 		}
 		if names[p.Name] {
 			return fmt.Errorf("providers[%d]: duplicate provider name %q", i, p.Name)
+		}
+		// Reserved for derived streams, so their IDs never collide with direct ones.
+		if strings.HasPrefix(p.Name, proto.DerivedProviderPrefix) {
+			return fmt.Errorf("providers[%d]: name %q must not start with %q",
+				i, p.Name, proto.DerivedProviderPrefix)
 		}
 		names[p.Name] = true
 	}
