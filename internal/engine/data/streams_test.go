@@ -41,17 +41,17 @@ func TestStreamsEntries(t *testing.T) {
 	cases := []struct {
 		id     string
 		kind   Kind
-		step   int64
-		source string // ID of the source stream; "" for direct
+		period int64
 		window int64
+		source string // ID of the source stream; "" for direct
 	}{
-		{id: "BTCUSDT:5m:btc_5m", kind: Direct, step: 1},
-		{id: "BTCUSDT:1h:btc_1h", kind: Direct, step: 12},
-		{id: "ETHUSDT:1d:eth_1d", kind: Direct, step: 288},
-		{id: "BTCUSDT:1h:derived_BTCUSDT:5m:btc_5m", kind: Derived, step: 12,
-			source: "BTCUSDT:5m:btc_5m", window: 12},
-		{id: "BTCUSDT:1d:derived_BTCUSDT:1h:btc_1h", kind: Derived, step: 288,
-			source: "BTCUSDT:1h:btc_1h", window: 24},
+		{id: "BTCUSDT:5m:btc_5m", kind: Direct, period: 1, window: 1},
+		{id: "BTCUSDT:1h:btc_1h", kind: Direct, period: 12, window: 1},
+		{id: "ETHUSDT:1d:eth_1d", kind: Direct, period: 288, window: 1},
+		{id: "BTCUSDT:1h:derived_BTCUSDT:5m:btc_5m", kind: Derived, period: 1, window: 12,
+			source: "BTCUSDT:5m:btc_5m"},
+		{id: "BTCUSDT:1d:derived_BTCUSDT:1h:btc_1h", kind: Derived, period: 12, window: 24,
+			source: "BTCUSDT:1h:btc_1h"},
 	}
 	if len(st.All) != len(cases) {
 		t.Fatalf("got %d streams, want %d", len(st.All), len(cases))
@@ -61,9 +61,9 @@ func TestStreamsEntries(t *testing.T) {
 		if s.Sub.ID() != c.id {
 			t.Errorf("%s: Sub.ID() = %q", c.id, s.Sub.ID())
 		}
-		if s.Kind != c.kind || s.Step != c.step || s.Window != c.window {
-			t.Errorf("%s: kind/step/window = %d/%d/%d, want %d/%d/%d",
-				c.id, s.Kind, s.Step, s.Window, c.kind, c.step, c.window)
+		if s.Kind != c.kind || s.Period != c.period || s.Window != c.window {
+			t.Errorf("%s: kind/period/window = %d/%d/%d, want %d/%d/%d",
+				c.id, s.Kind, s.Period, s.Window, c.kind, c.period, c.window)
 		}
 		wantSource := -1
 		if c.source != "" {

@@ -145,7 +145,7 @@ providers ──▶│ ingest ──▶ aligner (readiness, watermark) ──▶
 ```
 
 1. **Ingestion** — one provider instance per direct subscription, at the grid timeframe or a
-   multiple of it ([[data-layer-v2]] § Cadence). Concurrent;
+   multiple of it ([[data-layer-v2]] § Period). Concurrent;
    under backpressure the provider's buffered output absorbs, then drops ([[data-layer-v2]] §
    Capacity).
 2. **Alignment** — readiness and the watermark decide when a column is released, with which status
