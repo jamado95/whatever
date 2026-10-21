@@ -25,7 +25,7 @@ From [data-layer-v2.md](../../discussions/data-layer-v2.md) and
 - **Module `internal/engine/data`.** In: subscriptions and provider instances. Out: in-order frame
   events and the `FrameBuffer`. Stages: ingest → normalise → order → stage → ready → commit →
   materialise.
-- **Grid and cadence.** The grid is the finest direct timeframe; direct timeframes are integer
+- **Grid and period.** The grid is the finest direct timeframe; direct timeframes are integer
   multiples, bars UTC-aligned (`c % P == 0`). Derivations are rolling windows declared inside the
   direct subscription's config. Derived streams update at every close of their source.
 - **Release.** Strictly in column order. A column is released once every direct stream due at it is
@@ -62,7 +62,7 @@ From [data-layer-v2.md](../../discussions/data-layer-v2.md) and
 Tiered. Stage docs live beside this one, produced iteratively:
 
 - `stage-1-streams.md` — *implemented.*
-- `stage-2-framebuffer.md`
+- `stage-2-framebuffer.md` — *implemented.*
 - `stage-3-lanes.md`
 - `stage-4-release.md`
 - `stage-5-consumption.md`
@@ -106,18 +106,22 @@ data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature b
   with a path-named error; the table's step, window and order are unit-tested; the current run is
   unchanged.
 
-### Stage 2 — `FrameBuffer` core
+### Stage 2 — `FrameBuffer` core ✅ implemented
 
-- **Goal:** the stream-major ring of market legs and the pinned `View`.
-- **Touches:** new `internal/engine/data/buffer.go`, `view.go`.
-- **Contents:** slots by absolute column, row meta (released, complete, presence count), legs
-  (candle, state, age, window count); `View.Col`, `Complete`, `Leg`, `Candles(stream, n, dst)` with
-  the timeframe-derived step and anchoring; depth from declared reads in bars × step, the largest
-  window `W` and headroom; a depth beyond the 365-day cap is a construction error.
+- **Goal:** the market legs of every stream and the pinned `View`.
+- **Touches:** `internal/engine/data/streams.go` (`Period` and `Window` replace `Step`), new
+  `buffer.go`, `view.go` and their tests.
+- **Contents:** one ring per stream, one slot per update (`slot = (col / Period) % size`), each sized
+  from `lookback`, the largest derived window and headroom, the 365-day cap per stream; slots hold
+  the candle, state (`Fresh`, `Gap`, `Ended`), last `Fresh` column and window count; one write path,
+  `put`, ownership by convention. `View` (a struct): `Col`, `Boundary`, `Complete`, `Leg`, `Count`,
+  `Candles(stream, n, dst)` — newest first, one bar per step, gaps skipped. No per-column storage.
 - **Deferred:** revision metadata (iteration 2), feature entries and writers (iteration 4), record
   sections (out of scope).
-- **Acceptance:** unit tests for ring wrap, pinning (nothing beyond `Col`), stepped reads for a direct
-  coarse stream and a rolling stream, the cap error; `go test -race` clean.
+- **Acceptance:** construction and sizing, the write path, `Leg` / `Count` / `Candles` scenarios, no
+  allocations on reads, a writer-ahead concurrency test and a reference-model test; `go test -race`
+  clean.
+- Plan: `stage-2-framebuffer.md`.
 
 ### Stage 3 — lanes, normalisation, ordered merge
 
@@ -156,7 +160,7 @@ data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature b
   update (open `W` back, running volume, monotonic deques for high and low), window count below `W`
   during warm-up; marking the column consumed, which frees headroom; row ownership as decided.
 - **Acceptance:** at UTC boundaries a rolling 1h from 5m equals the closed 1h bar from the CSV; a
-  derivation of a coarse direct stream updates at its source's cadence; warm-up count; `-race` clean
+  derivation of a coarse direct stream updates at its source's period; warm-up count; `-race` clean
   with the aligner staging ahead.
 
 ### Stage 6 — `data_logger_v2` engine

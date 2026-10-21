@@ -23,7 +23,7 @@ Opened 2026-10-17.
 | `Ticker` gate on the synchronizer output | `internal/engine/ticker.go` | Engine-side pacer ([[pipeline-runtime]]) |
 | Per-candle `map[string]any` snapshot | `internal/protocol/snapshot.go` | `FrameBuffer` feature entries |
 | Independent subscriptions per timeframe | `config.json` | Direct subscriptions at the grid timeframe or a multiple; derivations declared inside the direct subscription |
-| Multi-timeframe column machinery (period map, owning columns, `2 × coarsest` window) | `internal/flow/align/synchronizer_v2.go` | Per-stream cadence (due columns, last close); the window gives way to replay ordering ahead of staging |
+| Multi-timeframe column machinery (period map, owning columns, `2 × coarsest` window) | `internal/flow/align/synchronizer_v2.go` | Per-stream period (due columns, last close); the window gives way to replay ordering ahead of staging |
 
 ### Rolling aggregation semantics
 
@@ -31,7 +31,7 @@ A rolling `W` window over a base stream emits one candle per base close, coverin
 base time. Built only from closed base candles, so it is consistent with [[data-layer]]'s
 closed-candles-only decision.
 
-- **Window ≠ cadence.** Rolling 1h from 1m covers 60 minutes, updates every minute, and occupies the
+- **Window span ≠ period.** Rolling 1h from 1m covers 60 minutes, updates every minute, and occupies the
   grid as a 1m stream. A derived stream updates at every close of its source — rolling 1d from a
   direct 1h updates hourly. The derived subscription's `Timeframe` is the window.
 - **Stepped history.** Consecutive rolling candles share `W−1` base candles. 14 hourly periods
@@ -46,10 +46,10 @@ closed-candles-only decision.
 - **Statistics:** returns over overlapping windows are autocorrelated by construction; backtest
   significance tests on them must account for it.
 
-### Cadence: direct streams coarser than the grid
+### Period: direct streams coarser than the grid
 
 The grid is the finest direct timeframe. A direct subscription may be coarser — a source without
-finer data — and each stream updates at its own cadence:
+finer data — and each stream updates at its own period:
 
 ```
 column          10:58  10:59  11:00  11:01 … 11:59  12:00
@@ -63,8 +63,8 @@ X 1h  (rolling)   F      F      F      F       F      F    c = carries its last 
   at 10:30.
 - **A coarse direct stream is expected only at its due columns**; between them it carries its last
   close. Readiness stays a per-column count, against the streams due at that column.
-- **Two proofs that a coarse stream has nothing at a non-due column:** its cadence (both modes), and
-  in replay its next bar waiting in the merge. Leg states need the cadence in both modes; live has
+- **Two proofs that a coarse stream has nothing at a non-due column:** its period (both modes), and
+  in replay its next bar waiting in the merge. Leg states need the period in both modes; live has
   nothing else.
 - **Replay skew is the merge's job.** Fed at equal candles/s, a 1h lane runs 60× faster in data time
   than a 1m lane. `OrderedFanIn` pulls by data time: the 1h lane's next bar waits in the merge and its
@@ -111,11 +111,11 @@ construction, one provider stream.
   until the strategy layer decides otherwise.
 - **A frame is the state of every registered stream at one moment** — market legs plus their
   features, strategy signals and other records — on the grid. Streams are always time-aligned within
-  a frame; each updates at its own cadence.
-- **Cadence.** A direct stream of period `P` is due at columns where `c % P == 0`: bars are assumed
+  a frame; each updates at its own period.
+- **Period.** A direct stream of period `P` is due at columns where `c % P == 0`: bars are assumed
   UTC-aligned, crypto style. A derived stream updates at every close of its source. Between updates a
   leg carries its last update; fresh versus carried is inferred from the stream's kind (direct /
-  derived) and cadence — no extra leg state.
+  derived) and period — no extra leg state.
 
 ### Aggregation
 
@@ -147,7 +147,7 @@ construction, one provider stream.
   - **releasing the final column when the merged channel closes**, since no later candle will arrive;
   - a **heap** in place of the linear scan of heads (56 vs 356 ns per candle at 1000 streams).
 - **Replay ordering precedes staging** and covers coarse lanes with no special case; staging only
-  bounds skew, it cannot absorb it (Cadence).
+  bounds skew, it cannot absorb it (Period).
 - **Live does not use `OrderedFanIn`:** it waits while any open lane has no pending candle, so one
   silent stream would stall all of them.
 - **Live has two release triggers** feeding one in-order release loop: the *data trigger* releases
@@ -199,24 +199,36 @@ construction, one provider stream.
 - **Owned by the data layer**, which exposes write access for features, strategies and execution.
 - **Capability passing:** components never receive the buffer. Each phase gets a read-only view plus
   only its own section's writer.
-- **One row per column**, holding every stream's leg, its feature entries and the column's records.
-  Depth is a single row count — the maximum depth declared by features and strategies plus headroom
-  (Capacity), capped at 365 days of rows at the grid timeframe.
+- **One ring per stream, one slot per update:** `slot = (col / Period) % size`. Each ring is sized to
+  its own stream's reads, so a coarse stream costs its own bars and one deep read no longer sets the
+  depth of every stream. Feature entries will follow the same rings (iteration 4).
+- **Stream shape: `Period` and `Window`** on the stream table. `Period` is the columns between a
+  stream's updates — a direct stream's timeframe ÷ grid, a derived stream's source `Period`;
+  `Window` is the updates one bar spans — 1 direct, source bars per window derived. A bar spans
+  `Period × Window` columns.
+- **Sizing:** `lookback` bars for every stream (the longest feature lookback); a direct stream keeps
+  at least its largest derived window + 1; each ring adds `ceil(headroom / Period)` slots — the most
+  the aligner can write ahead of the engine — plus one spare. The 365-day cap applies per stream; exceeding it is a construction error naming the stream.
+- **No per-column storage.** `Complete` travels with the event and its `View`; the released head and
+  the presence count are the aligner's own state.
 - **Revision metadata** records whether a column was revised and which legs changed.
 - **Fills and order updates** are written through the execution section's writer; they do not pass
   through ingestion or alignment.
-- **Stream-major layout:** each stream's rows are contiguous in time, so history reads are
-  contiguous and a cross-stream read at one column is strided. Internal to the buffer, behind `View`.
 - **Typed record sections via generics** — `Section[Signal]`, `Section[Order]`, `Section[Fill]`,
   written through `RecordWriter[T]` and read with `Records(view, section)` (Go methods cannot take type
   parameters).
 - **Writers are scoped to their owner:** a feature's writer writes only its own key; a strategy's
   signal writer stamps its own ID.
-- **History reads derive their step from the stream's timeframe** — timeframe ÷ grid, counted back
-  from the stream's latest update at or before the view's column. A rolling 1h reads `c, c−60, …`; a
-  direct 1h at 10:30 reads `10:00, 9:00, …`. Feature history takes its stream's step, so a recursive
-  feature on a rolling stream reads its previous same-phase value. Reads are declared in bars;
-  rows = bars × step.
+- **History reads derive their step from the stream's timeframe** — one bar, `Period × Window`
+  columns, counted back from the stream's latest update at or before the view's column. A rolling 1h
+  reads `c, c−60, …`; a direct 1h at 10:30 reads `10:00, 9:00, …`. Newest first; `Gap` and `Ended`
+  slots are skipped; a read covers at most the stream's kept bars. Feature history takes its
+  stream's step, so a recursive feature on a rolling stream reads its previous same-phase value.
+- **`Leg` of a stream not yet started** is a zero candle, `Gap`, age −1; `Count` is the source bars
+  in the latest window — 1 for a started direct stream.
+- **One write path, `put`,** for both writers. Ownership is a convention: the aligner writes direct
+  slots only for columns it has not released, the engine goroutine only released columns; a violation
+  shows up as a data race under `-race`. Rewriting a column replaces its slot.
 
 ## Solution
 
@@ -347,33 +359,45 @@ column" is checked rather than assumed by consumers.
 ### FrameBuffer
 
 ```go
-// Stream-major ring: legs[s*depth + slot], one feature array per key.
+// One ring per stream, one slot per update (stage 2).
 type FrameBuffer struct {
-    depth    int64
-    cols     []int64      // [depth] column held by each slot; -1 = empty
-    meta     []rowMeta    // [depth] released, complete, presence count, revised bitset
-    legs     []leg        // [S*depth]
-    feats    [][]float64  // [K][S*depth]
-    recs     sections     // typed per-row record lists
-    consumed atomic.Int64 // last column the engine fully processed
+    streams *Streams
+    rings   []ring
 }
 
-type leg struct {
-    c     proto.Candle
-    state LegState // Fresh | Gap | Pending | Ended
-    age   uint32   // rows since the stream's last Fresh candle
-    count uint16   // derived streams: base candles in the window
+type ring struct {
+    slots []slot
+    bars  int64        // bars kept for reads; the remaining slots are headroom
+    end   atomic.Int64 // Ended column; MaxInt64 while open
 }
+
+type slot struct {
+    col   int64        // column held; -1 = empty
+    fresh int64        // newest Fresh column at or before col; -1 = none
+    c     proto.Candle // Fresh: its candle; Gap / Ended: the last Fresh candle
+    state LegState     // Fresh | Gap | Ended; Pending in iteration 2
+    count uint16       // derived: base candles in the window
+}
+
+func (b *FrameBuffer) put(s int, col int64, c proto.Candle, state LegState, count uint16)
 
 // Components receive a View plus their own writer, never the buffer.
-type View interface { // pinned: sees only columns ≤ Col()
-    Col() int64
-    Complete() bool
-    Leg(stream int) (c proto.Candle, s LegState, age int) // missing: last Fresh candle and its age
-    Candles(stream, n int, dst []proto.Candle) []proto.Candle // n bars; step from the stream's timeframe
-    Feature(key FeatureKey, stream, n int, dst []float64) []float64
-    Revised() []int // streams whose legs changed at Col; empty if never revised
+type View struct { // pinned: sees only columns ≤ col
+    buf      *FrameBuffer
+    col      int64
+    complete bool
 }
+
+func (v View) Col() int64
+func (v View) Boundary() int64 // col × Stride: Unix ms, UTC
+func (v View) Complete() bool
+func (v View) Leg(stream int) (c proto.Candle, s LegState, age int) // carried: last Fresh candle, its age
+func (v View) Count(stream int) int
+func (v View) Candles(stream, n int, dst []proto.Candle) []proto.Candle // newest first
+
+// Later: features (iteration 4), revisions (iteration 2), records (strategy step loop).
+func (v View) Feature(key FeatureKey, stream, n int, dst []float64) []float64
+func (v View) Revised() []int // streams whose legs changed at Col; empty if never revised
 
 type FeatureWriter interface{ Set(stream int, v float64) } // bound to one feature key
 
@@ -386,24 +410,24 @@ func Records[T any](v View, s Section[T]) []T
 - **Write discipline** is structural: a phase can only write the section whose writer it was handed.
   Feature workers may write disjoint cells in parallel; the phase barrier publishes them. Tests run
   with `go test -race`.
-- **Layout is built before `Start`:** the stream table from the data layer, feature slots and each
-  reader's depth in bars from the feature graph and strategies; the step comes from the stream's
-  timeframe.
-- **Depth must also cover** the largest rolling window `W`, since aggregation reads base history from
-  the buffer.
-- **Headroom keeps staging off readable history.** Staged writes wrap the ring onto the oldest rows;
-  headroom ensures those rows are beyond every declared read of the column being processed.
+- **Layout is built before `Start`:** the stream table from the data layer and the reads it must
+  hold — in iteration 1 one `lookback` for every stream, the longest feature lookback; per-stream
+  declared reads from the feature graph and strategies in iteration 4.
+- **A source keeps its largest window + 1 bars**, since aggregation reads base history from the
+  buffer.
+- **Headroom keeps staging off readable history.** Staged writes wrap a ring onto its oldest slots;
+  headroom ensures those slots are beyond every read of the column being processed.
 - **A declared depth beyond the 365-day cap** is a construction error, not a silent truncation.
 - **Reads copy into a caller-supplied slice** (`dst`): a ring wrap splits history into two segments,
   and the hot path should not allocate.
 - **Mixed-timeframe cross reads.** A rolling and a direct stream of one timeframe line up only at the
   direct stream's closes, so a cross feature mixing them samples there ([[pipeline-runtime]] § Features
   phase, sampling clock).
-- **Memory.** A row holds every stream, so the cost is rows × streams × (candle + feature entries) at
-  the finest grid. E.g. a 200-day read on a rolling 1d over a 1m grid needs 288,000 rows; at 200
-  streams and 10 features that is ≈ 7.8 GB. A deep read on a coarse direct stream costs the same grid
-  rows for every stream; the stream-major layout leaves room for a per-stream stride. The physical
-  layout is an implementation detail.
+- **Memory.** A slot is about 80 B, and a stream costs its own slots: the stage-2 test table (5m
+  grid, five streams, `lookback` 20) holds 801 slots, against 28,820 had every stream shared rows at
+  the deepest read. A 200-bar read on a direct 1d stream costs 200 slots, not 288,000 rows for every
+  stream of a 1m grid. A rolling 1d over a 1m grid still needs `bars × 1440` slots — the cost of
+  stepped reads, not of the layout.
 
 ## Open Questions
 
@@ -420,7 +444,7 @@ func Records[T any](v View, s Section[T]) []T
   error channel), and whether sustained drops raise an overload signal so risk can halt trading.
 - **Warm-up ownership** — `Backfill` implies the data layer drives historical warm-up ([[data-layer]]).
   Startup history has replay's skew — a 1h lane's history spans 60× the data time of a 1m lane's —
-  so under arrival order it deadlocks staging (Cadence); it must go through the ordered merge.
+  so under arrival order it deadlocks staging (Period); it must go through the ordered merge.
 - **`Layout` declaration** — how features and strategies declare depth in bars per stream.
 - **Non-UTC-aligned bars** (deferred) — FX / equity daily bars close at a session time that moves in
   UTC with daylight saving. Options: infer an offset per stream, or place each bar at the next UTC
@@ -433,6 +457,7 @@ func Records[T any](v View, s Section[T]) []T
 
 - Plan: `docs/plans/data-layer-v2/main.md`. Stage 1 (subscription model, stream table)
   implemented — `docs/plans/data-layer-v2/stage-1-streams.md`.
+- Stage 2 (`FrameBuffer` core) implemented — `docs/plans/data-layer-v2/stage-2-framebuffer.md`.
 
 ## Resources
 

@@ -22,9 +22,9 @@ const (
 type Stream struct {
 	Sub    proto.Subscription // derived: symbol, window timeframe, Provider "derived_" + source ID
 	Kind   Kind
-	Step   int64 // columns per timeframe: the history-read step, and a direct stream's cadence
+	Period int64 // columns between updates: direct, timeframe / Stride; derived, its source's Period
+	Window int64 // updates per bar: direct 1; derived, source bars per window
 	Source int   // derived: index of its source stream; direct: -1
-	Window int64 // derived: source bars per window; direct: 0
 }
 
 // Streams is the stream table: direct streams first, then derived, each group sorted by ID.
@@ -53,7 +53,8 @@ func NewStreams(subs []proto.Subscription) *Streams {
 		st.All = append(st.All, Stream{
 			Sub:    sub,
 			Kind:   Direct,
-			Step:   sub.Timeframe.TimeframeMs() / st.Stride,
+			Period: sub.Timeframe.TimeframeMs() / st.Stride,
+			Window: 1,
 			Source: -1,
 		})
 	}
@@ -73,9 +74,9 @@ func NewStreams(subs []proto.Subscription) *Streams {
 					Provider:  proto.DerivedProviderPrefix + s.Sub.ID(),
 				},
 				Kind:   Derived,
-				Step:   tf.TimeframeMs() / st.Stride,
-				Source: src,
+				Period: s.Period,
 				Window: tf.TimeframeMs() / s.Sub.Timeframe.TimeframeMs(),
+				Source: src,
 			})
 		}
 	}
