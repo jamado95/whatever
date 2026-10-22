@@ -170,6 +170,18 @@ func (p *BinanceCSVProvider) run() {
 	}
 }
 
+// usThreshold separates µs from ms epoch timestamps: ms stays below it until the year 5138, µs
+// exceeds it from 1973.
+const usThreshold = 1e14
+
+// toMs scales a µs timestamp to ms; ms passes through. Binance spot archives from 2025-01 carry µs.
+func toMs(ts int64) int64 {
+	if ts >= usThreshold {
+		return ts / 1000
+	}
+	return ts
+}
+
 func parseCsvRecordToCandle(record []string) (proto.Candle, error) {
 	// Binance kline CSV format (12 columns):
 	// OpenTime,Open,High,Low,Close,Volume,CloseTime,QuoteVol,Trades,TakerBuyBase,TakerBuyQuote,Ignore
@@ -213,8 +225,8 @@ func parseCsvRecordToCandle(record []string) (proto.Candle, error) {
 	}
 
 	return proto.Candle{
-		OpenTs:  openTs,
-		CloseTs: closeTs,
+		OpenTs:  toMs(openTs),
+		CloseTs: toMs(closeTs),
 		Open:    open,
 		High:    high,
 		Low:     low,

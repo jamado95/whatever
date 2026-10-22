@@ -92,6 +92,32 @@ construction, one provider stream.
   order; aggregation runs when the engine dequeues an event (see Consumption).
 - **The `FrameBuffer` is the staging environment** — rows beyond the released head hold undecided
   columns. No separate staging model.
+- **The data layer does not use `SynchronizerV2`** and never imports `align`. Carried over as ideas,
+  not code: ceilDiv placement (`Streams.column`), the merge injected per mode, and the apply →
+  evaluate → emit loop, rewritten as the aligner's stage → ready → commit.
+- **Stage convention:** a stage is a `pipe.Stage[In, Out]` — it starts its own goroutine, owns its
+  output and closes it once its input closes, and never drops a value silently; a fan-in is a
+  `pipe.Merge[T]`. Goroutine boundaries sit only where parallelism or blocking needs them (lanes,
+  merge, aligner, engine); steps inside one goroutine are plain functions called in sequence. No
+  third-party pipeline library: none offers a merge ordered by key, and the hot path needs typed
+  channels without per-item boxing.
+- **One unexported composer** (`pipeline`) wires the stages in one place, with per-mode stages
+  injected. The module exports a `data.New` constructor (stage 5); no package-level instance.
+
+### Normalisation
+
+- **ms is the timestamp contract; providers meet it.** Venue format stays in the provider —
+  `binance_csv` scales µs ([[data-layer]] defect 7); the lane rejects anything outside the ms range.
+- **One lane per direct stream** applies the rules in order: validate (`OpenTs > 0`, ms timestamps,
+  finite OHLCV, `V ≥ 0`, `L ≤ min(O, C)`, `H ≥ max(O, C)`, span within `[timeframe − 1 s,
+  timeframe]`), column by ceilDiv, due column, identical duplicate, column beyond the last accepted.
+- **Monotonicity is by column**, not `CloseTs`: two closes in one column would write one slot twice.
+- **The span may fall short of the timeframe, never exceed it** — under ceilDiv a close past its
+  boundary would land one column late. The span check also catches a file wired to the wrong
+  subscription.
+- **Drops are logged once per rule per lane, then summarised** when the lane ends; identical
+  duplicates are only counted.
+- **A lane carries column, stream index, end flag and candle**; the stream index is authoritative.
 
 ### Subscriptions and the grid
 
@@ -143,9 +169,13 @@ construction, one provider stream.
   proves no lane has anything left at or before `c`: `c` is decided, and any stream without a candle
   at `c` is `Gap`. The merge requires:
   - an **end-of-lane marker**, so a closed lane's stream leaves the expected set instead of reading as
-    missing in every later column;
+    missing in every later column. It is ordered at the lane's next due column (`lastCol + Period`);
+    a lane that accepted no candle sends it at column −1, which sorts first and must not start the
+    released head;
   - **releasing the final column when the merged channel closes**, since no later candle will arrive;
-  - a **heap** in place of the linear scan of heads (56 vs 356 ns per candle at 1000 streams).
+  - a **heap** in place of the linear scan of heads: `container/heap`, the root replaced and fixed
+    on refill, no allocation — 268 vs 1680 ns per value at 1000 inputs, every value tied, channel
+    hand-offs included.
 - **Replay ordering precedes staging** and covers coarse lanes with no special case; staging only
   bounds skew, it cannot absorb it (Period).
 - **Live does not use `OrderedFanIn`:** it waits while any open lane has no pending candle, so one
@@ -250,8 +280,8 @@ providers ─▶ ingest ─▶ normalise ─▶ order ─▶ stage ─▶ ready 
 | Proposed stage | Decided stage | Runs on | Job |
 |---|---|---|---|
 | Ingest | Provider ingestion | Provider goroutine | Provider lifecycle, `ReceivedAt`, errors. Under backpressure the provider's buffered output absorbs, then drops |
-| Normalise | Alignment | Lane | Validate, map `CloseTs` to its column (`ceilDiv`), drop identical duplicates, scale µs timestamps ([[data-layer]] defect 7) |
-| Order | Buffer ordering logic | Merge goroutine → aligner | Replay: `OrderedFanIn` (heap) over provider outputs, with end-of-lane markers. Live: `FanIn`, arrival order |
+| Normalise | Alignment | Lane, one goroutine per direct stream | Rules in order (Decisions § Normalisation): validate, column (`ceilDiv`), due column, identical duplicate, column order; drops logged once per rule and summarised; end marker on close. µs scaling is the provider's ([[data-layer]] defect 7) |
+| Order | Buffer ordering logic | Merge goroutine → aligner | Replay: `OrderedFanIn` (`container/heap`) over the lanes by (column, stream), with end-of-lane markers. Live: `FanIn`, arrival order. Injected by the composer |
 | Stage | Buffer ordering logic | Aligner | Write base candles into `FrameBuffer` rows beyond the released head; per-row presence count and each stream's latest column replace `syncState` |
 | Ready | Frame alignment / readiness | Aligner | Decide each direct stream due at the column; set completeness (last due candles) and leg states |
 | Commit | Commit | Aligner | Mark ready columns released and emit their events in column order; a candle for a released column becomes a `Late` event |
@@ -458,6 +488,8 @@ func Records[T any](v View, s Section[T]) []T
 - Plan: `docs/plans/data-layer-v2/main.md`. Stage 1 (subscription model, stream table)
   implemented — `docs/plans/data-layer-v2/stage-1-streams.md`.
 - Stage 2 (`FrameBuffer` core) implemented — `docs/plans/data-layer-v2/stage-2-framebuffer.md`.
+- Stage 3 (lanes, normalisation, ordered merge, stage convention and composer) implemented —
+  `docs/plans/data-layer-v2/stage-3-lanes.md`.
 
 ## Resources
 
