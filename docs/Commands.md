@@ -72,6 +72,7 @@ block surface on the next run, once the dependency is fixed.
 | `go build ./...` | Compile every package without producing a binary. |
 | `go vet ./...` | Go's built-in static analysis. |
 | `go test -run '^$' -bench OrderedFanIn -benchmem ./internal/flow/pipe/` | Benchmark the ordered merge at 10, 100 and 1000 inputs, per value. |
+| `go test -run '^$' -bench Readiness -benchmem ./internal/engine/data/` | Benchmark align → `pipe.FanIn` → readiness at 10, 100 and 1000 1m streams, per released column and per evaluate. |
 
 `make fmt` and `make lint` need the tools on `PATH`:
 

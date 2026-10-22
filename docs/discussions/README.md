@@ -10,7 +10,7 @@ Opened 2026-07-26 from a full review of the codebase at commit `fbee380`.
 |---|---|---|
 | [config.md](config.md) | Config parsing / validation | Implemented — strict decoding, validating enums, `--validate-only` |
 | [data-layer.md](data-layer.md) | Data layer / providers | Working (CSV); historical provider untested against a bounded range; no live provider |
-| [data-layer-v2.md](data-layer-v2.md) | Data layer V2 — `internal/engine/data` module | **Planned** — `docs/plans/data-layer-v2`; stages 1–3.1 (subscription model, stream table, `FrameBuffer` core, per-stream normalise lanes) implemented |
+| [data-layer-v2.md](data-layer-v2.md) | Data layer V2 — `internal/engine/data` module | **Planned** — `docs/plans/data-layer-v2`; stages 1–4 (subscription model, stream table, `FrameBuffer` core, per-stream lanes, align and readiness) implemented |
 | [features.md](features.md) | Features | Working; 5 registered features; not reachable by strategies |
 | [strategy-layer.md](strategy-layer.md) | Strategy layer | Nothing compiles into the default build |
 | [execution-layer.md](execution-layer.md) | Execution layer | Empty stubs only |
