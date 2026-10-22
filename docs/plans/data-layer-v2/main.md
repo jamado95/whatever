@@ -8,7 +8,7 @@ nothing is implemented. Today `data_logger` runs `provider → FeatureChain → 
 SynchronizerV2 → ticker gate → exporter`, one goroutine per stage.
 
 The axis is **release mode**. Iteration 1 builds the module `internal/engine/data` for replay —
-lanes, ordered merge, staging, readiness, commit, `FrameBuffer`, rolling aggregation — and a new
+per-stream lanes (normalise, align), readiness, commit, `FrameBuffer`, rolling aggregation — and a new
 engine, `data_logger_v2`, on top of it, with features through a temporary bridge. Iteration 2 adds
 the live release path (clock, deadlines, `Late`). Iteration 3 adds warm-up and backfill. Iteration 4
 moves features into the `FrameBuffer`; it is not part of this implementation run.
@@ -23,21 +23,22 @@ From [data-layer-v2.md](../../discussions/data-layer-v2.md) and
 [pipeline-runtime.md](../../discussions/pipeline-runtime.md):
 
 - **Module `internal/engine/data`.** In: subscriptions and provider instances. Out: in-order frame
-  events and the `FrameBuffer`. Stages: ingest → normalise → order → stage → ready → commit →
-  materialise.
+  events and the `FrameBuffer`. Stages, per direct stream: ingest → normalise → deadline (live) →
+  align; then readiness (ready → commit) → materialise.
 - **Grid and period.** The grid is the finest direct timeframe; direct timeframes are integer
   multiples, bars UTC-aligned (`c % P == 0`). Derivations are rolling windows declared inside the
   direct subscription's config. Derived streams update at every close of their source.
 - **Release.** Strictly in column order. A column is released once every direct stream due at it is
   decided. Completeness by last due candle. Leg states `Fresh`, `Gap`, `Pending`, `Ended`.
-- **Replay ordering is `OrderedFanIn` (heap) over provider outputs, ahead of staging**, with
-  end-of-lane markers and final-column release. Live uses `FanIn` and a deadline.
-- **Release, then materialise.** The data layer goroutine writes base candles only into rows beyond
-  the released head; `data.Next()` on the engine goroutine aggregates derived legs and returns a
-  pinned view.
+- **No ordered merge** (redesign of 2026-10-22). Each stream's align stage stages its own slots
+  within per-stream headroom; gaps are proven by the stream's own next candle; readiness counts
+  evaluates. Live adds a deadline stage per lane.
+- **Release, then materialise.** The align stages write base candles only into slots beyond the
+  released head; `data.Next()` on the engine goroutine aggregates derived legs and returns a pinned
+  view.
 - **History reads take their step from the stream's timeframe**, anchored at its latest update.
-- **Capacity.** Depth = deepest declared read + headroom, 365-day cap; the data layer blocks when
-  headroom runs out.
+- **Capacity.** Depth = deepest declared read + headroom, 365-day cap; a stream's align stage blocks
+  when its headroom runs out.
 
 ## Decisions taken by this plan
 
@@ -56,9 +57,10 @@ From [data-layer-v2.md](../../discussions/data-layer-v2.md) and
 - **Minimal `FrameBuffer`.** Iteration 1 holds market legs only; revision metadata arrives in
   iteration 2, feature entries in iteration 4, record sections (signals, orders, fills) with the
   strategy step loop (out of scope).
-- **Pipeline construction** (decided in stage 3). Stages follow `pipe.Stage` / `pipe.Merge`; one
-  unexported composer wires them, per-mode stages injected; the module exports a `data.New`
-  constructor (stage 5) — no package-level instance. The module does not use `SynchronizerV2`.
+- **Pipeline construction** (decided in stages 3 and 3.1). Stages follow `pipe.Stage`; one
+  unexported composer wires a lane of per-stream stages for each direct stream, per mode; the module
+  exports a `data.New` constructor (stage 5) — no package-level instance. The module does not use
+  `SynchronizerV2`.
 
 ## Structure
 
@@ -66,13 +68,14 @@ Tiered. Stage docs live beside this one, produced iteratively:
 
 - `stage-1-streams.md` — *implemented.*
 - `stage-2-framebuffer.md` — *implemented.*
-- `stage-3-lanes.md` — *implemented.*
-- `stage-4-release.md`
+- `stage-3-lanes.md` — *implemented; partly superseded by 3.1.*
+- `stage-3.1-lanes.md` — *implemented.*
+- `stage-4-align-readiness.md`
 - `stage-5-consumption.md`
 - `stage-6-data-logger-v2.md`
 
-Ordering: 1 first; 2 and 3 depend on 1 and are independent of each other; 4 depends on 2 and 3; 5
-on 4; 6 on 5.
+Ordering: 1 first; 2 and 3 depend on 1 and are independent of each other; 3.1 on 3; 4 depends on 2
+and 3.1; 5 on 4; 6 on 5.
 
 ## Iteration 1 — replay data layer
 
@@ -81,11 +84,12 @@ and rolling derivations, released in column order with completeness and leg stat
 engine, exported once per stream update. `data_logger` is unchanged.
 
 ```
-            ┌──────────────────────── internal/engine/data ─────────────────────────┐
-provider_i ─▶ lane_i: normalise ─┐                                                    │
-provider_j ─▶ lane_j: normalise ─┼▶ OrderedFanIn (heap) ─▶ stage ─▶ ready ─▶ commit ─▶ events
-            │                    ┘                 └── FrameBuffer rows beyond head ──┘   │
-            └──────────────────────────────────────────────────────────────────────┬────┘
+            ┌─────────────────────────── internal/engine/data ───────────────────────────┐
+provider_i ─▶ lane_i: normalise ─▶ align ─evaluate─┐                                       │
+provider_j ─▶ lane_j: normalise ─▶ align ─evaluate─┼▶ readiness: ready ─▶ commit ─▶ events
+            │                            │          ┘                                      │
+            │                            └── FrameBuffer slots beyond the released head    │
+            └─────────────────────────────────────────────────────────────────────┬───────┘
 data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature bridge ─▶ exporter
 ```
 
@@ -143,20 +147,37 @@ data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature b
 - **Acceptance:** merge output ordered by (column, stream) across mixed timeframes; a coarse lane's
   provider blocks while its next bar waits in the merge; each normalise rule tested; existing
   `OrderedFanIn` and synchronizer tests still pass; benchmark checked in.
-- Plan: `stage-3-lanes.md`.
+- Plan: `stage-3-lanes.md`. The ordered merge, the end marker and the merged-order tests are
+  superseded by stage 3.1.
 
-### Stage 4 — staging, readiness and commit
+### Stage 3.1 — per-stream lanes ✅ implemented
 
-- **Goal:** the aligner turns the merged stream into in-order `Current` frame events.
-- **Touches:** new `internal/engine/data/aligner.go`, `event.go`.
-- **Contents:** stage base candles beyond the released head; per-column presence count against the
-  streams due there; completeness by last due candle; leg states `Fresh`, `Gap`, `Ended`; the release
-  loop on the data trigger, written so the iteration-2 clock trigger plugs into the same loop; final
-  column released when the merge closes; blocking when headroom is exhausted.
-- **Acceptance:** table tests over injected merged orders — a coarse stream between closes is not
-  waited on; a missing coarse bar is `Gap` at its due column and its hour is `Partial`; a stream not
-  yet started makes frames `Partial`; an ended lane leaves the expected set; a gap is proven by the next
-  merged candle; the final column is released. Readiness benchmark at N = 1000.
+- **Goal:** adjust stage 3 to the 2026-10-22 redesign: no ordered merge; each direct stream gets a
+  lane of per-stream stages, normalise only until stage 4.
+- **Touches:** `lane.go` → `normalise.go` (`lane` → `normaliser`; `laneItem` holds column and
+  candle; no end marker — a lane ends when its channel closes), `order.go` deleted, `pipeline.go`
+  (`run` returns one output per lane), `internal/flow/pipe/pipeline.go` (`Merge` removed), tests.
+- **Acceptance:** each lane carries exactly its own stream's accepted candles, in order, then closes;
+  an unread lane stops its provider at `laneBuffer + 1` while the others run to the end; nothing
+  stage 3 introduced is left without a caller.
+- Plan: `stage-3.1-lanes.md`.
+
+### Stage 4 — align and readiness
+
+- **Goal:** per-stream align stages and one readiness stage turn the lanes into in-order `Current`
+  frame events.
+- **Touches:** new `internal/engine/data/align.go`, `readiness.go`, `event.go`; `pipeline.go` chains
+  align onto each lane and joins the lanes with readiness.
+- **Contents:** align stages `Fresh`, `Gap` and `Ended` slots within per-stream headroom, takes the
+  carried candle from its own state, reports before blocking and sends an evaluate per resolved
+  column; readiness keeps per-column counts against the streams due there and releases decided
+  columns in order with completeness by last due candle; the engine's consumption wakes blocked align
+  stages. Evaluate delivery (`FanIn` against per-column atomic counters) is benchmarked first.
+- **Acceptance:** table tests over injected evaluates, with the same frames under any arrival order;
+  a coarse stream between closes is not waited on; a missing coarse bar is `Gap` and its hour
+  `Partial`; a stream not yet started makes frames `Partial`; an ended lane leaves the expected set;
+  a gap is proven by the stream's own next candle; the last column is released once every lane has
+  ended; per-stream blocking without deadlock under skew. Readiness benchmark at N = 1000.
 
 ### Stage 5 — consumption and rolling aggregation
 
@@ -169,7 +190,7 @@ data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature b
   during warm-up; marking the column consumed, which frees headroom; row ownership as decided.
 - **Acceptance:** at UTC boundaries a rolling 1h from 5m equals the closed 1h bar from the CSV; a
   derivation of a coarse direct stream updates at its source's period; warm-up count; `-race` clean
-  with the aligner staging ahead.
+  with the align stages staging ahead.
 
 ### Stage 6 — `data_logger_v2` engine
 
@@ -186,8 +207,8 @@ data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature b
 
 ### Iteration 1 — done when
 
-- `make check` and `go test -race ./internal/engine/data/...` clean; merge and readiness benchmarks
-  checked in.
+- `make check` and `go test -race ./internal/engine/data/...` clean; the `OrderedFanIn` and
+  readiness benchmarks checked in.
 - `data_logger_v2` runs replay on the module with mixed direct timeframes and derivations;
   `data_logger` behaves as before.
 - Discussion and reference docs updated (below).
@@ -196,13 +217,12 @@ data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature b
 
 High-level only.
 
-- `Clock` and `Watermark` in `flow/timing`; `FanIn` arrival order; the clock trigger with one timer
-  at the oldest unreleased column's boundary + lateness, at due columns only; `Pending` legs;
-  hardcoded lateness.
+- `Clock` in `flow/timing`; the deadline stage per lane, between normalise and align — one timer at
+  its next due column's `boundary + lateness`, `Pending` markers; `Pending` legs; hardcoded lateness.
 - `Late` events: a candle for a released column travels in its event; `Next()` writes it, recomputes
   affected derived rows, records revision metadata; `View.Revised()`. The bridge reads revised
   history from then on; recomputing stored feature history waits for iteration 4.
-- Replay out-of-order candles become `Late` instead of being dropped.
+- Out-of-order candles become `Late` instead of normalise dropping them.
 - Provider drop contract.
 - Tested with a fake clock and simulated lanes; an end-to-end live run waits for a live provider.
 
@@ -210,8 +230,9 @@ High-level only.
 
 High-level only. Depends on warm-up ownership in [data-layer.md](../../discussions/data-layer.md).
 
-- `Backfill` status: startup history runs through the ordered merge, then hands over to arrival
-  order; the pacer is bypassed; the first frame after catch-up is `Current`.
+- `Backfill` status: startup history is bounded by per-stream headroom, with providers blocking
+  rather than dropping while they deliver it; the pacer is bypassed; the first frame after catch-up
+  is `Current`.
 - Catch-up after reconnect or overrun.
 
 ## Iteration 4 — features on the `FrameBuffer` (not in this run)
@@ -256,5 +277,6 @@ in [features.md](../../discussions/features.md) and the `Layout` declaration ope
 ## Open items to resolve within stages
 
 - Headroom value and event channel capacity — stage 4.
+- Evaluate delivery into readiness and the headroom wake-up — stage 4.
 - Derived leg state when its source has a gap inside the window — stage 5.
 - Frame logging format and the v2 config file's location — stage 6.

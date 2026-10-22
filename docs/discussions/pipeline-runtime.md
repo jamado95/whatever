@@ -87,10 +87,10 @@ end-to-end.
 |---|---|---|
 | Bound by | CPU throughput | Waiting on data and venue |
 | Clock | Data-driven, as fast as possible | Wall clock / venue |
-| Backpressure | Pull, to the source | Never upstream of the aligner |
-| Ordering | `OrderedFanIn` (heap) over provider outputs, no deadline | Arrival order + deadline |
+| Backpressure | Pull, per stream: an align stage at its headroom blocks its provider | Never upstream of the align stages |
+| Ordering | None: per-stream headroom bounds skew, no deadline | Arrival order + a deadline stage per lane |
 | `Late` | Never occurs | Bounded recompute |
-| Buffers | Rings; shared memory-mapped dataset | Rings + aligner window + frame-event queue |
+| Buffers | Rings; shared memory-mapped dataset | Rings + lane buffers + frame-event queue |
 | Parallelism | Across runs; share data, frame index, fixed features | Within a step, only for heavy features |
 | Hot costs | Readiness, merge, snapshot allocations, parsing | Network, alignment wait, GC tail |
 
@@ -137,10 +137,10 @@ strictly increasing output — are subsumed here; strictly increasing output was
 ### Shape
 
 ```
-             ┌──────────────────────── data layer ─────────────────────────┐
-providers ──▶│ ingest ──▶ aligner (readiness, watermark) ──▶ commit ──▶ events │──▶ engine step loop
-             │      stages into FrameBuffer rows beyond the released head     │  Next(): materialise
-             └─────────────────────────────────────────────────────────────────┘        │
+             ┌─────────────────────────────── data layer ───────────────────────────────┐
+providers ──▶│ per stream: ingest ─▶ normalise ─▶ (deadline) ─▶ align ─▶ readiness ─▶ events │──▶ engine step loop
+             │      align stages into FrameBuffer slots beyond the released head            │  Next(): materialise
+             └──────────────────────────────────────────────────────────────────────────────┘        │
                                 features ──▶ strategies ──▶ portfolio/risk ──▶ execution ──▶ fills
 ```
 
@@ -148,8 +148,8 @@ providers ──▶│ ingest ──▶ aligner (readiness, watermark) ──▶
    multiple of it ([[data-layer-v2]] § Period). Concurrent;
    under backpressure the provider's buffered output absorbs, then drops ([[data-layer-v2]] §
    Capacity).
-2. **Alignment** — readiness and the watermark decide when a column is released, with which status
-   and completeness (Clock below).
+2. **Alignment and readiness** — each stream's align stage places its datapoints; readiness decides
+   when a column is released, with which status and completeness (Clock below).
 3. **`FrameBuffer`** — every stream's legs, feature entries and per-step records, one row per column;
    also the staging area. Revisions and aggregation are applied when the engine dequeues each event.
 
@@ -170,10 +170,11 @@ for {
 - **The engine is the channel's only consumer** and dispatches by each component's accepted
   statuses. Components reading the channel directly would restore channel-per-stage and lose the
   step barrier.
-- **Release, materialise, compute.** The data layer stages and releases ahead in rows beyond the
+- **Release, materialise, compute.** The data layer stages and releases ahead in slots beyond the
   released head. On dequeue, `data.Next()` applies the event's revisions and aggregates, then the
-  engine runs the phases and reads the next event only once they finish. The data layer writes only
-  rows beyond the released head and the engine side only released rows, so no locks are needed.
+  engine runs the phases and reads the next event only once they finish. Each align stage writes
+  only its stream's slots beyond the released head and the engine side only released slots, so no
+  locks are needed.
 - **Dirty sets drive work.** A frame event carries the legs that closed and the cells revised.
   Features step only dirty streams, cross features run when an input is dirty and their sampling
   clock fires, strategies wake when their subs or keys change. Without this a `Late` frame would
@@ -244,20 +245,21 @@ Backtests choose per run: a worker pool for wide frames, or one worker per run w
 
 API, storage layout, write discipline and invariants of the `FrameBuffer` are in [[data-layer-v2]].
 
-### Clock: watermark and pacer
+### Clock: deadlines and pacer
 
 Rule: whatever changes frame content or status belongs to the data layer; whatever changes only when
 frames are consumed belongs to the engine. Replay output is therefore identical under any pacing.
 
-- **Watermark (data layer).** A column is released when complete (fast path) or once every missing
+- **Release (data layer).** A column is released when complete (fast path) or once every missing
   stream is proven or presumed missing (`Partial`); data for an already-released column is `Late`.
   Release rule in [[data-layer-v2]] § Release.
-  - Live: wall clock − allowed lateness, per venue or timeframe; needs timers, since a deadline can
-    expire with no data arriving.
-  - Replay: data time — the minimum next-candle `CloseTs` across lanes. Exact; nothing is ever late.
-- **The aligner never reads `time.Now()`.** Time is injected, so deadline logic is testable with a
-  fake clock, and a live-simulation replay (virtual wall clock, seeded arrival delays) can exercise
-  the live policy deterministically.
+  - Live: each lane's deadline stage presumes its stream missing at `boundary + lateness`; it needs a
+    timer, since a deadline can expire with no data arriving.
+  - Replay: each stream's own progress — its next candle proves its gaps, and readiness counts
+    evaluates per column. No global order; nothing is ever late.
+- **Only the deadline stage reads the clock**, and the clock is injected, so deadline logic is
+  testable with a fake clock, and a live-simulation replay (virtual wall clock, seeded arrival
+  delays) can exercise the live policy deterministically.
 - **Pacer (engine), replay only** — live runs unpaced. Modes map onto today's `Ticker`: none
   (`realtime`), fixed per frame (`fixedInterval`), factor (`SetFactor`, unimplemented), manual
   (`Tick`, unimplemented). This settles [[engine]]'s question on the `Simulated` / `Manual` tickers.
@@ -273,11 +275,7 @@ type Pacer interface {
     Wait(ctx context.Context, frameTime int64) error
 }
 
-// data layer
-type Watermark interface {
-    Current() int64 // columns at or below are releasable; data below is Late
-}
-// live: WallWatermark{clock, lateness}; replay: DataWatermark (min next CloseTs across lanes)
+// data layer, live only: the deadline stage of each lane waits on Clock.Wake(boundary + lateness)
 ```
 
 ### Backtest specifics
@@ -294,8 +292,8 @@ type Watermark interface {
 ### Live specifics
 
 1. Backpressure reaches the providers: each provider's buffered output absorbs a slow data layer,
-   then drops once full, so its source is never blocked. Sized for at least one boundary burst; the
-   aligner sustains a burst in ~1 ms with counter readiness.
+   then drops once full, so its source is never blocked. Sized for at least one boundary burst;
+   readiness sustains a burst in ~1 ms with counter readiness.
 2. The frame-event queue normally holds 0–1; its depth measures overrun.
 3. Allocation-free hot path, to keep GC out of tail latency.
 

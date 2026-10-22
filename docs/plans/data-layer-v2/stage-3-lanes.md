@@ -1,5 +1,8 @@
 # Stage 3 — lanes, normalisation, ordered merge (data layer v2, iteration 1)
 
+> Partly superseded by [stage-3.1-lanes.md](stage-3.1-lanes.md) (2026-10-22 redesign): the ordered
+> merge, the end marker and the merged-order tests.
+
 ## Context
 
 Stage 3 of [main.md](main.md). Each provider's output becomes a validated lane; lanes merge into one

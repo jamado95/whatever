@@ -42,8 +42,8 @@ func bars(st *Streams, s int, cols ...int64) []proto.Candle {
 	return out
 }
 
-// runLane feeds cs through a lane's stage and returns everything it emits.
-func runLane(l *lane, cs ...proto.Candle) []laneItem {
+// runNormaliser feeds cs through a normalise stage and returns everything it emits.
+func runNormaliser(n *normaliser, cs ...proto.Candle) []laneItem {
 	in := make(chan proto.MarketData, len(cs))
 	for _, c := range cs {
 		in <- proto.MarketData{Candle: c}
@@ -51,32 +51,32 @@ func runLane(l *lane, cs ...proto.Candle) []laneItem {
 	close(in)
 
 	var out []laneItem
-	for it := range l.run(in) {
+	for it := range n.run(in) {
 		out = append(out, it)
 	}
 	return out
 }
 
 /*
-TestLaneAccept covers the normalise rules: validation (timestamps, OHLCV, span), the due column, an
-identical duplicate, and a column not beyond the last accepted one. Rule order decides the reason,
-and a dropped candle moves nothing.
+TestNormaliseAccept covers the normalise rules: validation (timestamps, OHLCV, span), the due
+column, an identical duplicate, and a column not beyond the last accepted one. Rule order decides the
+reason, and a dropped candle moves nothing.
 */
-func TestLaneAccept(t *testing.T) {
+func TestNormaliseAccept(t *testing.T) {
 	st := NewStreams(testSubs())
 	s5m, s1h := mustIndex(t, st, idBTC5m), mustIndex(t, st, idBTC1h)
 	const col = day0 + 7
 
-	expect := func(t *testing.T, l *lane, c proto.Candle, wantCol int64, want drop) {
+	expect := func(t *testing.T, n *normaliser, c proto.Candle, wantCol int64, want drop) {
 		t.Helper()
-		got, d := l.accept(c)
+		got, d := n.accept(c)
 		if d != want || (want != invalid && got != wantCol) {
 			t.Fatalf("accept = (%d, %v), want (%d, %v)", got, d, wantCol, want)
 		}
 	}
 
 	t.Run("valid candle at its column", func(t *testing.T) {
-		expect(t, newLane(st, s5m, quiet()), bar(st, s5m, col), col, keep)
+		expect(t, newNormaliser(st, s5m, quiet()), bar(st, s5m, col), col, keep)
 	})
 
 	t.Run("invalid", func(t *testing.T) {
@@ -95,7 +95,7 @@ func TestLaneAccept(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				c := bar(st, s5m, col)
 				tc.mutate(&c)
-				expect(t, newLane(st, s5m, quiet()), c, 0, invalid)
+				expect(t, newNormaliser(st, s5m, quiet()), c, 0, invalid)
 			})
 		}
 	})
@@ -115,88 +115,85 @@ func TestLaneAccept(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				c := bar(st, s5m, col)
 				c.OpenTs = c.CloseTs - tc.span
-				expect(t, newLane(st, s5m, quiet()), c, col, tc.want)
+				expect(t, newNormaliser(st, s5m, quiet()), c, col, tc.want)
 			})
 		}
 	})
 
 	t.Run("off due", func(t *testing.T) {
-		l := newLane(st, s1h, quiet())
-		expect(t, l, bar(st, s1h, day0+126), day0+126, offDue) // 10:30
-		expect(t, l, bar(st, s1h, day0+132), day0+132, keep)   // 11:00
+		n := newNormaliser(st, s1h, quiet())
+		expect(t, n, bar(st, s1h, day0+126), day0+126, offDue) // 10:30
+		expect(t, n, bar(st, s1h, day0+132), day0+132, keep)   // 11:00
 	})
 
 	t.Run("duplicate and order", func(t *testing.T) {
-		l := newLane(st, s5m, quiet())
+		n := newNormaliser(st, s5m, quiet())
 		c := bar(st, s5m, col)
-		expect(t, l, c, col, keep)
-		expect(t, l, c, col, duplicate)
+		expect(t, n, c, col, keep)
+		expect(t, n, c, col, duplicate)
 
 		other := c
 		other.Close++
-		expect(t, l, other, col, outOfOrder)
-		expect(t, l, bar(st, s5m, col-1), col-1, outOfOrder)
-		expect(t, l, bar(st, s5m, col+1), col+1, keep)
+		expect(t, n, other, col, outOfOrder)
+		expect(t, n, bar(st, s5m, col-1), col-1, outOfOrder)
+		expect(t, n, bar(st, s5m, col+1), col+1, keep)
 	})
 
 	t.Run("rule order decides the reason", func(t *testing.T) {
-		l := newLane(st, s5m, quiet())
+		n := newNormaliser(st, s5m, quiet())
 		c := bar(st, s5m, col)
-		expect(t, l, c, col, keep)
+		expect(t, n, c, col, keep)
 
 		us := c
 		us.OpenTs, us.CloseTs = us.OpenTs*1000, us.CloseTs*1000
-		expect(t, l, us, 0, invalid)
+		expect(t, n, us, 0, invalid)
 
-		h := newLane(st, s1h, quiet())
+		h := newNormaliser(st, s1h, quiet())
 		expect(t, h, bar(st, s1h, day0+126), day0+126, offDue)
 		expect(t, h, bar(st, s1h, day0+126), day0+126, offDue)
 	})
 
 	t.Run("a dropped candle moves nothing", func(t *testing.T) {
-		l := newLane(st, s5m, quiet())
+		n := newNormaliser(st, s5m, quiet())
 		bad := bar(st, s5m, col)
 		bad.Close = math.NaN()
-		expect(t, l, bad, 0, invalid)
-		expect(t, l, bar(st, s5m, col), col, keep)
+		expect(t, n, bad, 0, invalid)
+		expect(t, n, bar(st, s5m, col), col, keep)
 	})
 }
 
 /*
-TestLaneRun covers the stage: accepted candles in order, then the end marker at the lane's next due
-column (−1 if nothing was accepted) and a closed output; drop counters; and logging, which warns once
-per rule and summarises when the lane ends.
+TestNormaliseRun covers the stage: accepted candles in input order, then a closed output with no
+marker; drop counters; and logging, which warns once per rule and summarises when the input ends.
 */
-func TestLaneRun(t *testing.T) {
+func TestNormaliseRun(t *testing.T) {
 	st := NewStreams(testSubs())
 	s5m, s1h := mustIndex(t, st, idBTC5m), mustIndex(t, st, idBTC1h)
-	marker := func(s int, col int64) laneItem { return laneItem{col: col, stream: s, end: true} }
-	item := func(s int, col int64) laneItem { return laneItem{col: col, stream: s, c: bar(st, s, col)} }
+	item := func(s int, col int64) laneItem { return laneItem{col: col, c: bar(st, s, col)} }
 
-	t.Run("candles then the marker at the next due column", func(t *testing.T) {
-		got := runLane(newLane(st, s1h, quiet()), bars(st, s1h, day0+120, day0+132)...) // 10:00, 11:00
-		want := []laneItem{item(s1h, day0+120), item(s1h, day0+132), marker(s1h, day0+144)}
+	t.Run("accepted candles in order, then the output closes", func(t *testing.T) {
+		got := runNormaliser(newNormaliser(st, s1h, quiet()), bars(st, s1h, day0+120, day0+132)...) // 10:00, 11:00
+		want := []laneItem{item(s1h, day0+120), item(s1h, day0+132)}
 		if !slices.Equal(got, want) {
 			t.Fatalf("got %v,\nwant %v", got, want)
 		}
 	})
 
-	t.Run("drops at the tail: the marker follows the last accepted candle", func(t *testing.T) {
+	t.Run("drops at the tail: only the accepted candles", func(t *testing.T) {
 		bad := bar(st, s1h, day0+132)
 		bad.Volume = -1
-		got := runLane(newLane(st, s1h, quiet()), bar(st, s1h, day0+120), bad)
-		want := []laneItem{item(s1h, day0+120), marker(s1h, day0+132)}
-		if !slices.Equal(got, want) {
+		got := runNormaliser(newNormaliser(st, s1h, quiet()), bar(st, s1h, day0+120), bad)
+		if want := []laneItem{item(s1h, day0+120)}; !slices.Equal(got, want) {
 			t.Fatalf("got %v,\nwant %v", got, want)
 		}
 	})
 
-	t.Run("nothing accepted: only a marker at −1", func(t *testing.T) {
+	t.Run("nothing accepted: the output closes empty", func(t *testing.T) {
 		bad := bar(st, s5m, day0+1)
 		bad.OpenTs = 0
 		for name, cs := range map[string][]proto.Candle{"empty": nil, "all dropped": {bad}} {
-			if got := runLane(newLane(st, s5m, quiet()), cs...); !slices.Equal(got, []laneItem{marker(s5m, -1)}) {
-				t.Fatalf("%s: got %v, want only a marker at -1", name, got)
+			if got := runNormaliser(newNormaliser(st, s5m, quiet()), cs...); len(got) != 0 {
+				t.Fatalf("%s: got %v, want nothing", name, got)
 			}
 		}
 	})
@@ -204,8 +201,8 @@ func TestLaneRun(t *testing.T) {
 	t.Run("counters per rule", func(t *testing.T) {
 		bad := bar(st, s1h, day0+132)
 		bad.Close = math.NaN()
-		l := newLane(st, s1h, quiet())
-		runLane(l,
+		n := newNormaliser(st, s1h, quiet())
+		runNormaliser(n,
 			bar(st, s1h, day0+120),
 			bar(st, s1h, day0+120), bar(st, s1h, day0+120), // duplicates
 			bar(st, s1h, day0+126), // off due
@@ -213,18 +210,18 @@ func TestLaneRun(t *testing.T) {
 			bar(st, s1h, day0+108), // out of order
 			bar(st, s1h, day0+132))
 		want := [numDrops]int{invalid: 1, offDue: 1, duplicate: 2, outOfOrder: 1}
-		if l.drops != want {
-			t.Fatalf("drops = %v, want %v", l.drops, want)
+		if n.drops != want {
+			t.Fatalf("drops = %v, want %v", n.drops, want)
 		}
 	})
 
 	t.Run("logging", func(t *testing.T) {
 		count := func(log, msg string) int { return strings.Count(log, msg) }
-		const warn, summary = "dropping candle", "lane dropped candles"
+		const warn, summary = "dropping candle", "normalise dropped candles"
 
 		var buf bytes.Buffer
 		log := logger.NewLogger(logger.LoggerConfig{Level: "debug", Output: &buf})
-		runLane(newLane(st, s1h, log),
+		runNormaliser(newNormaliser(st, s1h, log),
 			bar(st, s1h, day0+120),
 			bar(st, s1h, day0+126), bar(st, s1h, day0+138), // off due ×2
 			bar(st, s1h, day0+108), bar(st, s1h, day0+96), // out of order ×2
@@ -237,13 +234,13 @@ func TestLaneRun(t *testing.T) {
 		}
 
 		buf.Reset()
-		runLane(newLane(st, s1h, log), bar(st, s1h, day0+120), bar(st, s1h, day0+120))
+		runNormaliser(newNormaliser(st, s1h, log), bar(st, s1h, day0+120), bar(st, s1h, day0+120))
 		if count(buf.String(), warn) != 0 || count(buf.String(), summary) != 1 {
 			t.Fatalf("duplicates only: want no warning and one summary:\n%s", buf.String())
 		}
 
 		buf.Reset()
-		runLane(newLane(st, s1h, log), bar(st, s1h, day0+120))
+		runNormaliser(newNormaliser(st, s1h, log), bar(st, s1h, day0+120))
 		if buf.Len() != 0 {
 			t.Fatalf("no drops: want no log lines:\n%s", buf.String())
 		}
