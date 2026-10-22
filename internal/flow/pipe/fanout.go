@@ -1,6 +1,9 @@
 package pipe
 
-import "sync"
+import (
+	"container/heap"
+	"sync"
+)
 
 // DefaultFanOutBuffer is the per-output capacity used when FanOut is called
 // without an explicit size.
@@ -84,50 +87,65 @@ func FanIn[T any](ins ...<-chan T) <-chan T {
 // ordered output: it holds one pending value per open input and emits the
 // least, ties going to the earlier input. Blocks while any open input has no
 // pending value, so a silent input stalls the merge. Output closes when all
-// inputs close.
+// inputs close. Pending values sit in a heap: O(log n) per value.
 func OrderedFanIn[T any](less func(a, b T) bool, ins ...<-chan T) <-chan T {
 	out := make(chan T)
 
 	go func() {
 		defer close(out)
 
-		heads := make([]T, len(ins))
-		has := make([]bool, len(ins))
-		open := make([]bool, len(ins))
-		for i := range open {
-			open[i] = true
+		h := &pendingHeap[T]{items: make([]pending[T], 0, len(ins)), less: less}
+		for i, in := range ins {
+			if v, ok := <-in; ok {
+				h.items = append(h.items, pending[T]{v, i})
+			}
 		}
+		heap.Init(h)
 
-		for {
-			// refill every open input without a pending value
-			for i, in := range ins {
-				if !open[i] || has[i] {
-					continue
-				}
-				v, ok := <-in
-				if !ok {
-					open[i] = false
-					continue
-				}
-				heads[i], has[i] = v, true
+		for h.Len() > 0 {
+			top := &h.items[0]
+			out <- top.v
+			// refill in place: replacing the root and fixing it does not allocate
+			if v, ok := <-ins[top.in]; ok {
+				top.v = v
+				heap.Fix(h, 0)
+			} else {
+				heap.Pop(h)
 			}
-
-			least := -1
-			for i := range heads {
-				if has[i] && (least < 0 || less(heads[i], heads[least])) {
-					least = i
-				}
-			}
-			if least < 0 {
-				return // all inputs closed and drained
-			}
-
-			out <- heads[least]
-			has[least] = false
 		}
 	}()
 
 	return out
+}
+
+// pending is one input's value awaiting emission.
+type pending[T any] struct {
+	v  T
+	in int
+}
+
+// pendingHeap orders pending values by less, ties to the earlier input.
+type pendingHeap[T any] struct {
+	items []pending[T]
+	less  func(a, b T) bool
+}
+
+func (h *pendingHeap[T]) Len() int { return len(h.items) }
+
+func (h *pendingHeap[T]) Less(i, j int) bool {
+	a, b := &h.items[i], &h.items[j]
+	return h.less(a.v, b.v) || !h.less(b.v, a.v) && a.in < b.in
+}
+
+func (h *pendingHeap[T]) Swap(i, j int) { h.items[i], h.items[j] = h.items[j], h.items[i] }
+
+func (h *pendingHeap[T]) Push(x any) { h.items = append(h.items, x.(pending[T])) }
+
+func (h *pendingHeap[T]) Pop() any {
+	n := len(h.items) - 1
+	x := h.items[n]
+	h.items = h.items[:n]
+	return x
 }
 
 // FanInTo combines multiple inputs into a single output.

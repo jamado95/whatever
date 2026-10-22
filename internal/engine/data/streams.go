@@ -89,6 +89,12 @@ func NewStreams(subs []proto.Subscription) *Streams {
 	return st
 }
 
+// column maps a close timestamp to the first column boundary at or after it (ceilDiv): a close at
+// or up to one stride before a boundary lands in that boundary's column.
+func (s *Streams) column(ts int64) int64 {
+	return (ts + s.Stride - 1) / s.Stride
+}
+
 // Index returns the index of the stream with the given ID.
 func (s *Streams) Index(id string) (int, bool) {
 	i, ok := s.index[id]

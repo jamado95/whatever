@@ -56,6 +56,9 @@ From [data-layer-v2.md](../../discussions/data-layer-v2.md) and
 - **Minimal `FrameBuffer`.** Iteration 1 holds market legs only; revision metadata arrives in
   iteration 2, feature entries in iteration 4, record sections (signals, orders, fills) with the
   strategy step loop (out of scope).
+- **Pipeline construction** (decided in stage 3). Stages follow `pipe.Stage` / `pipe.Merge`; one
+  unexported composer wires them, per-mode stages injected; the module exports a `data.New`
+  constructor (stage 5) — no package-level instance. The module does not use `SynchronizerV2`.
 
 ## Structure
 
@@ -63,7 +66,7 @@ Tiered. Stage docs live beside this one, produced iteratively:
 
 - `stage-1-streams.md` — *implemented.*
 - `stage-2-framebuffer.md` — *implemented.*
-- `stage-3-lanes.md`
+- `stage-3-lanes.md` — *implemented.*
 - `stage-4-release.md`
 - `stage-5-consumption.md`
 - `stage-6-data-logger-v2.md`
@@ -123,20 +126,24 @@ data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature b
   clean.
 - Plan: `stage-2-framebuffer.md`.
 
-### Stage 3 — lanes, normalisation, ordered merge
+### Stage 3 — lanes, normalisation, ordered merge ✅ implemented
 
 - **Goal:** each provider's output becomes a validated lane; lanes merge into one time-ordered
-  stream.
-- **Touches:** `internal/flow/pipe/fanout.go` (`OrderedFanIn` on a heap, same contract and tie rule,
-  so `SynchronizerV2` keeps working), new `internal/engine/data/lane.go`, tests and a merge benchmark
-  at N = 1000.
-- **Normalise:** validate, map `CloseTs` to its column, scale µs timestamps, drop identical
-  duplicates, reject a direct candle off its due column, drop and log non-increasing `CloseTs`.
+  stream; the pipeline's stage convention and composer are fixed.
+- **Touches:** `internal/flow/pipe/pipeline.go` (`Stage`, `Merge`), `internal/flow/pipe/fanout.go`
+  (`OrderedFanIn` on `container/heap`, same contract and tie rule, so `SynchronizerV2` keeps
+  working), `internal/domains/provider/binance_csv.go` (µs → ms), `internal/engine/data/streams.go`
+  (`column`), new `lane.go`, `order.go`, `pipeline.go` (the unexported composer), tests and a merge
+  benchmark at N = 10, 100, 1000.
+- **Normalise:** one lane per direct stream; rules in order — validate (ms timestamps, OHLCV, span
+  within `[timeframe − 1 s, timeframe]`), column by ceilDiv, due column, identical duplicate, column
+  beyond the last accepted. Drops logged once per rule per lane, then summarised.
 - **End of lane:** a marker ordered at the lane's next due column, so the stream leaves the expected
-  set there rather than at the end of the run.
+  set there rather than at the end of the run; −1 for a lane that accepted no candle.
 - **Acceptance:** merge output ordered by (column, stream) across mixed timeframes; a coarse lane's
   provider blocks while its next bar waits in the merge; each normalise rule tested; existing
   `OrderedFanIn` and synchronizer tests still pass; benchmark checked in.
+- Plan: `stage-3-lanes.md`.
 
 ### Stage 4 — staging, readiness and commit
 
@@ -154,8 +161,9 @@ data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature b
 ### Stage 5 — consumption and rolling aggregation
 
 - **Goal:** the engine-side half: `data.Next()` materialises a released column and returns its view.
-- **Touches:** new `internal/engine/data/data.go` (module API: construct, `Start`, `Next`, `Close`,
-  provider errors), `aggregate.go`.
+- **Touches:** new `internal/engine/data/data.go` (module API: the exported `data.New` constructor
+  around the composer, `Start`, `Next`, `Close`, provider errors; no package-level instance),
+  `aggregate.go`.
 - **Contents:** rolling aggregation of derived legs at their source's update columns, in O(1) per
   update (open `W` back, running volume, monotonic deques for high and low), window count below `W`
   during warm-up; marking the column consumed, which frees headroom; row ownership as decided.

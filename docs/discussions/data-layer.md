@@ -68,10 +68,10 @@ that `binance_csv` reads, and `cmd/scripts/binance_market_info/` queries symbols
 6. **CSV parsing assumes headerless files.** Binance has added header rows to some newer archive
    files; those would emit a parse error per file rather than being skipped. Currently benign
    because the local `data/` archives are headerless.
-7. **2025+ archives use µs timestamps.** Binance spot kline archives from 2025-01 onwards carry
-   microsecond `OpenTime`/`CloseTime` (e.g. `data/BTCUSDC/BTCUSDC-5m-2025-01.csv`).
-   `parseCsvRecordToCandle` passes them through unscaled, so `Candle` timestamps for those files
-   are 1000× the ms contract. Not yet handled. `scripts/csv_quality.py` reports the unit per file.
+7. **2025+ archives use µs timestamps.** ~~Resolved~~ — `parseCsvRecordToCandle` scales them to ms
+   (data layer v2 stage 3), so `data_logger` gets the fix too. Binance spot kline archives from
+   2025-01 onwards carry microsecond `OpenTime`/`CloseTime` (e.g.
+   `data/BTCUSDC/BTCUSDC-5m-2025-01.csv`). `scripts/csv_quality.py` reports the unit per file.
 
 ## Decisions
 
@@ -114,7 +114,7 @@ option 2 or 3 substantially more natural, so this should be settled before that 
   own provider interface? The `TimeStamped` constraint on `SortedWindow` suggests the latter is
   cheap to add.
 - Options and futures (per `Protocol.md`) need instrument metadata — expiry, strike, contract size, funding. Where does an instrument/reference-data concept live? It is not currently modelled anywhere.
-- Gap and integrity handling: missing candles, exchange halts, duplicate timestamps, and malformed candles (e.g. zero `CloseTs`). `SortedWindow` accepts out-of-order and duplicate entries, and rejects only zero-timestamp candles — which the feature chain now drops-and-warns defensively ([[features]]), a downstream stopgap rather than validation. Robustness work to review: should the provider guarantee a contiguous, deduplicated, monotonic, well-formed sequence at ingestion, or should the engine validate? Ingestion is the natural boundary, since a candle that fails here should never reach features at all.
+- Gap and integrity handling: missing candles, exchange halts, duplicate timestamps, and malformed candles (e.g. zero `CloseTs`). `SortedWindow` accepts out-of-order and duplicate entries, and rejects only zero-timestamp candles — which the feature chain now drops-and-warns defensively ([[features]]), a downstream stopgap rather than validation. Robustness work to review: should the provider guarantee a contiguous, deduplicated, monotonic, well-formed sequence at ingestion, or should the engine validate? Ingestion is the natural boundary, since a candle that fails here should never reach features at all. Answered for data layer v2: providers keep venue format and the ms contract; the data layer's lanes validate (timestamps, OHLCV, span, due column) and drop duplicates and out-of-order candles, logging them ([[data-layer-v2]] § Normalisation). `data_logger` is unchanged.
 - Does the data layer own historical warm-up (fetch N candles before live start so features have
   lookback), or is that the engine's job?
 - FX and equities need session/calendar awareness (market hours, holidays) that crypto does not. Does that belong here or in a separate calendar service? Deferred: to be added later as a module inside the data layer ([[data-layer-v2]]).

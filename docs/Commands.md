@@ -71,6 +71,7 @@ block surface on the next run, once the dependency is fixed.
 | `make check` | Run `fmt` → `tidy` → `test` → `lint` in sequence. |
 | `go build ./...` | Compile every package without producing a binary. |
 | `go vet ./...` | Go's built-in static analysis. |
+| `go test -run '^$' -bench OrderedFanIn -benchmem ./internal/flow/pipe/` | Benchmark the ordered merge at 10, 100 and 1000 inputs, per value. |
 
 `make fmt` and `make lint` need the tools on `PATH`:
 

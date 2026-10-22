@@ -66,7 +66,7 @@ end-to-end.
 | V2 `ready()` scan, N=1000 | 7.7 µs per call | per arrival |
 | Per-column arrival counter | ~0.3 ns | proposed readiness |
 | Frame build — copy + sort 1000 legs | 41 µs, 245 KB | `NewSyncEventV2`, per frame |
-| Merge, linear scan / heap, N=1000 | 356 / 56 ns per item | `OrderedFanIn` / proposed |
+| Merge, linear scan / heap, N=1000 | 356 / 56 ns per item; 1680 / 268 ns with channel hand-offs, every value tied | `OrderedFanIn` before / after data-layer-v2 stage 3 |
 | Parse one Binance kline CSV row | 261 ns | ingestion |
 
 ### Extrapolated run cost

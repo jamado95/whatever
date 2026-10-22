@@ -111,3 +111,27 @@ func TestStreamsOrder(t *testing.T) {
 		t.Errorf("order after reversing the config = %v, want %v", got, want)
 	}
 }
+
+/*
+TestStreamsColumn covers placement (ceilDiv): a close at or just before a boundary lands in that
+boundary's column; one past it lands in the next.
+*/
+func TestStreamsColumn(t *testing.T) {
+	st := NewStreams(testSubs())
+	b := day0 * st.Stride
+	for _, tc := range []struct {
+		name string
+		ts   int64
+		want int64
+	}{
+		{"boundary − 1 ms (Binance)", b - 1, day0},
+		{"exact boundary", b, day0},
+		{"boundary + 1 ms", b + 1, day0 + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := st.column(tc.ts); got != tc.want {
+				t.Fatalf("column(%d) = %d, want %d", tc.ts, got, tc.want)
+			}
+		})
+	}
+}
