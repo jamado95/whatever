@@ -31,14 +31,14 @@ From [data-layer-v2.md](../../discussions/data-layer-v2.md) and
 - **Release.** Strictly in column order. A column is released once every direct stream due at it is
   decided. Completeness by last due candle. Leg states `Fresh`, `Gap`, `Pending`, `Ended`.
 - **No ordered merge** (redesign of 2026-10-22). Each stream's align stage stages its own slots
-  within per-stream headroom; gaps are proven by the stream's own next candle; readiness counts
-  evaluates. Live adds a deadline stage per lane.
+  within its ring's capacity; gaps are proven by the stream's own next candle; readiness tracks each
+  stream's progress from its evaluates. Live adds a deadline stage per lane.
 - **Release, then materialise.** The align stages write base candles only into slots beyond the
   released head; `data.Next()` on the engine goroutine aggregates derived legs and returns a pinned
   view.
 - **History reads take their step from the stream's timeframe**, anchored at its latest update.
 - **Capacity.** Depth = deepest declared read + headroom, 365-day cap; a stream's align stage blocks
-  when its headroom runs out.
+  when its ring is full.
 
 ## Decisions taken by this plan
 
@@ -57,10 +57,10 @@ From [data-layer-v2.md](../../discussions/data-layer-v2.md) and
 - **Minimal `FrameBuffer`.** Iteration 1 holds market legs only; revision metadata arrives in
   iteration 2, feature entries in iteration 4, record sections (signals, orders, fills) with the
   strategy step loop (out of scope).
-- **Pipeline construction** (decided in stages 3 and 3.1). Stages follow `pipe.Stage`; one
-  unexported composer wires a lane of per-stream stages for each direct stream, per mode; the module
-  exports a `data.New` constructor (stage 5) — no package-level instance. The module does not use
-  `SynchronizerV2`.
+- **Pipeline construction** (decided in stages 3, 3.1 and 4). Stages follow `pipe.Stage`; one
+  unexported composer wires a lane of per-stream stages for each direct stream, per mode, and joins
+  their evaluates into readiness with `pipe.FanIn`; the module exports a `data.New` constructor
+  (stage 5) — no package-level instance. The module does not use `SynchronizerV2`.
 
 ## Structure
 
@@ -70,7 +70,7 @@ Tiered. Stage docs live beside this one, produced iteratively:
 - `stage-2-framebuffer.md` — *implemented.*
 - `stage-3-lanes.md` — *implemented; partly superseded by 3.1.*
 - `stage-3.1-lanes.md` — *implemented.*
-- `stage-4-align-readiness.md`
+- `stage-4-align-readiness.md` — *implemented.*
 - `stage-5-consumption.md`
 - `stage-6-data-logger-v2.md`
 
@@ -162,22 +162,28 @@ data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature b
   stage 3 introduced is left without a caller.
 - Plan: `stage-3.1-lanes.md`.
 
-### Stage 4 — align and readiness
+### Stage 4 — align and readiness ✅ implemented
 
 - **Goal:** per-stream align stages and one readiness stage turn the lanes into in-order `Current`
   frame events.
-- **Touches:** new `internal/engine/data/align.go`, `readiness.go`, `event.go`; `pipeline.go` chains
-  align onto each lane and joins the lanes with readiness.
-- **Contents:** align stages `Fresh`, `Gap` and `Ended` slots within per-stream headroom, takes the
-  carried candle from its own state, reports before blocking and sends an evaluate per resolved
-  column; readiness keeps per-column counts against the streams due there and releases decided
-  columns in order with completeness by last due candle; the engine's consumption wakes blocked align
-  stages. Evaluate delivery (`FanIn` against per-column atomic counters) is benchmarked first.
-- **Acceptance:** table tests over injected evaluates, with the same frames under any arrival order;
-  a coarse stream between closes is not waited on; a missing coarse bar is `Gap` and its hour
-  `Partial`; a stream not yet started makes frames `Partial`; an ended lane leaves the expected set;
-  a gap is proven by the stream's own next candle; the last column is released once every lane has
-  ended; per-stream blocking without deadlock under skew. Readiness benchmark at N = 1000.
+- **Touches:** new `internal/engine/data/align.go` (gate, align stage), `readiness.go`, `event.go`;
+  `buffer.go` / `view.go` (each ring's first column, `defaultHeadroom`); `pipeline.go` chains align
+  onto each lane and joins the lanes' evaluates with `pipe.FanIn` into readiness; tests and a
+  readiness benchmark.
+- **Contents:** align stages `Fresh`, `Gap` and `Ended` slots, taking the carried candle from its own
+  ring's previous slot, reporting before blocking and sending an evaluate per resolved column. It
+  waits for ring capacity measured from the oldest readable bar — the whole ring at startup, then up
+  to `consumed + spare·Period` — on a gate holding the engine's consumed column; reads stop at a
+  stream's first column. Readiness keeps each stream's progress (`through`), checks the next column
+  on each evaluate resuming at the blocking stream, caps release at `reach` (the latest `Fresh` or
+  `Gap` column) and reads completeness from the `View`. `defaultHeadroom` is 128 columns; the event
+  channel holds as many.
+- **Acceptance:** table tests over evaluates staged by real align stages, the same frames under 23
+  arrival orders; a coarse stream between closes is not waited on; a missing coarse bar is `Gap` and
+  its hour `Partial`; streams not yet started make frames `Partial`; ended lanes leave the expected
+  set; a gap is proven by the stream's own next candle; the run ends at the latest `Fresh` column;
+  per-stream blocking without deadlock under skew; readiness benchmark at N = 10, 100, 1000.
+- Plan: `stage-4-align-readiness.md`.
 
 ### Stage 5 — consumption and rolling aggregation
 
@@ -187,7 +193,8 @@ data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature b
   `aggregate.go`.
 - **Contents:** rolling aggregation of derived legs at their source's update columns, in O(1) per
   update (open `W` back, running volume, monotonic deques for high and low), window count below `W`
-  during warm-up; marking the column consumed, which frees headroom; row ownership as decided.
+  during warm-up; marking the column consumed (the gate's `consume`), which frees ring capacity;
+  `Close` releases align stages waiting on the gate; row ownership as decided.
 - **Acceptance:** at UTC boundaries a rolling 1h from 5m equals the closed 1h bar from the CSV; a
   derivation of a coarse direct stream updates at its source's period; warm-up count; `-race` clean
   with the align stages staging ahead.
@@ -230,7 +237,7 @@ High-level only.
 
 High-level only. Depends on warm-up ownership in [data-layer.md](../../discussions/data-layer.md).
 
-- `Backfill` status: startup history is bounded by per-stream headroom, with providers blocking
+- `Backfill` status: startup history is bounded by per-stream ring capacity, with providers blocking
   rather than dropping while they deliver it; the pacer is bypassed; the first frame after catch-up
   is `Current`.
 - Catch-up after reconnect or overrun.
@@ -276,7 +283,7 @@ in [features.md](../../discussions/features.md) and the `Layout` declaration ope
 
 ## Open items to resolve within stages
 
-- Headroom value and event channel capacity — stage 4.
-- Evaluate delivery into readiness and the headroom wake-up — stage 4.
+- Headroom value, event channel capacity, evaluate delivery and the wake-up — resolved in stage 4.
+- Stopping align stages waiting on the gate (`Close`) — stage 5.
 - Derived leg state when its source has a gap inside the window — stage 5.
 - Frame logging format and the v2 config file's location — stage 6.

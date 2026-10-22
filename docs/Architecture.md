@@ -14,8 +14,9 @@ Entry Point
 Core Architecture
 - internal/domains: domain logic (execution, market, monitor, features, provider, risk, strategy)
 - internal/engine: orchestration (backtesting, logging, full runtime)
-  - internal/engine/data: data layer v2 module — stream table, FrameBuffer and the per-stream lanes
-    so far; align, readiness and the module API as built per `docs/plans/data-layer-v2`
+  - internal/engine/data: data layer v2 module — stream table, FrameBuffer, per-stream lanes
+    (normalise, align) and readiness, joined with pipe.FanIn; the module API as built per
+    `docs/plans/data-layer-v2`
 - internal/flow: data-flow primitives — pipe (generic combinators, fanout), align (cross-stream synchronizers), timing (tickers)
 - internal/protocol: domain interfaces
 - internal/registry: registers all internal component factories

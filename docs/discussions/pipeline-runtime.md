@@ -87,8 +87,8 @@ end-to-end.
 |---|---|---|
 | Bound by | CPU throughput | Waiting on data and venue |
 | Clock | Data-driven, as fast as possible | Wall clock / venue |
-| Backpressure | Pull, per stream: an align stage at its headroom blocks its provider | Never upstream of the align stages |
-| Ordering | None: per-stream headroom bounds skew, no deadline | Arrival order + a deadline stage per lane |
+| Backpressure | Pull, per stream: an align stage with a full ring blocks its provider | Never upstream of the align stages |
+| Ordering | None: per-stream ring capacity bounds skew, no deadline | Arrival order + a deadline stage per lane |
 | `Late` | Never occurs | Bounded recompute |
 | Buffers | Rings; shared memory-mapped dataset | Rings + lane buffers + frame-event queue |
 | Parallelism | Across runs; share data, frame index, fixed features | Within a step, only for heavy features |
