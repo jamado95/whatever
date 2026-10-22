@@ -1,9 +1,13 @@
 package data
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"slices"
 	"testing"
+
+	"whatever/internal/flow/pipe"
+	proto "whatever/internal/protocol"
 )
 
 // segment is a run of released columns, from..to inclusive, sharing one completeness.
@@ -194,5 +198,53 @@ func TestReadinessRun(t *testing.T) {
 	}
 	if want := frames(segment{d, d + 24, true}); !slices.Equal(got, want) {
 		t.Fatalf("events %v, want %v", got, want)
+	}
+}
+
+/*
+BenchmarkReadiness measures align → pipe.FanIn → readiness per released column, with n direct 1m
+streams on one grid. Each align stage's lane is filled and closed before the timer starts; the loop
+consumes every event as the engine would. ns/evaluate is the time per column divided by n.
+*/
+func BenchmarkReadiness(b *testing.B) {
+	for _, n := range []int{10, 100, 1000} {
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			subs := make([]proto.Subscription, n)
+			for i := range subs {
+				subs[i] = sub(fmt.Sprintf("S%04d", i), proto.Timeframe1m, "bench")
+			}
+			buf, err := newFrameBuffer(NewStreams(subs), 1, defaultHeadroom)
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			per := int64(b.N) + 1
+			lanes := make([]chan laneItem, n)
+			for s := range lanes {
+				lanes[s] = make(chan laneItem, per)
+				for col := int64(1); col <= per; col++ {
+					lanes[s] <- laneItem{col: col, c: candle(s, col)}
+				}
+				close(lanes[s])
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			g := newGate()
+			evs := make([]<-chan evaluate, n)
+			for s := range evs {
+				evs[s] = newAligner(buf, g, s).run(lanes[s])
+			}
+			out := newReadiness(buf).run(pipe.FanIn(evs...))
+			for range b.N {
+				g.consume((<-out).Col)
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*n), "ns/evaluate")
+
+			for ev := range out { // drain so every goroutine exits
+				g.consume(ev.Col)
+			}
+		})
 	}
 }

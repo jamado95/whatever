@@ -1,6 +1,7 @@
 package data
 
 import (
+	"math"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -24,7 +25,8 @@ TestPipelineLanes covers the composer: one lane per direct stream, each carrying
 stream's accepted candles in order before closing; no direct streams, no lanes.
 */
 func TestPipelineLanes(t *testing.T) {
-	st := NewStreams(testSubs())
+	f := newFixture(t)
+	st := f.st
 	s1h, s5m, s1d := mustIndex(t, st, idBTC1h), mustIndex(t, st, idBTC5m), mustIndex(t, st, idETH1d)
 
 	t.Run("one lane per direct stream", func(t *testing.T) {
@@ -50,7 +52,7 @@ func TestPipelineLanes(t *testing.T) {
 			ins[s] = feedAll(in)
 		}
 
-		lanes := replayPipeline(st, quiet()).run(ins)
+		lanes := replayPipeline(f.buf, newGate(), quiet()).lanes(ins)
 		if len(lanes) != st.Directs {
 			t.Fatalf("%d lanes, want %d", len(lanes), st.Directs)
 		}
@@ -66,7 +68,7 @@ func TestPipelineLanes(t *testing.T) {
 	})
 
 	t.Run("no direct streams", func(t *testing.T) {
-		if lanes := replayPipeline(st, quiet()).run(nil); len(lanes) != 0 {
+		if lanes := replayPipeline(f.buf, newGate(), quiet()).lanes(nil); len(lanes) != 0 {
 			t.Fatalf("%d lanes, want none", len(lanes))
 		}
 	})
@@ -77,7 +79,8 @@ TestPipelineLanesIndependent covers per-stream blocking: a lane nobody reads sto
 once its buffer is full, while the other lanes run to the end.
 */
 func TestPipelineLanesIndependent(t *testing.T) {
-	st := NewStreams(testSubs())
+	f := newFixture(t)
+	st := f.st
 	s1h, s5m, s1d := mustIndex(t, st, idBTC1h), mustIndex(t, st, idBTC5m), mustIndex(t, st, idETH1d)
 
 	coarse := make(chan proto.MarketData)
@@ -95,7 +98,7 @@ func TestPipelineLanesIndependent(t *testing.T) {
 		}
 	}()
 
-	lanes := replayPipeline(st, quiet()).run(ins)
+	lanes := replayPipeline(f.buf, newGate(), quiet()).lanes(ins)
 	for _, s := range []int{s5m, s1d} {
 		n := 0
 		for range lanes[s] {
@@ -116,5 +119,144 @@ func TestPipelineLanesIndependent(t *testing.T) {
 	}
 	if n := sent.Load(); n != 1000 {
 		t.Fatalf("provider sent %d bars after its lane was drained, want 1000", n)
+	}
+}
+
+// throttled returns cs as provider output from a goroutine that pauses every 50 candles.
+func throttled(cs []proto.Candle) <-chan proto.MarketData {
+	ch := make(chan proto.MarketData)
+	go func() {
+		defer close(ch)
+		for i, c := range cs {
+			if i%50 == 0 {
+				time.Sleep(time.Millisecond)
+			}
+			ch <- proto.MarketData{Candle: c}
+		}
+	}()
+	return ch
+}
+
+// consumeAll reads every event, consuming each column as the engine would; a stall of 10 s fails.
+func consumeAll(t *testing.T, g *gate, events <-chan Event) []Event {
+	t.Helper()
+	var got []Event
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				return got
+			}
+			got = append(got, ev)
+			g.consume(ev.Col)
+		case <-deadline:
+			t.Fatalf("stalled after %d events", len(got))
+		}
+	}
+}
+
+/*
+model computes the frames expected from each stream's accepted columns by brute force: every column
+from the earliest first candle to the latest candle, Complete when every stream that has started and
+not ended has a candle at its latest due column.
+*/
+func model(st *Streams, accepted map[int][]int64) []Event {
+	first, last := int64(math.MaxInt64), int64(math.MinInt64)
+	sets := make(map[int]map[int64]bool)
+	for s, cs := range accepted {
+		if len(cs) == 0 {
+			continue
+		}
+		first, last = min(first, cs[0]), max(last, cs[len(cs)-1])
+		sets[s] = make(map[int64]bool)
+		for _, c := range cs {
+			sets[s][c] = true
+		}
+	}
+
+	var evs []Event
+	for col := first; col <= last; col++ {
+		complete := true
+		for s, cs := range accepted {
+			if len(cs) == 0 {
+				continue
+			}
+			p := st.All[s].Period
+			switch {
+			case col < cs[0]: // not started
+				complete = false
+			case col >= cs[len(cs)-1]+p: // ended
+			case !sets[s][col-col%p]:
+				complete = false
+			}
+		}
+		evs = append(evs, Event{Status: Current, Complete: complete, Col: col})
+	}
+	return evs
+}
+
+/*
+TestPipelineRun covers the replay pipeline end to end with headroom 4: a day of 5m bars with a gap
+and an invalid bar, 1h bars ending at 11:00 and two 1d bars, each event consumed as it arrives.
+Every column is released once, in order, with the completeness of a brute-force model.
+*/
+func TestPipelineRun(t *testing.T) {
+	const d = day0
+	f := newFixture(t)
+	s1h, s5m, s1d := f.idx(idBTC1h), f.idx(idBTC5m), f.idx(idETH1d)
+
+	fiveMin := slices.DeleteFunc(span(d+1, d+288, 1), func(c int64) bool { return c == d+50 })
+	in5m := bars(f.st, s5m, fiveMin...)
+	in5m[slices.Index(fiveMin, d+60)].Volume = -1 // invalid: dropped by normalise, then a Gap
+
+	ins := make([]<-chan proto.MarketData, f.st.Directs)
+	ins[s5m] = feedAll(in5m)
+	ins[s1h] = feedAll(bars(f.st, s1h, span(d+12, d+132, 12)...))
+	ins[s1d] = feedAll(bars(f.st, s1d, d, d+288))
+
+	g := newGate()
+	got := consumeAll(t, g, replayPipeline(f.buf, g, quiet()).run(ins))
+	want := model(f.st, map[int][]int64{
+		s5m: slices.DeleteFunc(fiveMin, func(c int64) bool { return c == d+60 }),
+		s1h: span(d+12, d+132, 12),
+		s1d: {d, d + 288},
+	})
+	if !slices.Equal(got, want) {
+		t.Fatalf("%d events %v,\nwant %d %v", len(got), got, len(want), want)
+	}
+}
+
+/*
+TestPipelineSkew covers per-stream blocking under skew with headroom 4: ten days of 5m, 1h and 1d
+bars, the coarse lanes fed at once and the 5m lane throttled, then the reverse. Both runs release
+every column once, in order, with the same frames, and neither stalls.
+*/
+func TestPipelineSkew(t *testing.T) {
+	const d = day0
+	st := NewStreams(testSubs())
+	s1h, s5m, s1d := mustIndex(t, st, idBTC1h), mustIndex(t, st, idBTC5m), mustIndex(t, st, idETH1d)
+	cols := map[int][]int64{
+		s5m: span(d+1, d+2880, 1),
+		s1h: span(d+12, d+2880, 12),
+		s1d: span(d+288, d+2880, 288),
+	}
+	want := model(st, cols)
+
+	for _, slow := range [][]int{{s5m}, {s1h, s1d}} {
+		f := newFixture(t)
+		ins := make([]<-chan proto.MarketData, f.st.Directs)
+		for s, cs := range cols {
+			if slices.Contains(slow, s) {
+				ins[s] = throttled(bars(f.st, s, cs...))
+			} else {
+				ins[s] = feedAll(bars(f.st, s, cs...))
+			}
+		}
+
+		g := newGate()
+		if got := consumeAll(t, g, replayPipeline(f.buf, g, quiet()).run(ins)); !slices.Equal(got, want) {
+			t.Fatalf("slow lanes %v: %d events, want %d", slow, len(got), len(want))
+		}
 	}
 }
