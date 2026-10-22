@@ -17,7 +17,8 @@ func (v View) Boundary() int64 { return v.col * v.buf.streams.Stride }
 func (v View) Complete() bool { return v.complete }
 
 // latest returns the slot of stream s's latest update at or before the view's column — its Ended
-// slot once past the end — or nil if the stream has not started.
+// slot once past the end — or nil if the stream has not started. Below the stream's first column no
+// slot is read.
 func (v View) latest(s int) *slot {
 	period := v.buf.streams.All[s].Period
 	r := &v.buf.rings[s]
@@ -25,6 +26,9 @@ func (v View) latest(s int) *slot {
 	a := v.col - v.col%period
 	if end := r.end.Load(); a >= end {
 		a = end
+	}
+	if a < r.first.Load() {
+		return nil
 	}
 	if sl := r.at(a, period); sl.col == a {
 		return sl
@@ -64,8 +68,9 @@ func (v View) Count(stream int) int {
 /*
 Candles appends up to n of the stream's Fresh bars to dst[:0], newest first, one bar (Window slots)
 per step back from its latest update. Gap and Ended slots are skipped. The walk covers at most the
-stream's kept bars, which headroom keeps clear of the aligner's writes, and stops at a slot holding
-another column: the stream had not started, or the bar was overwritten.
+stream's kept bars, which ring capacity keeps clear of the align stage's writes, stops at the
+stream's first column, and stops at a slot holding another column: the stream had not started, or
+the bar was overwritten.
 */
 func (v View) Candles(stream, n int, dst []proto.Candle) []proto.Candle {
 	dst = dst[:0]
@@ -77,7 +82,8 @@ func (v View) Candles(stream, n int, dst []proto.Candle) []proto.Candle {
 	st := v.buf.streams.All[stream]
 	r := &v.buf.rings[stream]
 	step := st.Period * st.Window
-	for i, col := int64(0), sl.col; i < r.bars && col >= 0 && len(dst) < n; i, col = i+1, col-step {
+	first := r.first.Load()
+	for i, col := int64(0), sl.col; i < r.bars && col >= first && len(dst) < n; i, col = i+1, col-step {
 		s := r.at(col, st.Period)
 		if s.col != col {
 			break

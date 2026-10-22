@@ -245,6 +245,50 @@ func TestViewCandles(t *testing.T) {
 }
 
 /*
+TestViewFirst covers reads bounded by a stream's first column: a ring filled from there wraps onto
+the slots of earlier columns, which still read as not started, and history never goes below it.
+*/
+func TestViewFirst(t *testing.T) {
+	const first = 100
+
+	t.Run("a ring filled from the first column", func(t *testing.T) {
+		f := newFixture(t)
+		s := f.idx(idBTC5m) // 25 slots, 20 bars kept
+		f.buf.start(s, first)
+		f.fresh(s, span(first, first+24, 1)...)
+
+		for _, col := range []int64{first - 25, first - 10, first - 1} {
+			v := f.buf.view(col, true)
+			if c, st, age := v.Leg(s); c != (proto.Candle{}) || st != Gap || age != -1 {
+				t.Errorf("view at %d: Leg = %+v %d %d, want not started", col, c, st, age)
+			}
+			if n := v.Count(s); n != 0 {
+				t.Errorf("view at %d: Count = %d, want 0", col, n)
+			}
+			if got := v.Candles(s, 10, nil); len(got) != 0 {
+				t.Errorf("view at %d: %d candles, want none", col, len(got))
+			}
+		}
+	})
+
+	t.Run("nothing below the first column is read", func(t *testing.T) {
+		f := newFixture(t)
+		s := f.idx(idBTC5m)
+		f.fresh(s, first-2, first-1)
+		f.buf.start(s, first)
+		f.fresh(s, span(first, first+3, 1)...)
+
+		if _, st, age := f.buf.view(first-1, true).Leg(s); st != Gap || age != -1 {
+			t.Errorf("Leg before the first column = %d %d, want not started", st, age)
+		}
+		got := f.buf.view(first+3, true).Candles(s, 10, nil)
+		if want := candles(s, first+3, first+2, first+1, first); !slices.Equal(got, want) {
+			t.Errorf("Candles = %v, want %v", got, want)
+		}
+	})
+}
+
+/*
 TestViewAllocations checks the hot path: with dst capacity, reads allocate nothing.
 */
 func TestViewAllocations(t *testing.T) {

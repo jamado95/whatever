@@ -21,10 +21,10 @@ const (
 )
 
 /*
-FrameBuffer holds every stream's market legs, one ring per stream with one slot per update. The
-aligner writes direct slots for columns it has not released; the engine goroutine writes released
-columns and reads through pinned Views. Nothing is locked: the frame event's channel send publishes
-the aligner's slots, and headroom keeps its writes off the slots views read.
+FrameBuffer holds every stream's market legs, one ring per stream with one slot per update. A direct
+stream's align stage writes its slots until it sends their evaluate; the engine goroutine writes
+released columns and reads through pinned Views. Nothing is locked: the evaluate and event sends
+publish the align stages' slots, and ring capacity keeps their writes off the slots views read.
 */
 type FrameBuffer struct {
 	streams *Streams
@@ -34,6 +34,7 @@ type FrameBuffer struct {
 type ring struct {
 	slots []slot
 	bars  int64        // bars kept for reads; the slots beyond them are headroom
+	first atomic.Int64 // first column; reads never go below it. 0 until start
 	end   atomic.Int64 // Ended column; math.MaxInt64 while open
 }
 
@@ -47,11 +48,11 @@ type slot struct {
 
 /*
 newFrameBuffer sizes one ring per stream. lookback is the longest read in bars, the same for every
-stream; headroom is how many columns the aligner may write beyond the engine's column. A direct
-stream keeps max(lookback, W+1, 1) bars, W the largest window derived from it; a derived stream keeps
-max(lookback, 1) bars of Window slots each. Each ring adds ceil(headroom / Period) slots — the most
-the aligner can write ahead of the engine's column — plus one spare. A stream whose kept bars span
-more than 365 days is an error.
+stream; headroom is how many columns an align stage may write beyond the engine's column once its
+ring holds full history. A direct stream keeps max(lookback, W+1, 1) bars, W the largest window
+derived from it; a derived stream keeps max(lookback, 1) bars of Window slots each. Each ring adds
+ceil(headroom / Period) slots plus one spare. A stream whose kept bars span more than 365 days is an
+error.
 */
 func newFrameBuffer(streams *Streams, lookback int, headroom int64) (*FrameBuffer, error) {
 	if lookback < 0 || headroom < 0 {
@@ -85,6 +86,15 @@ func newFrameBuffer(streams *Streams, lookback int, headroom int64) (*FrameBuffe
 		ring.end.Store(math.MaxInt64)
 	}
 	return buf, nil
+}
+
+/*
+start records stream s's first column, before its first put. Reads never go below it, so the
+stream's align stage may fill the whole ring before anything is read, wrapping onto the slots of
+columns before it.
+*/
+func (b *FrameBuffer) start(s int, col int64) {
+	b.rings[s].first.Store(col)
 }
 
 // at returns the slot that holds col, or would.

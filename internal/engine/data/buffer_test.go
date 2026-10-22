@@ -256,7 +256,7 @@ func TestPut(t *testing.T) {
 }
 
 /*
-TestFrameBufferConcurrency runs a writer ahead of a reader the way the aligner runs ahead of the
+TestFrameBufferConcurrency runs a writer ahead of a reader the way an align stage runs ahead of the
 engine: one goroutine writes the 5m stream at most headroom columns ahead and publishes each column
 on a channel; the reader checks views pinned at the published columns. Meaningful under -race.
 */
@@ -298,6 +298,47 @@ func TestFrameBufferConcurrency(t *testing.T) {
 			if want := candle(s, newest-int64(k)); got != want {
 				t.Fatalf("col %d: candle %d = %+v, want %+v", col, k, got, want)
 			}
+		}
+	}
+}
+
+/*
+TestFrameBufferStartup runs a writer filling a ring at startup the way an align stage does before the
+engine reads: it starts the 5m stream at first, then writes every slot of the ring, wrapping onto the
+slots of columns before first, and publishes each column. The reader checks views before first and
+at the published columns. Meaningful under -race: reads before first touch no slot being written.
+*/
+func TestFrameBufferStartup(t *testing.T) {
+	const first = 1000
+	f := newFixture(t)
+	s := f.idx(idBTC5m)
+	n := int64(len(f.buf.rings[s].slots))
+
+	pub := make(chan int64, n)
+	go func() {
+		defer close(pub)
+		f.buf.start(s, first)
+		for col := int64(first); col < first+n; col++ {
+			f.buf.put(s, col, candle(s, col), Fresh, 0)
+			pub <- col
+		}
+	}()
+
+	dst := make([]proto.Candle, 0, 20)
+	for col := range pub {
+		for _, before := range span(first-n, first-1, 1) {
+			if _, state, age := f.buf.view(before, true).Leg(s); state != Gap || age != -1 {
+				t.Fatalf("col %d: Leg at %d = %d %d, want not started", col, before, state, age)
+			}
+		}
+
+		v := f.buf.view(col, true)
+		if c, state, _ := v.Leg(s); state != Fresh || c != candle(s, col) {
+			t.Fatalf("col %d: Leg = %+v %d", col, c, state)
+		}
+		dst = v.Candles(s, 20, dst)
+		if want := int(min(col-first+1, 20)); len(dst) != want || dst[len(dst)-1] != candle(s, col-int64(want)+1) {
+			t.Fatalf("col %d: candles %v, want %d down to %d", col, dst, want, col-int64(want)+1)
 		}
 	}
 }
