@@ -18,12 +18,12 @@ Opened 2026-10-17.
 |---|---|---|
 | Provider injection, one instance per sub | `cmd/wire.go` (`_providers`) | Module input |
 | `FeatureChain`'s `SortedWindow`, one per chain | `internal/domains/features/feature.go` | `FrameBuffer` history |
-| `syncState` matrix, `runV2`, readiness | `internal/flow/align/synchronizer_v2.go` | Staging and release stages |
-| `OrderedFanIn` linear-scan merge | `internal/flow/pipe/fanout.go` | Replay ordering stage: `OrderedFanIn` over all provider outputs, heap-based |
+| `syncState` matrix, `runV2`, readiness | `internal/flow/align/synchronizer_v2.go` | Per-stream align stages (staging) and one readiness stage (release) |
+| `OrderedFanIn` linear-scan merge | `internal/flow/pipe/fanout.go` | Not used by the data layer — per-stream headroom bounds skew; the heap upgrade stays for `SynchronizerV2` |
 | `Ticker` gate on the synchronizer output | `internal/engine/ticker.go` | Engine-side pacer ([[pipeline-runtime]]) |
 | Per-candle `map[string]any` snapshot | `internal/protocol/snapshot.go` | `FrameBuffer` feature entries |
 | Independent subscriptions per timeframe | `config.json` | Direct subscriptions at the grid timeframe or a multiple; derivations declared inside the direct subscription |
-| Multi-timeframe column machinery (period map, owning columns, `2 × coarsest` window) | `internal/flow/align/synchronizer_v2.go` | Per-stream period (due columns, last close); the window gives way to replay ordering ahead of staging |
+| Multi-timeframe column machinery (period map, owning columns, `2 × coarsest` window) | `internal/flow/align/synchronizer_v2.go` | Per-stream period (due columns, last close); the window gives way to per-stream headroom |
 
 ### Rolling aggregation semantics
 
@@ -63,17 +63,20 @@ X 1h  (rolling)   F      F      F      F       F      F    c = carries its last 
   at 10:30.
 - **A coarse direct stream is expected only at its due columns**; between them it carries its last
   close. Readiness stays a per-column count, against the streams due at that column.
-- **Two proofs that a coarse stream has nothing at a non-due column:** its period (both modes), and
-  in replay its next bar waiting in the merge. Leg states need the period in both modes; live has
-  nothing else.
-- **Replay skew is the merge's job.** Fed at equal candles/s, a 1h lane runs 60× faster in data time
-  than a 1m lane. `OrderedFanIn` pulls by data time: the 1h lane's next bar waits in the merge and its
-  provider blocks, so lanes advance together whatever their feed speed. Per-lane tickers are gone;
-  pacing is engine-side.
-- **Staging cannot absorb skew.** Under arrival order the fast lane fills headroom beyond the released
-  head, which only the slow lane's data advances; the data layer blocks, the slow lane can no longer
-  deliver, and the run deadlocks (today's V2 window evicts instead — incomplete frames). Ordering
-  must precede staging; with it, staging runs about one column ahead of the released head.
+- **A coarse stream has nothing at a non-due column by its period**, in both modes. A missing bar at
+  a due column is proven by the stream's own next bar (lanes are ordered) or, live, presumed at its
+  deadline.
+- **Replay skew is bounded per stream.** Fed at equal candles/s, a 1h lane runs 60× faster in data
+  time than a 1m lane. Its align stage blocks once its next column passes the consumed column +
+  headroom, its provider blocks behind it, and the other lanes keep flowing. Per-lane tickers are
+  gone; pacing is engine-side.
+- **Blocking must be per stream.** One goroutine staging every stream deadlocks under skew: blocked
+  on the fast lane's headroom, it stops draining the slow lane too, so the released head never moves
+  (today's V2 window evicts instead — incomplete frames). With one align stage per stream, only the
+  stream ahead blocks. Take the lowest column `m` any lane is blocked on: every stream has resolved its
+  due columns below `m`, readiness releases up to `m − 1`, the engine consumes them, and the lane at
+  `m` resumes. It holds for headroom ≥ 1 column, provided each lane reports what it knows before it
+  blocks (Decisions § Alignment).
 - **Live has no such skew** — a lane cannot run ahead of the wall clock — except startup history (Open
   Questions § Warm-up ownership).
 
@@ -87,22 +90,26 @@ construction, one provider stream.
 
 - **Module `internal/engine/data`.** In: `Subscription`s and provider instances. Out: in-order frame
   events and the `FrameBuffer`.
-- **Stage order:** provider ingestion → alignment → buffer ordering logic → frame alignment /
-  readiness → commit → aggregation. Commit releases ready columns and emits their events in column
-  order; aggregation runs when the engine dequeues an event (see Consumption).
-- **The `FrameBuffer` is the staging environment** — rows beyond the released head hold undecided
+- **Stage order.** Per direct stream, one goroutine per stage: ingest → normalise → deadline (live
+  only) → align. Then one readiness stage (ready → commit) releases columns and emits their events in
+  column order. Aggregation runs when the engine dequeues an event (see Consumption).
+- **The `FrameBuffer` is the staging environment** — slots beyond the released head hold undecided
   columns. No separate staging model.
+- **Alignment is per stream, readiness is per frame.** Placing a datapoint needs only its own
+  stream; deciding when a frame goes out, and whether it is complete, needs every stream due at the
+  column.
 - **The data layer does not use `SynchronizerV2`** and never imports `align`. Carried over as ideas,
-  not code: ceilDiv placement (`Streams.column`), the merge injected per mode, and the apply →
-  evaluate → emit loop, rewritten as the aligner's stage → ready → commit.
+  not code: ceilDiv placement (`Streams.column`), readiness as a per-column count, and the apply →
+  evaluate → emit loop, rewritten as align → evaluate → release.
 - **Stage convention:** a stage is a `pipe.Stage[In, Out]` — it starts its own goroutine, owns its
-  output and closes it once its input closes, and never drops a value silently; a fan-in is a
-  `pipe.Merge[T]`. Goroutine boundaries sit only where parallelism or blocking needs them (lanes,
-  merge, aligner, engine); steps inside one goroutine are plain functions called in sequence. No
-  third-party pipeline library: none offers a merge ordered by key, and the hot path needs typed
-  channels without per-item boxing.
-- **One unexported composer** (`pipeline`) wires the stages in one place, with per-mode stages
-  injected. The module exports a `data.New` constructor (stage 5); no package-level instance.
+  output and closes it once its input closes, and never drops a value silently. Goroutine boundaries
+  sit only where parallelism or blocking needs them (the
+  per-stream lane stages, readiness, the engine); steps inside one goroutine are plain functions
+  called in sequence. No third-party pipeline library: the hot path needs typed channels without
+  per-item boxing or wrapping.
+- **One unexported composer** (`pipeline`) wires the stages in one place, per mode: replay leaves out
+  the deadline stage. The module exports a `data.New` constructor (stage 5); no package-level
+  instance.
 
 ### Normalisation
 
@@ -117,7 +124,51 @@ construction, one provider stream.
   subscription.
 - **Drops are logged once per rule per lane, then summarised** when the lane ends; identical
   duplicates are only counted.
-- **A lane carries column, stream index, end flag and candle**; the stream index is authoritative.
+- **Lane items carry column and candle**; live adds the deadline stage's `Pending` markers. A lane
+  is one stream, so its index is implied by the lane. A lane's end is its channel closing.
+
+### Alignment
+
+- **One align stage per direct stream stages its own stream** into its ring, beyond the released
+  head: `Fresh` at the candle's column; `Gap` at each skipped due column, proven by the stream's own
+  next candle; `Pending` on a deadline marker (live); `Ended` at `lastCol + Period` when its input
+  closes. A lane that accepted no candle reports that it ended before starting and never enters the
+  expected set.
+- **Evaluate.** After writing a column's slot, align sends `evaluate(stream, col, state)` to
+  readiness.
+- **Ownership by evaluate.** Align is the only writer of its stream's slots until it sends that
+  column's evaluate; afterwards the slot belongs to readiness and the engine. A candle for a column
+  already evaluated is `Late`: forwarded, never written. Every slot has one writer at any moment, with
+  no locks — the channel send publishes the write.
+- **Report before blocking.** On its first candle at `f`, align reports "not started before `f`" (no
+  slots exist before a stream's first candle). Gaps are written one due column at a time, each after
+  its own headroom wait, then reported. Reporting a gap before writing its slot would release a column
+  whose slot is missing; writing a long gap before reporting any of it would deadlock once it exceeds
+  headroom.
+- **Headroom is per stream.** Align blocks while its next column is beyond the consumed column +
+  headroom; its provider then blocks (replay) or buffers and drops (live). Only the stream ahead
+  blocks.
+- **The carried candle comes from align's own state**, not the previous slot: from iteration 2 the
+  engine writes `Late` candles into released slots.
+
+### Deadline (live)
+
+- **Its own lane stage, between normalise and align, live only.** The replay composer leaves it out,
+  so align is identical in both modes and free of time.
+- **The deadline belongs to the column:** `boundary(c) + lateness`, `boundary(c) = c × Stride`. It is
+  known before any data arrives and compared with the injected `Clock` (the NTP-synced host clock);
+  `ReceivedAt` plays no part.
+- **One timer per lane**, armed at the stream's next due column. When it fires with no candle for
+  that column, the stage first reads any candle already waiting on its input, then sends a `Pending`
+  marker. A candle for a later column before the deadline is a gap proof; the timer moves to the next
+  due column.
+- **It never writes slots.** The marker and the candles travel through one ordered channel, so align
+  sees them in a definite order: the marker becomes a `Pending` slot and an evaluate; a candle for that
+  column afterwards is `Late`.
+- **Readiness has no clock.** Every evaluate comes from an align stage. Owning the deadline in the
+  lane removes the race between a deadline decision and a candle being staged; the alternative —
+  readiness owns one timer and seals each stream under a lock — was rejected for the shared lock.
+- **Per-stream lateness** becomes a setting of each deadline stage when it is needed.
 
 ### Subscriptions and the grid
 
@@ -162,31 +213,21 @@ construction, one provider stream.
   column.** If `c+1` is complete while `c` is not, `c` is already decided: `c` goes out
   `Current` + `Partial`, then `c+1` `Current` + `Complete`. Data later arriving for `c` re-emits it
   `Late` + `Complete` / `Partial`.
-- **One release stage, one rule; ordering and watermark are injected per mode.** Replay: ordered merge,
-  watermark from the merged stream's order. Live: arrival order (`FanIn`) and clock − lateness.
-- **Replay ordering is `OrderedFanIn` across all provider output channels**, its output channelled to
-  the release stage. The merged stream is globally time-ordered, so the first candle beyond column `c`
-  proves no lane has anything left at or before `c`: `c` is decided, and any stream without a candle
-  at `c` is `Gap`. The merge requires:
-  - an **end-of-lane marker**, so a closed lane's stream leaves the expected set instead of reading as
-    missing in every later column. It is ordered at the lane's next due column (`lastCol + Period`);
-    a lane that accepted no candle sends it at column −1, which sorts first and must not start the
-    released head;
-  - **releasing the final column when the merged channel closes**, since no later candle will arrive;
-  - a **heap** in place of the linear scan of heads: `container/heap`, the root replaced and fixed
-    on refill, no allocation — 268 vs 1680 ns per value at 1000 inputs, every value tied, channel
-    hand-offs included.
-- **Replay ordering precedes staging** and covers coarse lanes with no special case; staging only
-  bounds skew, it cannot absorb it (Period).
-- **Live does not use `OrderedFanIn`:** it waits while any open lane has no pending candle, so one
-  silent stream would stall all of them.
-- **Live has two release triggers** feeding one in-order release loop: the *data trigger* releases
-  columns that are complete or whose gaps are proven, as data arrives; the *clock trigger* releases
-  every unreleased column up to `now − lateness` when a deadline expires, marking still-undecided
-  legs `Pending`. Replay uses only the data trigger.
+- **One readiness stage, one rule, no clock.** On every evaluate it releases in column order while
+  every stream due at the next column is decided. Evaluates come from the align stages — staged, gap,
+  pending, ended. Replay and live differ only by the deadline stage: replay decides by present, gap or
+  ended; live adds pending.
+- **Live: data trigger plus deadline fallback.** A column goes out as soon as every due stream is
+  present or proven missing — no wait for lateness. A `Pending` marker decides only a stream still
+  missing at `boundary + lateness`. With lateness under the grid step at most one column waits at a
+  time; several deadlines pass together only when the engine stalls beyond headroom, the process
+  pauses or the clock jumps, or at startup and reconnect.
+- **No ordered merge.** Gaps are proven by each stream's own next candle; skew is bounded by
+  per-stream headroom (Period). No final-column special case either: an ending lane's `Ended` slot
+  decides its remaining columns.
 - **Partial and Complete frames reach every component**; each decides what to do with them.
-- **Lanes are assumed time-ordered.** Replay relies on it — gaps are proven from the merged order and
-  no `Late` occurs; a live lane delivering out of order is repaired by `Late`.
+- **Lanes are assumed time-ordered.** Replay relies on it — gaps are proven from each lane's own order
+  and no `Late` occurs; a live lane delivering out of order is repaired by `Late`.
 - **An ended stream leaves the expected set**; its leg is `Ended` from then on and does not count
   toward completeness. A stream that has not started yet counts as missing — frames before its first
   candle are `Partial`.
@@ -201,24 +242,26 @@ construction, one provider stream.
 - **The engine consumes events in order, one at a time.** It reads the next event only after the
   whole pipeline has finished the current one; the data layer keeps staging and releasing ahead
   meanwhile.
-- **Release, then materialise.** The data layer goroutine writes base candles into rows beyond the
-  released head, decides readiness, marks columns released and emits their events. On dequeue,
+- **Release, then materialise.** The align stages write base candles into slots beyond the released
+  head; readiness decides, marks columns released and emits their events. On dequeue,
   `data.Next()` — data layer code on the engine goroutine — materialises the column: a `Late` event
-  writes its revised base candles and recomputes the derived rows it affects up to the last processed
+  writes its revised base candles and recomputes the derived slots it affects up to the last processed
   column; a `Current` / `Backfill` event aggregates the column's derived legs. Then it returns the view.
-- **Row ownership.** The data layer goroutine writes only rows beyond the released head, base candles
-  only. Released rows are written only on the engine goroutine — materialisation and the phases. A
-  late candle travels in its `Late` event and is never written into a released row by the data layer.
+- **Slot ownership.** A stream's align stage writes its base slots only until it sends their
+  evaluate — always beyond the released head. Released slots are written only on the engine
+  goroutine — materialisation and the phases. A late candle travels in its `Late` event and is never
+  written into a released slot by the data layer.
 - **A revision becomes visible at its `Late` event's position.** Frames before it see the old data;
   the `Late` frame applies it and triggers recompute; frames after see revised data with corrected
   history. No frame ever mixes old and revised values.
 
 ### Capacity
 
-- **Depth = deepest declared read + headroom**, within the 365-day cap. Headroom bounds how far the
-  data layer may run ahead: staged rows plus released-but-unconsumed events.
-- **When headroom runs out the data layer blocks, in replay and live alike**, pushing backpressure to
-  the providers.
+- **Depth = deepest declared read + headroom**, within the 365-day cap. Headroom bounds how far each
+  stream's align stage may write beyond the engine's consumed column; it covers staged slots and
+  released-but-unconsumed events.
+- **When a stream's headroom runs out its align stage blocks, in replay and live alike**, pushing
+  backpressure to that stream's provider. The engine's consumption wakes it.
 - **Live: the provider deals with backpressure.** Its buffered output channel accumulates candles
   while the data layer is blocked and drops once full; the data layer never drops. Dropped candles
   surface downstream as proven gaps (`Partial`), repairable through `Late` if the provider later
@@ -238,9 +281,9 @@ construction, one provider stream.
   `Period × Window` columns.
 - **Sizing:** `lookback` bars for every stream (the longest feature lookback); a direct stream keeps
   at least its largest derived window + 1; each ring adds `ceil(headroom / Period)` slots — the most
-  the aligner can write ahead of the engine — plus one spare. The 365-day cap applies per stream; exceeding it is a construction error naming the stream.
+  its align stage can write ahead of the engine — plus one spare. The 365-day cap applies per stream; exceeding it is a construction error naming the stream.
 - **No per-column storage.** `Complete` travels with the event and its `View`; the released head and
-  the presence count are the aligner's own state.
+  the per-column counts are readiness's own state.
 - **Revision metadata** records whether a column was revised and which legs changed.
 - **Fills and order updates** are written through the execution section's writer; they do not pass
   through ingestion or alignment.
@@ -256,9 +299,22 @@ construction, one provider stream.
   stream's step, so a recursive feature on a rolling stream reads its previous same-phase value.
 - **`Leg` of a stream not yet started** is a zero candle, `Gap`, age −1; `Count` is the source bars
   in the latest window — 1 for a started direct stream.
-- **One write path, `put`,** for both writers. Ownership is a convention: the aligner writes direct
-  slots only for columns it has not released, the engine goroutine only released columns; a violation
-  shows up as a data race under `-race`. Rewriting a column replaces its slot.
+- **One write path, `put`,** for both writers. Ownership is a convention: a stream's align stage
+  writes its direct slots until it sends their evaluate, the engine goroutine only released columns;
+  a violation shows up as a data race under `-race`. Rewriting a column replaces its slot.
+
+### Reversed on 2026-10-22
+
+Superseded by § Alignment, § Deadline and § Release above; kept for context.
+
+| Was | Now | Why |
+|---|---|---|
+| Replay ordering is `OrderedFanIn` over every lane, with end-of-lane markers at the next due column, final-column release on merge close, and a heap | No ordered merge; gaps proven by each stream's own next candle | Per-stream blocking bounds skew without a global order |
+| Ordering precedes staging; staging cannot absorb skew | Staging is per stream; skew is bounded per stream | The deadlock came from one goroutine blocking every stream |
+| One aligner goroutine stages, decides and commits | Align per stream (staging), readiness once (ready → commit) | Placement is per stream; only release needs every stream |
+| One timer in the release loop, at the oldest unreleased column's deadline | A deadline stage per lane; readiness has no clock | Removes the race between a deadline decision and a candle being staged |
+| Live: `FanIn` arrival order into staging | Lanes stage directly; evaluates reach readiness | Follows from per-stream staging |
+| The aligner writes direct slots for columns it has not released | A stream's align stage writes its slots until it sends their evaluate | Ownership hands over at the evaluate |
 
 ## Solution
 
@@ -267,36 +323,37 @@ Proposed detail below the decisions; not yet planned.
 ### Pipeline
 
 ```
-          ┌──────────────────────────── data layer (internal/engine/data) ────────────────────────────┐
-          │ data layer goroutines                                       │ engine goroutine, on dequeue │
-providers ─▶ ingest ─▶ normalise ─▶ order ─▶ stage ─▶ ready ─▶ commit ─▶ events ─▶ Next(): materialise   │
-          │  per lane            aligner: rows beyond the released head │   (Late apply / aggregate)   │
-          │                         └──────────── FrameBuffer ──────────┴──────────────┘               │
-          └──────────────────────────────────────────────────────────────────────────┬─────────────────┘
-                                                                        view + section writer per phase
-                                   engine step: features → strategies → portfolio → execution
+          ┌──────────────────────────────── data layer (internal/engine/data) ──────────────────────────────┐
+          │ per direct stream, one goroutine per stage                    │ 1 goroutine │ engine, on dequeue │
+provider_i ─▶ normalise ─▶ deadline (live) ─▶ align ─evaluate─┐                                               │
+provider_j ─▶ normalise ─▶ deadline (live) ─▶ align ─evaluate─┼─▶ readiness: ready → commit ─▶ events ─▶ Next():  │
+          │                                     │               ┘                               materialise      │
+          │                                     └─ slots beyond the released head ── FrameBuffer ──┘           │
+          └──────────────────────────────────────────────────────────────────────────────────┬──────────────┘
+                                                                            view + section writer per phase
+                                       engine step: features → strategies → portfolio → execution
 ```
 
-| Proposed stage | Decided stage | Runs on | Job |
-|---|---|---|---|
-| Ingest | Provider ingestion | Provider goroutine | Provider lifecycle, `ReceivedAt`, errors. Under backpressure the provider's buffered output absorbs, then drops |
-| Normalise | Alignment | Lane, one goroutine per direct stream | Rules in order (Decisions § Normalisation): validate, column (`ceilDiv`), due column, identical duplicate, column order; drops logged once per rule and summarised; end marker on close. µs scaling is the provider's ([[data-layer]] defect 7) |
-| Order | Buffer ordering logic | Merge goroutine → aligner | Replay: `OrderedFanIn` (`container/heap`) over the lanes by (column, stream), with end-of-lane markers. Live: `FanIn`, arrival order. Injected by the composer |
-| Stage | Buffer ordering logic | Aligner | Write base candles into `FrameBuffer` rows beyond the released head; per-row presence count and each stream's latest column replace `syncState` |
-| Ready | Frame alignment / readiness | Aligner | Decide each direct stream due at the column; set completeness (last due candles) and leg states |
-| Commit | Commit | Aligner | Mark ready columns released and emit their events in column order; a candle for a released column becomes a `Late` event |
-| Materialise | Aggregation | Engine goroutine, in `Next()` | `Late`: write revised base candles, recompute affected derived rows up to the last processed column, record revision metadata. Otherwise: aggregate the column's derived legs |
+| Stage | Runs on | Job |
+|---|---|---|
+| Ingest | Provider goroutine | Provider lifecycle, `ReceivedAt`, errors; venue format → `Candle` in ms. Under backpressure the provider's buffered output absorbs, then drops (live) |
+| Normalise | One goroutine per direct stream | Rules in order (Decisions § Normalisation): validate, column (`ceilDiv`), due column, identical duplicate, column order; drops logged once per rule and summarised. µs scaling is the provider's ([[data-layer]] defect 7) |
+| Deadline | One goroutine per direct stream, live only | Timer at the next due column's `boundary + lateness`; sends a `Pending` marker when the stream misses it (Decisions § Deadline) |
+| Align | One goroutine per direct stream | Stage the stream's slots (`Fresh`, `Gap`, `Pending`, `Ended`) beyond the released head, within its headroom; send an evaluate per resolved column; forward `Late` candles (Decisions § Alignment) |
+| Readiness | One goroutine | On each evaluate: per-column counts against the streams due there; release decided columns in order with completeness (last due candles); emit `Current` events, and `Late` events after their column |
+| Materialise | Engine goroutine, in `Next()` | `Late`: write revised base candles, recompute affected derived slots up to the last processed column, record revision metadata. Otherwise: aggregate the column's derived legs |
 
-- **Why aggregation runs at dequeue.** Aggregating in the data layer goroutine would read base rows
-  of the last `W` columns while a dequeued `Late` writes one of them — a data race. Run on the engine
-  goroutine, released rows have a single writer, and released-but-unconsumed rows are aggregated when
-  their own event is processed, so they pick up revisions without extra work.
-- **Publication.** Rows staged by the data layer become visible to the engine through the event's
-  channel send; views are pinned at or below the engine's column, never ahead of the released head.
-- **Only direct streams, at their due columns, are in the expected set.** Derived legs are functions of base legs and
-  inherit their state, so aggregating after readiness changes no release decision.
-- Release follows the watermark model in [[pipeline-runtime]] § Clock. The aligner never reads
-  `time.Now()`.
+- **Why aggregation runs at dequeue.** Aggregating in the data layer would read base slots of the
+  last `W` columns while a dequeued `Late` writes one of them — a data race. Run on the engine
+  goroutine, released slots have a single writer, and released-but-unconsumed columns are aggregated
+  when their own event is processed, so they pick up revisions without extra work.
+- **Publication.** Align writes a slot, then sends its evaluate; readiness releases a column only
+  after every due stream's evaluate, then sends the event; the engine reads after receiving it. Views
+  are pinned at or below the engine's column, never ahead of the released head.
+- **Only direct streams, at their due columns, are in the expected set.** Derived legs are functions
+  of base legs and inherit their state, so aggregating after readiness changes no release decision.
+- Release keeps the clock split in [[pipeline-runtime]] § Clock: the data layer decides frame
+  content and status, the engine paces. Only the deadline stage reads the clock, and it is injected.
 - Venue-format normalisation stays in the provider ([[data-layer]]).
 
 ### Release rule
@@ -305,32 +362,34 @@ For column `c`, each direct stream due at `c` is:
 
 | State | Condition | Leg state |
 |---|---|---|
-| Present | Its candle for `c` has arrived | `Fresh` |
-| Proven missing | It has data beyond `c` — lanes are ordered | `Gap` |
-| Presumed missing | Live only: boundary + lateness passed with nothing from it | `Pending` |
-| Undecided | None of the above | Column held |
+| Present | Its align stage staged a candle at `c` | `Fresh` |
+| Proven missing | Its own next candle is beyond `c` — lanes are ordered | `Gap` |
+| Presumed missing | Live only: its deadline stage sent a `Pending` marker for `c` | `Pending` |
+| Ended | Its lane closed at or before `c` | `Ended`, out of the expected set |
+| Undecided | No evaluate for `c` yet | Column held |
 
 - **In-order release is guaranteed** given ordered lanes and deadlines that grow with the column: if
   `c+1` is decided, `c` already is. A column is never first released behind a newer one, so `Late`
   only ever means revision.
 
 ```go
-// both triggers update the decided state, then run the same loop
-for next := head + 1; decided(next) || next <= watermark; next++ {
-    emit(next) // Complete if all present; otherwise Partial with Gap / Pending legs
+// readiness, on every evaluate (from align: staged, gap, ended; live: pending)
+for next := head + 1; decided(next); next++ {
+    emit(next, complete(next)) // Current; Complete, or Partial with Gap / Pending legs
 }
+// decided(c):  every stream due at c is present, gap, pending or ended
+// complete(c): every active stream's latest due candle at or before c is present
 ```
 
-- **Order holds across triggers.** A complete column past the watermark waits for earlier columns;
-  the clock sweep that releases them releases it right after.
-- **One timer, not polling.** The aligner wakes at the oldest unreleased column's `boundary +
-  lateness` (`Clock.Wake`) and re-arms after each release.
+- **Order holds.** A complete column past an undecided one waits for it.
+- **One timer per lane, not polling.** Each deadline stage arms one timer at its stream's next due
+  column and re-arms after deciding it.
 - **No re-emit on proof after `Pending`.** A `Pending` leg later proven missing changes no data, so it
   produces no `Late`; only arriving data revises a released column.
 - **Clock skew.** Deadlines compare the local clock with venue timestamps, so lateness also absorbs
   skew; the host clock is NTP-synced.
 - **Per-stream lateness, later:** stream `s` is presumed missing at `c` once
-  `now ≥ boundary(c) + lateness(s)`; with one hardcoded value the watermark is global.
+  `now ≥ boundary(c) + lateness(s)` — a setting of its deadline stage.
 - A wrongly proven gap — a lane delivering out of order, e.g. a backfill after reconnect — is repaired
   by `Late`. A revision older than the buffer depth is dropped and logged.
 - A missing leg is never fabricated: the view returns the stream's last known candle with its state
@@ -347,13 +406,14 @@ for next := head + 1; decided(next) || next <= watermark; next++ {
 | Stream ends | Leaves the expected set |
 | Live lane out of order (`t+1 → t+3 → t+2`) | `t+2` `Current` + `Partial` (`Gap`), `t+3` `Current` + `Complete`; `t+2`'s arrival re-emits it `Late` + `Complete` |
 | Several streams miss one column | `Partial` with each missing leg; one `Late` per arrival (`Partial` until the last, then `Complete`); other streams' columns unaffected |
-| Replay | A gap is proven by the first merged candle beyond its column; no deadline, no `Pending`, no `Late` |
+| Replay | A gap is proven by the stream's own next candle; no deadline, no `Pending`, no `Late` |
 
 | | Backtest | Live |
 |---|---|---|
-| Ordering | `OrderedFanIn` (heap) over provider outputs | `FanIn`, arrival order into staging |
-| Gap proof | First merged candle beyond the column | Stream's follow-up arrival |
-| Deadline | None | Hardcoded lateness |
+| Lane stages | normalise → align | normalise → deadline → align |
+| Skew | Bounded by per-stream headroom | None, except startup history |
+| Gap proof | Stream's own next candle | Stream's own next candle |
+| Deadline | None | Deadline stage, hardcoded lateness |
 | Revisions | Never | Any column still in the buffer |
 
 ### Events
@@ -385,6 +445,18 @@ type Leg struct {
 
 Columns are absolute, never ring slots. `Col` is carried on every event so "Current is the newest
 column" is checked rather than assumed by consumers.
+
+```go
+// align → readiness, internal
+type evaluate struct {
+    stream int
+    col    int64    // the column resolved
+    state  LegState // Fresh, Gap, Pending or Ended
+}
+```
+
+A stream's first report may only announce where it starts — "not started before `f`" — sent before
+align waits for headroom at `f`, so readiness can release the columns before it.
 
 ### FrameBuffer
 
@@ -461,7 +533,16 @@ func Records[T any](v View, s Section[T]) []T
 
 ## Open Questions
 
-- **Stage boundaries** — whether the proposed stages map onto the decided ones as tabulated (deferred).
+- **Evaluate throughput into readiness.** One evaluate per candle through `FanIn` costs 422 ns per
+  value at 1000 streams, every value tied — slower than the heap merge it replaces (268 ns), as 1000
+  senders contend for one channel. Option: a ring of per-column atomic counters; each align stage adds
+  to its column, and the one completing it sends a single event, so readiness receives one event per
+  column. Contention when every stream reports the same column is unmeasured — benchmark before
+  stage 4.
+- **Headroom wake-up** — how the engine's consumption wakes align stages blocked on headroom (e.g.
+  `sync.Cond` broadcast, a channel per lane).
+- **Generic pipeline tooling** — `pipe.Pipeline[In, Out]` with `Lanes` and `Then` so the data layer
+  pipeline is a typed instance rather than a module-internal struct; proposed, undecided.
 - **Lateness** — per venue / timeframe from measured arrival delays; hardcoded until then.
 - **Guaranteeing replay lane order** — e.g. sorting each lane once at dataset conversion; the CSV
   quality check can flag violations. Until then, an out-of-order source file yields `Late` in replay.
@@ -473,8 +554,9 @@ func Records[T any](v View, s Section[T]) []T
 - **Provider drop contract** — buffer size per provider, whether drops are reported (e.g. on the
   error channel), and whether sustained drops raise an overload signal so risk can halt trading.
 - **Warm-up ownership** — `Backfill` implies the data layer drives historical warm-up ([[data-layer]]).
-  Startup history has replay's skew — a 1h lane's history spans 60× the data time of a 1m lane's —
-  so under arrival order it deadlocks staging (Period); it must go through the ordered merge.
+  Startup history has replay's skew — a 1h lane's history spans 60× the data time of a 1m lane's.
+  Per-stream headroom bounds it without deadlock (Period), but a live provider must then block rather
+  than drop while it delivers history.
 - **`Layout` declaration** — how features and strategies declare depth in bars per stream.
 - **Non-UTC-aligned bars** (deferred) — FX / equity daily bars close at a session time that moves in
   UTC with daylight saving. Options: infer an offset per stream, or place each bar at the next UTC
@@ -489,7 +571,14 @@ func Records[T any](v View, s Section[T]) []T
   implemented — `docs/plans/data-layer-v2/stage-1-streams.md`.
 - Stage 2 (`FrameBuffer` core) implemented — `docs/plans/data-layer-v2/stage-2-framebuffer.md`.
 - Stage 3 (lanes, normalisation, ordered merge, stage convention and composer) implemented —
-  `docs/plans/data-layer-v2/stage-3-lanes.md`.
+  `docs/plans/data-layer-v2/stage-3-lanes.md`. Planned and built before the 2026-10-22 redesign
+  (Decisions § Reversed).
+- Stage 3.1 (per-stream lanes: the ordered merge and end marker removed, normalise as the lane's
+  first stage, one output per lane) implemented — `docs/plans/data-layer-v2/stage-3.1-lanes.md`.
+- **Plan impact of the redesign**, reflected in `main.md`:
+  - Stage 4 splits into align (per-stream staging, gap and end slots, headroom wait, evaluate) and
+    readiness (per-column counts, release, commit). The evaluate-throughput benchmark comes first.
+  - Iteration 2 gains the deadline stage, alongside `Pending` and `Late`.
 
 ## Resources
 

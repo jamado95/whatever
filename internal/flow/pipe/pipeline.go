@@ -12,9 +12,6 @@ called in sequence: a channel hop belongs only where parallelism or blocking nee
 */
 type Stage[In, Out any] func(in <-chan In) <-chan Out
 
-// Merge joins several streams into one and closes its output once every input has closed.
-type Merge[T any] func(ins ...<-chan T) <-chan T
-
 // Map transforms each value from input.
 // Output closes when input closes.
 func Map[T any, U any](in <-chan T, fn func(T) U) <-chan U {
