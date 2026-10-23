@@ -16,15 +16,15 @@ type segment struct {
 	complete bool
 }
 
-// frames returns the Current events of the segments, in order.
-func frames(segs ...segment) []Event {
-	var evs []Event
+// frames returns the Current frames of the segments over buf, in order.
+func frames(buf *FrameBuffer, segs ...segment) []View {
+	var vs []View
 	for _, sg := range segs {
 		for col := sg.from; col <= sg.to; col++ {
-			evs = append(evs, Event{Status: Current, Complete: sg.complete, Col: col})
+			vs = append(vs, buf.view(col, sg.complete))
 		}
 	}
-	return evs
+	return vs
 }
 
 // stageAll runs a real align stage per direct stream over its candle columns and returns each
@@ -92,40 +92,41 @@ func TestReadiness(t *testing.T) {
 	tests := []struct {
 		name string
 		cols map[int][]int64
-		want []Event
+		want []segment
 	}{
 		{"aligned",
 			map[int][]int64{s5m: fiveMin, s1h: hourly, s1d: daily},
-			frames(segment{d, d + 288, true})},
+			[]segment{{d, d + 288, true}}},
 		{"missing coarse bar",
 			map[int][]int64{s5m: fiveMin, s1h: without(hourly, d+24), s1d: daily},
-			frames(segment{d, d + 23, true}, segment{d + 24, d + 35, false}, segment{d + 36, d + 288, true})},
+			[]segment{{d, d + 23, true}, {d + 24, d + 35, false}, {d + 36, d + 288, true}}},
 		{"gap proven by the stream's next candle",
 			map[int][]int64{s5m: without(fiveMin, d+50), s1h: hourly, s1d: daily},
-			frames(segment{d, d + 49, true}, segment{d + 50, d + 50, false}, segment{d + 51, d + 288, true})},
+			[]segment{{d, d + 49, true}, {d + 50, d + 50, false}, {d + 51, d + 288, true}}},
 		{"streams not yet started",
 			map[int][]int64{s5m: span(d+1, d+288, 1), s1h: span(d+12, d+288, 12), s1d: {d + 288}},
-			frames(segment{d + 1, d + 287, false}, segment{d + 288, d + 288, true})},
+			[]segment{{d + 1, d + 287, false}, {d + 288, d + 288, true}}},
 		{"lanes ending early", // 201…287 have no stream due
 			map[int][]int64{s5m: span(d, d+200, 1), s1h: span(d, d+120, 12), s1d: daily},
-			frames(segment{d, d + 288, true})},
+			[]segment{{d, d + 288, true}}},
 		{"a stream that never starts",
 			map[int][]int64{s5m: fiveMin, s1h: hourly},
-			frames(segment{d, d + 288, true})},
+			[]segment{{d, d + 288, true}}},
 		{"no stream starts", nil, nil},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newFixtureWith(t, testSubs(), 20, 600)
+			want := frames(f.buf, tt.want...)
 			for i, order := range orders(stageAll(f, tt.cols)) {
 				r := newReadiness(f.buf)
-				var got []Event
+				var got []View
 				for _, e := range order {
 					got = r.step(e, got)
 				}
-				if !slices.Equal(got, tt.want) {
-					t.Fatalf("order %d: %d events %v,\nwant %d", i, len(got), got, len(tt.want))
+				if !slices.Equal(got, want) {
+					t.Fatalf("order %d: %d frames %v,\nwant %d", i, len(got), got, len(want))
 				}
 			}
 		})
@@ -153,33 +154,33 @@ func TestReadinessHold(t *testing.T) {
 	steps := []struct {
 		name string
 		in   []evaluate
-		want []Event
+		want []View
 	}{
 		{"1d has not reported",
 			append(evals(s5m, Fresh, span(d, d+11, 1)...), evals(s1h, Fresh, d)...), nil},
 		{"1h is not waited on between closes",
-			evals(s1d, Fresh, d), frames(segment{d, d + 11, true})},
+			evals(s1d, Fresh, d), frames(f.buf, segment{d, d + 11, true})},
 		{"decided columns wait behind 1h's next close",
 			evals(s5m, Fresh, span(d+12, d+20, 1)...), nil},
 		{"1h's close releases them at once",
-			evals(s1h, Fresh, d+12), frames(segment{d + 12, d + 20, true})},
+			evals(s1h, Fresh, d+12), frames(f.buf, segment{d + 12, d + 20, true})},
 		{"no stream due at 21…23: they wait for a bar beyond them",
 			evals(s5m, Ended, d+21), nil},
 		{"1h's next close reaches them",
-			evals(s1h, Fresh, d+24), frames(segment{d + 21, d + 24, true})},
+			evals(s1h, Fresh, d+24), frames(f.buf, segment{d + 21, d + 24, true})},
 	}
 	for _, st := range steps {
-		var got []Event
+		var got []View
 		for _, e := range st.in {
 			got = r.step(e, got)
 		}
 		if !slices.Equal(got, st.want) {
-			t.Fatalf("%s: events %v, want %v", st.name, got, st.want)
+			t.Fatalf("%s: frames %v, want %v", st.name, got, st.want)
 		}
 	}
 }
 
-// TestReadinessRun covers the stage: it emits step's events in order and closes once its input does.
+// TestReadinessRun covers the stage: it emits step's frames in order and closes once its input does.
 func TestReadinessRun(t *testing.T) {
 	const d = day0
 	f := newFixtureWith(t, testSubs(), 20, 600)
@@ -192,12 +193,12 @@ func TestReadinessRun(t *testing.T) {
 	}
 	close(in)
 
-	var got []Event
-	for ev := range newReadiness(f.buf).run(in) {
-		got = append(got, ev)
+	var got []View
+	for v := range newReadiness(f.buf).run(in) {
+		got = append(got, v)
 	}
-	if want := frames(segment{d, d + 24, true}); !slices.Equal(got, want) {
-		t.Fatalf("events %v, want %v", got, want)
+	if want := frames(f.buf, segment{d, d + 24, true}); !slices.Equal(got, want) {
+		t.Fatalf("frames %v, want %v", got, want)
 	}
 }
 
@@ -237,13 +238,13 @@ func BenchmarkReadiness(b *testing.B) {
 			}
 			out := newReadiness(buf).run(pipe.FanIn(evs...))
 			for range b.N {
-				g.consume((<-out).Col)
+				g.consume((<-out).Col())
 			}
 			b.StopTimer()
 			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*n), "ns/evaluate")
 
-			for ev := range out { // drain so every goroutine exits
-				g.consume(ev.Col)
+			for v := range out { // drain so every goroutine exits
+				g.consume(v.Col())
 			}
 		})
 	}

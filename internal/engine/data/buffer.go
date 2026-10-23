@@ -130,7 +130,7 @@ func (b *FrameBuffer) put(s int, col int64, c proto.Candle, state LegState, coun
 	}
 }
 
-// view returns the View pinned at col.
+// view returns the View pinned at col, a Current frame.
 func (b *FrameBuffer) view(col int64, complete bool) View {
-	return View{buf: b, col: col, complete: complete}
+	return View{buf: b, col: col, complete: complete, status: Current}
 }
