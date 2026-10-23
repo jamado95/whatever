@@ -9,13 +9,13 @@ import (
 /*
 pipeline is the data layer's stage graph, wired in one place. Each direct stream gets a lane: a
 chain of per-stream stages, one goroutine each — normalise, then align. pipe.FanIn joins the lanes'
-evaluates into readiness, which emits the frame events. The live pipeline (iteration 2) inserts the
-deadline stage; stage 5 wraps the pipeline in the module API.
+evaluates into readiness, which emits the frames as Views. The live pipeline (iteration 2) inserts the
+deadline stage; Layer wraps the pipeline in the module API.
 */
 type pipeline struct {
 	normalise func(stream int) pipe.Stage[proto.MarketData, laneItem]
 	align     func(stream int) pipe.Stage[laneItem, evaluate]
-	ready     pipe.Stage[evaluate, Event]
+	ready     pipe.Stage[evaluate, View]
 }
 
 // replayPipeline builds the replay stages over buf; align stages wait on g for ring capacity.
@@ -42,8 +42,8 @@ func (p pipeline) lanes(ins []<-chan proto.MarketData) []<-chan laneItem {
 }
 
 // run chains align onto each lane, joins their evaluates with pipe.FanIn and returns readiness's
-// events; ins[i] is direct stream i's provider output.
-func (p pipeline) run(ins []<-chan proto.MarketData) <-chan Event {
+// frames; ins[i] is direct stream i's provider output.
+func (p pipeline) run(ins []<-chan proto.MarketData) <-chan View {
 	lanes := p.lanes(ins)
 	evs := make([]<-chan evaluate, len(lanes))
 	for i, lane := range lanes {

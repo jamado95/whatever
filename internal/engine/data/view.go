@@ -2,19 +2,26 @@ package data
 
 import proto "whatever/internal/protocol"
 
-// View is the FrameBuffer pinned at one column: no read sees a later column.
+// View is the FrameBuffer pinned at one released column, and that column's frame: its status and
+// completeness. No read sees a later column.
 type View struct {
 	buf      *FrameBuffer
 	col      int64
 	complete bool
+	status   Status
 }
 
+// Col is the absolute column: boundary ms / Stride.
 func (v View) Col() int64 { return v.col }
 
 // Boundary is the column's boundary in Unix ms, UTC — not a candle's CloseTs.
 func (v View) Boundary() int64 { return v.col * v.buf.streams.Stride }
 
+// Complete reports whether every active direct stream's latest due candle at or before the column
+// is present.
 func (v View) Complete() bool { return v.complete }
+
+func (v View) Status() Status { return v.status }
 
 // latest returns the slot of stream s's latest update at or before the view's column — its Ended
 // slot once past the end — or nil if the stream has not started. Below the stream's first column no

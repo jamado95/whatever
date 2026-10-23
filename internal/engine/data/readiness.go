@@ -37,12 +37,12 @@ func newReadiness(buf *FrameBuffer) *readiness {
 }
 
 /*
-step applies one evaluate and appends the events it releases to dst. Nothing is released until every
+step applies one evaluate and appends the frames it releases to dst. Nothing is released until every
 stream has reported; the first column is then the earliest first candle, and with no stream started
 nothing is ever released. The scan runs only when this evaluate can change its outcome: it comes from
 the stream blocking head+1, head+1 is decided and waits on reach, or it completes the reports.
 */
-func (r *readiness) step(e evaluate, dst []Event) []Event {
+func (r *readiness) step(e evaluate, dst []View) []View {
 	scan := e.stream == r.cursor || r.cursor == len(r.through)
 	if r.through[e.stream] == math.MinInt64 {
 		r.unreported--
@@ -72,7 +72,7 @@ func (r *readiness) step(e evaluate, dst []Event) []Event {
 }
 
 // release releases head+1 while every stream due there has decided it and it is within reach.
-func (r *readiness) release(dst []Event) []Event {
+func (r *readiness) release(dst []View) []View {
 	for {
 		col := r.head + 1
 		for ; r.cursor < len(r.through); r.cursor++ {
@@ -84,7 +84,7 @@ func (r *readiness) release(dst []Event) []Event {
 		if col > r.reach {
 			return dst
 		}
-		dst = append(dst, Event{Status: Current, Complete: r.complete(col), Col: col})
+		dst = append(dst, r.buf.view(col, r.complete(col)))
 		r.head, r.cursor = col, 0
 	}
 }
@@ -104,16 +104,16 @@ func (r *readiness) complete(col int64) bool {
 }
 
 // run is the readiness stage, a pipe.Stage over the joined evaluates; its output closes once its input does.
-func (r *readiness) run(in <-chan evaluate) <-chan Event {
-	out := make(chan Event, defaultHeadroom)
+func (r *readiness) run(in <-chan evaluate) <-chan View {
+	out := make(chan View, defaultHeadroom)
 
 	go func() {
 		defer close(out)
-		var evs []Event
+		var vs []View
 		for e := range in {
-			evs = r.step(e, evs[:0])
-			for _, ev := range evs {
-				out <- ev
+			vs = r.step(e, vs[:0])
+			for _, v := range vs {
+				out <- v
 			}
 		}
 	}()

@@ -137,19 +137,19 @@ func throttled(cs []proto.Candle) <-chan proto.MarketData {
 	return ch
 }
 
-// consumeAll reads every event, consuming each column as the engine would; a stall of 10 s fails.
-func consumeAll(t *testing.T, g *gate, events <-chan Event) []Event {
+// consumeAll reads every frame, consuming each column as the engine would; a stall of 10 s fails.
+func consumeAll(t *testing.T, g *gate, frames <-chan View) []View {
 	t.Helper()
-	var got []Event
+	var got []View
 	deadline := time.After(10 * time.Second)
 	for {
 		select {
-		case ev, ok := <-events:
+		case v, ok := <-frames:
 			if !ok {
 				return got
 			}
-			got = append(got, ev)
-			g.consume(ev.Col)
+			got = append(got, v)
+			g.consume(v.Col())
 		case <-deadline:
 			t.Fatalf("stalled after %d events", len(got))
 		}
@@ -161,7 +161,8 @@ model computes the frames expected from each stream's accepted columns by brute 
 from the earliest first candle to the latest candle, Complete when every stream that has started and
 not ended has a candle at its latest due column.
 */
-func model(st *Streams, accepted map[int][]int64) []Event {
+func model(buf *FrameBuffer, accepted map[int][]int64) []View {
+	st := buf.streams
 	first, last := int64(math.MaxInt64), int64(math.MinInt64)
 	sets := make(map[int]map[int64]bool)
 	for s, cs := range accepted {
@@ -175,7 +176,7 @@ func model(st *Streams, accepted map[int][]int64) []Event {
 		}
 	}
 
-	var evs []Event
+	var vs []View
 	for col := first; col <= last; col++ {
 		complete := true
 		for s, cs := range accepted {
@@ -191,14 +192,14 @@ func model(st *Streams, accepted map[int][]int64) []Event {
 				complete = false
 			}
 		}
-		evs = append(evs, Event{Status: Current, Complete: complete, Col: col})
+		vs = append(vs, buf.view(col, complete))
 	}
-	return evs
+	return vs
 }
 
 /*
 TestPipelineRun covers the replay pipeline end to end with headroom 4: a day of 5m bars with a gap
-and an invalid bar, 1h bars ending at 11:00 and two 1d bars, each event consumed as it arrives.
+and an invalid bar, 1h bars ending at 11:00 and two 1d bars, each frame consumed as it arrives.
 Every column is released once, in order, with the completeness of a brute-force model.
 */
 func TestPipelineRun(t *testing.T) {
@@ -217,13 +218,13 @@ func TestPipelineRun(t *testing.T) {
 
 	g := newGate()
 	got := consumeAll(t, g, replayPipeline(f.buf, g, quiet()).run(ins))
-	want := model(f.st, map[int][]int64{
+	want := model(f.buf, map[int][]int64{
 		s5m: slices.DeleteFunc(fiveMin, func(c int64) bool { return c == d+60 }),
 		s1h: span(d+12, d+132, 12),
 		s1d: {d, d + 288},
 	})
 	if !slices.Equal(got, want) {
-		t.Fatalf("%d events %v,\nwant %d %v", len(got), got, len(want), want)
+		t.Fatalf("%d frames %v,\nwant %d %v", len(got), got, len(want), want)
 	}
 }
 
@@ -241,10 +242,10 @@ func TestPipelineSkew(t *testing.T) {
 		s1h: span(d+12, d+2880, 12),
 		s1d: span(d+288, d+2880, 288),
 	}
-	want := model(st, cols)
 
 	for _, slow := range [][]int{{s5m}, {s1h, s1d}} {
 		f := newFixture(t)
+		want := model(f.buf, cols)
 		ins := make([]<-chan proto.MarketData, f.st.Directs)
 		for s, cs := range cols {
 			if slices.Contains(slow, s) {
@@ -256,7 +257,7 @@ func TestPipelineSkew(t *testing.T) {
 
 		g := newGate()
 		if got := consumeAll(t, g, replayPipeline(f.buf, g, quiet()).run(ins)); !slices.Equal(got, want) {
-			t.Fatalf("slow lanes %v: %d events, want %d", slow, len(got), len(want))
+			t.Fatalf("slow lanes %v: %d frames, want %d", slow, len(got), len(want))
 		}
 	}
 }
