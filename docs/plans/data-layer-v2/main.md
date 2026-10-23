@@ -61,6 +61,12 @@ From [data-layer-v2.md](../../discussions/data-layer-v2.md) and
   unexported composer wires a lane of per-stream stages for each direct stream, per mode, and joins
   their evaluates into readiness with `pipe.FanIn`; the module exports a `data.New` constructor
   (stage 5) — no package-level instance. The module does not use `SynchronizerV2`.
+- **Module API** (decided in stage 5). `Event` folds into `View`, which carries `Status()` beside
+  `Col()` and `Complete()`. `New` instantiates the layer and its pipeline without I/O; `Start` runs
+  it; `Next(ctx)` returns `(*View, error)` — `nil, nil` at the end of the run, `ErrNotStarted`,
+  `ErrClosed`, `ctx.Err()`; `Close` is synchronous and discards the frames not yet returned.
+  Aggregation is a loop in `Next` on the engine goroutine. Provider errors are logged by the layer
+  until the provider drop contract (iteration 2).
 
 ## Structure
 
@@ -71,7 +77,7 @@ Tiered. Stage docs live beside this one, produced iteratively:
 - `stage-3-lanes.md` — *implemented; partly superseded by 3.1.*
 - `stage-3.1-lanes.md` — *implemented.*
 - `stage-4-align-readiness.md` — *implemented.*
-- `stage-5-consumption.md`
+- `stage-5-consumption.md` — *implemented.*
 - `stage-6-data-logger-v2.md`
 
 Ordering: 1 first; 2 and 3 depend on 1 and are independent of each other; 3.1 on 3; 4 depends on 2
@@ -185,19 +191,26 @@ data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature b
   per-stream blocking without deadlock under skew; readiness benchmark at N = 10, 100, 1000.
 - Plan: `stage-4-align-readiness.md`.
 
-### Stage 5 — consumption and rolling aggregation
+### Stage 5 — consumption and rolling aggregation ✅ implemented
 
 - **Goal:** the engine-side half: `data.Next()` materialises a released column and returns its view.
-- **Touches:** new `internal/engine/data/data.go` (module API: the exported `data.New` constructor
-  around the composer, `Start`, `Next`, `Close`, provider errors; no package-level instance),
-  `aggregate.go`.
+- **Touches:** new `internal/engine/data/data.go` (module API: `Layer`, the exported `data.New`
+  constructor around the composer, `Start`, `Next`, `Close`, provider errors; no package-level
+  instance), `aggregate.go`; `view.go`, `event.go`, `readiness.go`, `pipeline.go` (`Event` folded
+  into `View`), `align.go` (gate `stop`); tests and an aggregation benchmark.
 - **Contents:** rolling aggregation of derived legs at their source's update columns, in O(1) per
-  update (open `W` back, running volume, monotonic deques for high and low), window count below `W`
-  during warm-up; marking the column consumed (the gate's `consume`), which frees ring capacity;
-  `Close` releases align stages waiting on the gate; row ownership as decided.
-- **Acceptance:** at UTC boundaries a rolling 1h from 5m equals the closed 1h bar from the CSV; a
-  derivation of a coarse direct stream updates at its source's period; warm-up count; `-race` clean
-  with the align stages staging ahead.
+  update — the bar at the column enters, the bar `W` back leaves; open from the oldest `Fresh` bar,
+  compensated running volume, monotonic deques for high and low — in a loop in `Next` before it
+  consumes the column (the gate's `consume`), which frees ring capacity. Derived legs take their
+  source's state; `Gap` and `Ended` carry the latest `Fresh` derived candle and its count; count is
+  the `Fresh` bars in the window, below `W` during warm-up. `Close` closes providers, stops the gate
+  (waiting align stages give up and drain) and drains the frames. Derived slots are written only by
+  `Next`, on the engine goroutine.
+- **Acceptance:** rolling 1h and 1d from 5m equal the direct 1h and 1d bars of the BTCUSDT reference
+  dataset over a random four-month sample; a derivation of a coarse direct stream updates at its
+  source's period; warm-up count; a brute-force model over gaps and an end; `Next` and `Close`
+  states; `-race` clean with the align stages staging ahead.
+- Plan: `stage-5-consumption.md`.
 
 ### Stage 6 — `data_logger_v2` engine
 
@@ -284,6 +297,6 @@ in [features.md](../../discussions/features.md) and the `Layout` declaration ope
 ## Open items to resolve within stages
 
 - Headroom value, event channel capacity, evaluate delivery and the wake-up — resolved in stage 4.
-- Stopping align stages waiting on the gate (`Close`) — stage 5.
-- Derived leg state when its source has a gap inside the window — stage 5.
+- Stopping align stages waiting on the gate (`Close`) and the derived leg state under source gaps —
+  resolved in stage 5.
 - Frame logging format and the v2 config file's location — stage 6.

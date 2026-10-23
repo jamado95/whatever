@@ -202,6 +202,17 @@ construction, one provider stream.
 - **Rolling windows**, derived candles stored in the `FrameBuffer`.
 - **Emitted from the first base candle**, carrying the count of base candles in the window (below `W`
   during warm-up).
+- **Derived legs take their source's state** at its update columns. Source `Fresh`: the window's
+  candle, count the `Fresh` bars in it. Source `Gap` or `Ended`: that state, carrying the latest
+  `Fresh` derived candle and its count — the same carry a direct leg makes.
+- **The window's candle is built from its `Fresh` bars:** `OpenTs` / `Open` from the oldest,
+  `CloseTs` / `Close` from the bar at the column, `High` / `Low` the extremes, `Volume` the sum. At a
+  UTC boundary with a full window it is the closed bar.
+- **O(1) per update, in a loop in `Next`.** The bar at the column enters, the bar `W` back leaves
+  (the source keeps `W + 1` bars): Neumaier-compensated running volume, monotonic deques for high and
+  low, a pointer to the oldest `Fresh` bar. About 50–66 ns per derivation at 10–1000 derived streams
+  (`BenchmarkAggregate`, source writes included), estimated below a goroutine hand-off; a worker pool
+  waits until wide frames need it.
 
 ### Release
 
@@ -260,7 +271,8 @@ construction, one provider stream.
   head; readiness decides, marks columns released and emits their events. On dequeue,
   `data.Next()` — data layer code on the engine goroutine — materialises the column: a `Late` event
   writes its revised base candles and recomputes the derived slots it affects up to the last processed
-  column; a `Current` / `Backfill` event aggregates the column's derived legs. Then it returns the view.
+  column; a `Current` / `Backfill` event aggregates the column's derived legs. Then it consumes the
+  column and returns the view.
 - **Slot ownership.** A stream's align stage writes its base slots only until it sends their
   evaluate — always beyond the released head. Released slots are written only on the engine
   goroutine — materialisation and the phases. A late candle travels in its `Late` event and is never
@@ -268,6 +280,17 @@ construction, one provider stream.
 - **A revision becomes visible at its `Late` event's position.** Frames before it see the old data;
   the `Late` frame applies it and triggers recompute; frames after see revised data with corrected
   history. No frame ever mixes old and revised values.
+- **A frame is its `View`.** The View pinned at the released column carries the frame's `Status()`
+  and `Complete()`; there is no separate event type. `Next(ctx)` returns `(*View, error)`: the frame,
+  valid until the next call, which consumes its column; `nil, nil` at the end of the run;
+  `ErrNotStarted` before `Start`, `ErrClosed` after `Close`, `ctx.Err()` once `ctx` is done.
+- **Lifecycle.** `data.New` instantiates the layer and its pipeline without I/O; `Start` initialises
+  and starts the providers and runs the pipeline. `Close` is synchronous: it closes the providers,
+  stops the gate — waiting align stages give up and drain their input — and discards the frames not
+  yet returned. It never runs concurrently with `Next`; another goroutine stops a run by cancelling
+  `ctx`.
+- **Provider errors are drained and logged by the layer** — undrained, a provider blocks on its
+  error channel — until the provider drop contract (Open Questions).
 
 ### Capacity
 
@@ -361,7 +384,7 @@ provider_j ─▶ normalise ─▶ deadline (live) ─▶ align ─evaluate─�
 | Normalise | One goroutine per direct stream | Rules in order (Decisions § Normalisation): validate, column (`ceilDiv`), due column, identical duplicate, column order; drops logged once per rule and summarised. µs scaling is the provider's ([[data-layer]] defect 7) |
 | Deadline | One goroutine per direct stream, live only | Timer at the next due column's `boundary + lateness`; sends a `Pending` marker when the stream misses it (Decisions § Deadline) |
 | Align | One goroutine per direct stream | Stage the stream's slots (`Fresh`, `Gap`, `Pending`, `Ended`) beyond the released head, within its ring's capacity; send an evaluate per resolved column; forward `Late` candles (Decisions § Alignment) |
-| Readiness | One goroutine | On each evaluate, joined through `pipe.FanIn`: per-stream progress checked at the next column; release decided columns within `reach`, in order, with completeness read from the `View`; emit `Current` events, and `Late` events after their column |
+| Readiness | One goroutine | On each evaluate, joined through `pipe.FanIn`: per-stream progress checked at the next column; release decided columns within `reach`, in order, with completeness read from the `View`; emit `Current` frames as Views, and `Late` ones after their column |
 | Materialise | Engine goroutine, in `Next()` | `Late`: write revised base candles, recompute affected derived slots up to the last processed column, record revision metadata. Otherwise: aggregate the column's derived legs |
 
 - **Why aggregation runs at dequeue.** Aggregating in the data layer would read base slots of the
@@ -451,21 +474,26 @@ const (
     Backfill // iteration 3
 )
 
-type Event struct {
-    Status   Status
-    Complete bool
-    Col      int64 // absolute column (boundary ms / stride); Current: new head; Late: revised column
-    Legs     []Leg // iteration 2, Late only: revised base candles; Current data is already in the row
-}
+// A frame is its View (§ FrameBuffer): Status(), Complete(), Col() — the absolute column
+// (boundary ms / stride); Current: new head; Late: revised column.
 
+// Iteration 2, Late only: revised base candles travel with the View; Current data is already in
+// the buffer.
 type Leg struct {
     Stream int // index into the layer's stream table
     State  LegState
     Data   proto.MarketData
 }
+
+// Module API (stage 5)
+func New(subs []proto.Subscription, providers map[proto.Subscription]proto.DataProvider,
+    lookback int, log *logger.Logger) (*Layer, error)
+func (l *Layer) Start() error
+func (l *Layer) Next(ctx context.Context) (*View, error) // nil, nil at the end of the run
+func (l *Layer) Close()
 ```
 
-Columns are absolute, never ring slots. `Col` is carried on every event so "Current is the newest
+Columns are absolute, never ring slots. `Col` is carried on every frame so "Current is the newest
 column" is checked rather than assumed by consumers.
 
 ```go
@@ -507,15 +535,17 @@ type slot struct {
 func (b *FrameBuffer) put(s int, col int64, c proto.Candle, state LegState, count uint16)
 
 // Components receive a View plus their own writer, never the buffer.
-type View struct { // pinned: sees only columns ≤ col
+type View struct { // pinned: sees only columns ≤ col; also the frame released there
     buf      *FrameBuffer
     col      int64
     complete bool
+    status   Status
 }
 
 func (v View) Col() int64
 func (v View) Boundary() int64 // col × Stride: Unix ms, UTC
 func (v View) Complete() bool
+func (v View) Status() Status
 func (v View) Leg(stream int) (c proto.Candle, s LegState, age int) // carried: last Fresh candle, its age
 func (v View) Count(stream int) int
 func (v View) Candles(stream, n int, dst []proto.Candle) []proto.Candle // newest first
@@ -569,6 +599,7 @@ func Records[T any](v View, s Section[T]) []T
   warm-up and reconnect backfill (iteration 3) may need more.
 - **Provider drop contract** — buffer size per provider, whether drops are reported (e.g. on the
   error channel), and whether sustained drops raise an overload signal so risk can halt trading.
+  Until then the layer drains and logs provider errors.
 - **Warm-up ownership** — `Backfill` implies the data layer drives historical warm-up ([[data-layer]]).
   Startup history has replay's skew — a 1h lane's history spans 60× the data time of a 1m lane's.
   Per-stream ring capacity bounds it without deadlock (Period), but a live provider must then block rather
@@ -593,6 +624,9 @@ func Records[T any](v View, s Section[T]) []T
   first stage, one output per lane) implemented — `docs/plans/data-layer-v2/stage-3.1-lanes.md`.
 - Stage 4 (align stages and the gate, readiness, each ring's first column; the composer joins the
   lanes with `pipe.FanIn`) implemented — `docs/plans/data-layer-v2/stage-4-align-readiness.md`.
+- Stage 5 (module API: `Layer` with `New`, `Start`, `Next`, `Close`; `Event` folded into `View`;
+  rolling aggregation in `Next`; gate `stop`) implemented —
+  `docs/plans/data-layer-v2/stage-5-consumption.md`.
 - **Plan impact of the redesign**, reflected in `main.md`: iteration 2 gains the deadline stage,
   alongside `Pending` and `Late`.
 

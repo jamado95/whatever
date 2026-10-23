@@ -159,7 +159,7 @@ Stage-level detail in [[data-layer-v2]].
 
 ```go
 for {
-    f := data.Next(ctx)               // receive frame event, commit to buffer (view + dirty set)
+    f, err := data.Next(ctx)          // pinned View, derived legs aggregated; nil, nil at the end
     fd := features.Step(f)            // tier 0 parallel over dirty legs → barrier → tier 1+
     sigs := strategies.Step(f, fd)    // parallel over woken strategies; merged in ID order
     orders := portfolio.Step(f, sigs) // serial: one ledger, netting, limits

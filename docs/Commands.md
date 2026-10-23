@@ -73,6 +73,8 @@ block surface on the next run, once the dependency is fixed.
 | `go vet ./...` | Go's built-in static analysis. |
 | `go test -run '^$' -bench OrderedFanIn -benchmem ./internal/flow/pipe/` | Benchmark the ordered merge at 10, 100 and 1000 inputs, per value. |
 | `go test -run '^$' -bench Readiness -benchmem ./internal/engine/data/` | Benchmark align → `pipe.FanIn` → readiness at 10, 100 and 1000 1m streams, per released column and per evaluate. |
+| `go test -run '^$' -bench Aggregate -benchmem ./internal/engine/data/` | Benchmark rolling aggregation at 10, 100 and 1000 derived streams, per column and per derivation. |
+| `go test -count=1 -run Reference -v ./internal/engine/data/` | Compare rolling 1h and 1d from 5m with the direct bars of the BTCUSDT reference dataset (`data/BTCUSDT/BTCUSDT-{5m,1h,1d}-2024-01.csv`, all of 2024) over a random four-month sample, logged. Skipped without the files; `-count=1` bypasses the test cache, which would otherwise replay the last sample. |
 
 `make fmt` and `make lint` need the tools on `PATH`:
 
