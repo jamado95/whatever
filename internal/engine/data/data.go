@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"whatever/internal/flow/pipe"
 	"whatever/internal/logger"
@@ -18,78 +19,95 @@ var (
 )
 
 /*
-Layer is the data layer of one run: the stream table, the FrameBuffer and the replay pipeline. New
-builds it, Start runs it, Next hands the engine one frame at a time and Close stops it. Next and
-Close belong to the engine goroutine and must not run concurrently.
+Layer is the data layer of one run, and its pipeline: the stream table, the FrameBuffer, one lane per
+direct stream, readiness and the aggregator. New builds it, Start runs it, Next hands the engine one
+frame at a time and Close stops it. Next and Close belong to the engine goroutine and must not run
+concurrently.
 */
 type Layer struct {
-	streams   *Streams
-	buf       *FrameBuffer
-	gate      *gate
-	agg       *aggregator
-	stages    pipeline
-	providers []proto.DataProvider // per direct stream, in stream-table order
-	log       *logger.Logger
+	streams *Streams
+	buf     *FrameBuffer
+	gate    *gate
+	lanes   []*lane // per direct stream, in stream-table order
+	ready   *readiness
+	agg     *aggregator
+	log     *logger.Logger
 
 	started, closed bool
-	events          <-chan View     // nil until Start
-	errsDone        <-chan struct{} // closed once every provider's error channel has
-	view            View            // the frame Next returned last
+	cancel          context.CancelFunc // the run context's; nil until Start
+	closing         *sync.WaitGroup    // the started providers, until closed
+	views           <-chan View        // nil until Start
+	errsDone        <-chan struct{}    // closed once every running provider's error channel has closed
+	now             View               // the frame Next returned last
 }
 
 /*
-New builds the data layer over validated direct subscriptions and their provider instances, one per
-subscription, and instantiates its pipeline. lookback is the longest read in bars, the same for
+New builds the data layer over provider instances keyed by their direct subscription, each already
+initialised for it, and instantiates its stages. lookback is the longest read in bars, the same for
 every stream. It performs no I/O and starts nothing; Start runs the layer.
 */
-func New(subs []proto.Subscription, providers map[proto.Subscription]proto.DataProvider,
-	lookback int, log *logger.Logger) (*Layer, error) {
-	return newLayer(subs, providers, lookback, defaultHeadroom, log)
+func New(providers map[proto.Subscription]proto.DataProvider, lookback int, log *logger.Logger) (*Layer, error) {
+	return newLayer(providers, lookback, defaultHeadroom, log)
 }
 
 // newLayer is New with the rings' headroom in columns.
-func newLayer(subs []proto.Subscription, providers map[proto.Subscription]proto.DataProvider,
-	lookback int, headroom int64, log *logger.Logger) (*Layer, error) {
+func newLayer(
+	providers map[proto.Subscription]proto.DataProvider,
+	lookback int,
+	headroom int64,
+	log *logger.Logger,
+) (*Layer, error) {
+	subs := make([]proto.Subscription, 0, len(providers))
+	for sub := range providers {
+		subs = append(subs, sub)
+	}
 	streams := NewStreams(subs)
+
 	buf, err := newFrameBuffer(streams, lookback, headroom)
 	if err != nil {
 		return nil, fmt.Errorf("data: %w", err)
 	}
 
-	provs := make([]proto.DataProvider, streams.Directs)
+	gate := newGate()
+	readiness := newReadiness(buf)
+	aggregator := newAggregator(buf)
+	lanes := make([]*lane, 0, streams.Directs)
+	closing := new(sync.WaitGroup)
+
+	// a map holds one provider per subscription, but not one subscription per provider
 	owner := make(map[proto.DataProvider]string, streams.Directs)
 	for i, s := range streams.All[:streams.Directs] {
-		p, ok := providers[s.Sub]
-		if !ok || p == nil {
-			return nil, fmt.Errorf("data: subscription %q has no provider", s.Sub.ID())
+		p := providers[s.Sub]
+		if p == nil {
+			return nil, fmt.Errorf("data: subscription %q has a nil provider", s.Sub.ID())
 		}
 		if other, shared := owner[p]; shared {
 			return nil, fmt.Errorf("data: subscriptions %q and %q share one provider instance",
 				other, s.Sub.ID())
 		}
 		owner[p] = s.Sub.ID()
-		provs[i] = p
+		lanes = append(lanes, newLane(buf, gate, i, p, closing, log))
 	}
 
-	g := newGate()
 	return &Layer{
-		streams:   streams,
-		buf:       buf,
-		gate:      g,
-		agg:       newAggregator(buf),
-		stages:    replayPipeline(buf, g, log),
-		providers: provs,
-		log:       log,
+		streams: streams,
+		buf:     buf,
+		gate:    gate,
+		lanes:   lanes,
+		ready:   readiness,
+		agg:     aggregator,
+		closing: closing,
+		log:     log,
 	}, nil
 }
 
 func (l *Layer) Streams() *Streams { return l.streams }
 
 /*
-Start initialises and starts each direct stream's provider, then runs the pipeline over their
-outputs; provider errors are logged. If a provider fails to start, the ones already started are
-closed and the layer stays unstarted. A layer runs once: Start again is an error, and after Close it
-returns ErrClosed.
+Start runs each lane under the layer's run context — its provider, then its stages — and joins their
+evaluates into readiness; provider errors are logged. A provider failing to start closes the layer,
+the lanes already running included, and Start returns its error. A layer runs once: Start again is
+an error, and after Close it returns ErrClosed.
 */
 func (l *Layer) Start() error {
 	switch {
@@ -98,28 +116,29 @@ func (l *Layer) Start() error {
 	case l.started:
 		return errors.New("data: layer already started")
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	l.cancel, l.started = cancel, true
 
-	ins := make([]<-chan proto.MarketData, len(l.providers))
-	errs := make([]<-chan error, len(l.providers))
-	for i, p := range l.providers {
-		sub := l.streams.All[i].Sub
-		if err := p.Init(sub); err != nil {
-			return fmt.Errorf("data: provider of %s: init: %w", sub.ID(), err)
+	evals := make([]<-chan evaluate, 0, len(l.lanes))
+	errs := make([]<-chan error, 0, len(l.lanes))
+	var failed error
+	for i, ln := range l.lanes {
+		ev, er, err := ln.run(ctx)
+		if err != nil {
+			failed = fmt.Errorf("data: provider of %s: start: %w", l.streams.All[i].Sub.ID(), err)
+			break
 		}
-		ins[i], errs[i] = p.Streams()
-	}
-	for i, p := range l.providers {
-		if err := p.Start(); err != nil {
-			for _, started := range l.providers[:i] {
-				started.Close()
-			}
-			return fmt.Errorf("data: provider of %s: start: %w", l.streams.All[i].Sub.ID(), err)
-		}
+		evals, errs = append(evals, ev), append(errs, er)
 	}
 
 	l.errsDone = pipe.Forward(pipe.FanIn(errs...), func(err error) { l.log.Error(err, "provider error") })
-	l.events = l.stages.run(ins)
-	l.started = true
+	l.views = l.ready.run(pipe.FanIn(evals...))
+
+	// Close drains the lanes already running
+	if failed != nil {
+		l.Close()
+		return failed
+	}
 	return nil
 }
 
@@ -142,36 +161,42 @@ func (l *Layer) Next(ctx context.Context) (*View, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case v, ok := <-l.events:
+	case v, ok := <-l.views:
 		if !ok {
 			return nil, nil
 		}
+		// aggregate derived streams
 		l.agg.step(v.col)
+		// advance gate to col
 		l.gate.consume(v.col)
-		l.view = v
-		return &l.view, nil
+		l.now = v
+
+		return &l.now, nil
 	}
 }
 
 /*
-Close stops the run: it closes the providers, stops the gate and discards the remaining frames until
-every stage has exited, so it returns with the output drained. A layer never started has nothing to
-stop. Next returns ErrClosed from then on. It must not run concurrently with Next.
+Close stops the run: it cancels the run context, so every running lane closes its provider, stops
+the gate and discards the remaining frames until every stage has exited, then waits for the providers
+to close. It returns with the output drained. A layer never started has nothing to stop. Next returns
+ErrClosed from then on. It must not run concurrently with Next.
 */
 func (l *Layer) Close() {
 	if l.closed {
 		return
 	}
 	l.closed = true
-	if !l.started {
+	if l.cancel == nil {
 		return
 	}
 
-	for _, p := range l.providers {
-		p.Close()
-	}
+	l.cancel()
 	l.gate.stop()
-	for range l.events {
+
+	//discard any remaining frames
+	for range l.views {
 	}
+
+	l.closing.Wait()
 	<-l.errsDone
 }

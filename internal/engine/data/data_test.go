@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -22,19 +23,21 @@ import (
 	reg "whatever/internal/registry"
 )
 
+// fakeBuffer is a fake provider's output capacity, matching binance_csv.
+const fakeBuffer = 100
+
 // fakeProvider is a DataProvider over a candle slice: once started it sends its errors, then its
 // candles, from a goroutine that stops on Close.
 type fakeProvider struct {
 	candles   []proto.Candle
 	errs      []error
 	throttle  bool // pause every 50 candles
-	initErr   error
 	startErr  error
 	sub       proto.Subscription
 	data      chan proto.MarketData
 	errc      chan error
 	done      chan struct{}
-	inits     atomic.Int32
+	sent      atomic.Int64 // candles delivered to data
 	starts    atomic.Int32
 	closes    atomic.Int32
 	closeOnce sync.Once
@@ -43,12 +46,8 @@ type fakeProvider struct {
 func (p *fakeProvider) ID() string { return "fake" }
 
 func (p *fakeProvider) Init(sub proto.Subscription) error {
-	p.inits.Add(1)
-	if p.initErr != nil {
-		return p.initErr
-	}
 	p.sub = sub
-	p.data, p.errc, p.done = make(chan proto.MarketData, 100), make(chan error, 10), make(chan struct{})
+	p.data, p.errc, p.done = make(chan proto.MarketData, fakeBuffer), make(chan error, 10), make(chan struct{})
 	return nil
 }
 
@@ -75,6 +74,7 @@ func (p *fakeProvider) Start() error {
 			}
 			select {
 			case p.data <- proto.MarketData{Subscription: p.sub, Candle: c}:
+				p.sent.Add(1)
 			case <-p.done:
 				return
 			}
@@ -92,12 +92,14 @@ func (p *fakeProvider) Close() {
 	})
 }
 
-// fakes returns one fake provider per direct stream of st, by stream index and keyed by subscription.
+// fakes returns one fake provider per direct stream of st, initialised for its subscription, by
+// stream index and keyed by subscription.
 func fakes(st *Streams) ([]*fakeProvider, map[proto.Subscription]proto.DataProvider) {
 	fs := make([]*fakeProvider, st.Directs)
 	m := make(map[proto.Subscription]proto.DataProvider, st.Directs)
 	for s := range fs {
 		fs[s] = &fakeProvider{}
+		_ = fs[s].Init(st.All[s].Sub)
 		m[st.All[s].Sub] = fs[s]
 	}
 	return fs, m
@@ -109,7 +111,7 @@ func startLayer(t *testing.T, headroom int64, log *logger.Logger, feed func(*Str
 	st := NewStreams(testSubs())
 	fs, provs := fakes(st)
 	feed(st, fs)
-	l, err := newLayer(testSubs(), provs, 20, headroom, log)
+	l, err := newLayer(provs, 20, headroom, log)
 	if err != nil {
 		t.Fatalf("newLayer: %v", err)
 	}
@@ -156,18 +158,59 @@ func within(t *testing.T, what string, fn func()) {
 }
 
 /*
-TestNew covers construction: a direct subscription without a provider, one provider instance for two
-subscriptions and the 365-day cap are errors; the stream table holds the derived streams; nothing
-runs.
+model computes the frames expected from each stream's accepted columns by brute force: every column
+from the earliest first candle to the latest candle, Complete when every stream that has started and
+not ended has a candle at its latest due column.
+*/
+func model(buf *FrameBuffer, accepted map[int][]int64) []View {
+	st := buf.streams
+	first, last := int64(math.MaxInt64), int64(math.MinInt64)
+	sets := make(map[int]map[int64]bool)
+	for s, cs := range accepted {
+		if len(cs) == 0 {
+			continue
+		}
+		first, last = min(first, cs[0]), max(last, cs[len(cs)-1])
+		sets[s] = make(map[int64]bool)
+		for _, c := range cs {
+			sets[s][c] = true
+		}
+	}
+
+	var vs []View
+	for col := first; col <= last; col++ {
+		complete := true
+		for s, cs := range accepted {
+			if len(cs) == 0 {
+				continue
+			}
+			p := st.All[s].Period
+			switch {
+			case col < cs[0]: // not started
+				complete = false
+			case col >= cs[len(cs)-1]+p: // ended
+			case !sets[s][col-col%p]:
+				complete = false
+			}
+		}
+		vs = append(vs, buf.view(col, complete))
+	}
+	return vs
+}
+
+/*
+TestNew covers construction from the provider map: a nil provider, one provider instance for two
+subscriptions and the 365-day cap are errors; the stream table comes from the keys, derived streams
+included; nothing runs.
 */
 func TestNew(t *testing.T) {
 	st := NewStreams(testSubs())
 	s5m := mustIndex(t, st, idBTC5m)
 
-	t.Run("a subscription without a provider", func(t *testing.T) {
+	t.Run("a nil provider", func(t *testing.T) {
 		_, provs := fakes(st)
-		delete(provs, st.All[s5m].Sub)
-		if _, err := New(testSubs(), provs, 20, quiet()); err == nil || !strings.Contains(err.Error(), idBTC5m) {
+		provs[st.All[s5m].Sub] = nil
+		if _, err := New(provs, 20, quiet()); err == nil || !strings.Contains(err.Error(), idBTC5m) {
 			t.Fatalf("err = %v, want one naming %s", err, idBTC5m)
 		}
 	})
@@ -175,30 +218,32 @@ func TestNew(t *testing.T) {
 	t.Run("one provider instance for two subscriptions", func(t *testing.T) {
 		fs, provs := fakes(st)
 		provs[st.All[s5m].Sub] = fs[mustIndex(t, st, idBTC1h)]
-		if _, err := New(testSubs(), provs, 20, quiet()); err == nil || !strings.Contains(err.Error(), idBTC5m) {
+		if _, err := New(provs, 20, quiet()); err == nil || !strings.Contains(err.Error(), idBTC5m) {
 			t.Fatalf("err = %v, want one naming %s", err, idBTC5m)
 		}
 	})
 
 	t.Run("the 365-day cap", func(t *testing.T) {
 		_, provs := fakes(st)
-		if _, err := New(testSubs(), provs, 400, quiet()); err == nil || !strings.Contains(err.Error(), "365-day") {
+		if _, err := New(provs, 400, quiet()); err == nil || !strings.Contains(err.Error(), "365-day") {
 			t.Fatalf("err = %v, want the 365-day cap", err)
 		}
 	})
 
 	t.Run("built, not run", func(t *testing.T) {
 		fs, provs := fakes(st)
-		l, err := New(testSubs(), provs, 20, quiet())
+		l, err := New(provs, 20, quiet())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := l.Streams().Index(idRoll1h); !ok {
-			t.Errorf("stream table lacks %s", idRoll1h)
+		for i, s := range st.All {
+			if j, ok := l.Streams().Index(s.Sub.ID()); !ok || j != i {
+				t.Errorf("stream %s at %d, %v; want %d", s.Sub.ID(), j, ok, i)
+			}
 		}
 		for s, f := range fs {
-			if f.inits.Load()+f.starts.Load()+f.closes.Load() != 0 {
-				t.Errorf("provider of %s touched", st.All[s].Sub.ID())
+			if f.starts.Load()+f.closes.Load() != 0 {
+				t.Errorf("provider of %s started or closed", st.All[s].Sub.ID())
 			}
 		}
 		if _, err := l.Next(context.Background()); !errors.Is(err, ErrNotStarted) {
@@ -239,7 +284,7 @@ func TestLayerRun(t *testing.T) {
 			t.Errorf("col d+%d: status %d, want Current", v.Col()-d, v.Status())
 		}
 		for r, s := range sources {
-			want := expect(st, r, lane{fresh: accepted[s], ended: true},
+			want := expect(st, r, staged{fresh: accepted[s], ended: true},
 				func(x int64) proto.Candle { return bar(st, s, x) }, v.Col())
 			if g := readLeg(*v, r); !sameLeg(g, want) {
 				t.Errorf("col d+%d, %s: %+v, want %+v", v.Col()-d, st.All[r].Sub.ID(), g, want)
@@ -274,7 +319,8 @@ func TestLayerCancel(t *testing.T) {
 TestLayerClose covers Close mid-run after one frame: with headroom 4 the align stages wait on the
 gate, with headroom 600 readiness blocks on its full channel and align on its evaluates. Close
 returns with every provider closed and every channel drained; the frames left are never returned,
-and a second Close is a no-op.
+and a second Close is a no-op. After a run that ended on its own, Close still returns with every
+provider closed once.
 */
 func TestLayerClose(t *testing.T) {
 	const d = day0
@@ -298,7 +344,7 @@ func TestLayerClose(t *testing.T) {
 					t.Errorf("provider %d closed %d times, want 1", s, n)
 				}
 			}
-			if _, ok := <-l.events; ok {
+			if _, ok := <-l.views; ok {
 				t.Error("event channel not drained")
 			}
 			select {
@@ -318,41 +364,42 @@ func TestLayerClose(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("after the run ends", func(t *testing.T) {
+		l, fs := startLayer(t, 4, quiet(), func(st *Streams, fs []*fakeProvider) {
+			for s := range fs {
+				fs[s].candles = bars(st, s, span(d+288, d+576, st.All[s].Period)...)
+			}
+		})
+		if frames := nextAll(t, l, func(*View) {}); len(frames) == 0 {
+			t.Fatal("no frames")
+		}
+		l.Close()
+		for s, f := range fs {
+			if n := f.closes.Load(); n != 1 {
+				t.Errorf("provider %d closed %d times, want 1", s, n)
+			}
+		}
+	})
 }
 
 /*
-TestLayerStart covers Start: an Init failure names the stream and starts nothing; a Start failure
-closes the providers already started and leaves nothing for Close; a layer starts once, and not
-after Close.
+TestLayerStart covers Start: a provider failing to start closes the layer — the lanes already
+running included — and leaves nothing for Close; a layer starts once, and not after Close.
 */
 func TestLayerStart(t *testing.T) {
 	st := NewStreams(testSubs())
 	build := func(t *testing.T, fail func([]*fakeProvider)) (*Layer, []*fakeProvider) {
 		fs, provs := fakes(st)
 		fail(fs)
-		l, err := New(testSubs(), provs, 20, quiet())
+		l, err := New(provs, 20, quiet())
 		if err != nil {
 			t.Fatal(err)
 		}
 		return l, fs
 	}
 	// direct streams in table order: BTCUSDT 1h, BTCUSDT 5m, ETHUSDT 1d
-	s1h, s5m := mustIndex(t, st, idBTC1h), mustIndex(t, st, idBTC5m)
-
-	t.Run("an Init failure", func(t *testing.T) {
-		l, fs := build(t, func(fs []*fakeProvider) { fs[s5m].initErr = errors.New("no file") })
-		if err := l.Start(); err == nil || !strings.Contains(err.Error(), idBTC5m) {
-			t.Fatalf("Start = %v, want an error naming %s", err, idBTC5m)
-		}
-		for s, f := range fs {
-			if n := f.starts.Load(); n != 0 {
-				t.Errorf("provider %d started %d times, want 0", s, n)
-			}
-		}
-		if _, err := l.Next(context.Background()); !errors.Is(err, ErrNotStarted) {
-			t.Errorf("Next = %v, want ErrNotStarted", err)
-		}
-	})
+	s1h, s5m, s1d := mustIndex(t, st, idBTC1h), mustIndex(t, st, idBTC5m), mustIndex(t, st, idETH1d)
 
 	t.Run("a Start failure", func(t *testing.T) {
 		l, fs := build(t, func(fs []*fakeProvider) { fs[s5m].startErr = errors.New("refused") })
@@ -361,9 +408,18 @@ func TestLayerStart(t *testing.T) {
 		}
 		closes := []int32{fs[0].closes.Load(), fs[1].closes.Load(), fs[2].closes.Load()}
 		want := make([]int32, 3)
-		want[s1h] = 1 // started before 5m failed
+		want[s1h] = 1 // running before 5m failed
 		if !slices.Equal(closes, want) {
 			t.Fatalf("provider closes %v, want %v", closes, want)
+		}
+		if n := fs[s1d].starts.Load(); n != 0 {
+			t.Errorf("1d provider started %d times, want 0", n)
+		}
+		if _, err := l.Next(context.Background()); !errors.Is(err, ErrClosed) {
+			t.Errorf("Next = %v, want ErrClosed", err)
+		}
+		if err := l.Start(); !errors.Is(err, ErrClosed) {
+			t.Errorf("Start again = %v, want ErrClosed", err)
 		}
 		l.Close()
 		if again := []int32{fs[0].closes.Load(), fs[1].closes.Load(), fs[2].closes.Load()}; !slices.Equal(again, closes) {
@@ -521,10 +577,13 @@ func TestLayerReference(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if err := p.Init(subs[i]); err != nil { // the engine's part
+			t.Fatal(err)
+		}
 		provs[subs[i]] = p
 	}
 
-	l, err := New(subs, provs, 1, quiet())
+	l, err := New(provs, 1, quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
