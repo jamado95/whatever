@@ -74,8 +74,9 @@ func TestLane(t *testing.T) {
 }
 
 /*
-TestLaneIndependent covers per-stream blocking: a lane nobody reads stops its own provider once its
-stages' buffers are full, while the other lanes run to their end.
+TestLaneIndependent covers per-stream blocking: a lane nobody reads fills its ring, waits on the gate
+and stops its own provider once the buffers before align are full, while the other lanes run to
+their end.
 */
 func TestLaneIndependent(t *testing.T) {
 	const d = day0
@@ -86,7 +87,7 @@ func TestLaneIndependent(t *testing.T) {
 	fs[s5m].candles = bars(st, s5m, span(d+1, d+288, 1)...)
 	fs[s1d].candles = bars(st, s1d, d+288)
 
-	l, err := newLayer(provs, 20, 1200, quiet()) // the 1h ring (126 slots) never makes align wait
+	l, err := newLayer(provs, 20, 1200, quiet()) // the read lanes' rings never make align wait
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,9 +114,10 @@ func TestLaneIndependent(t *testing.T) {
 	}
 
 	time.Sleep(50 * time.Millisecond)
-	// the provider's full output, normalise's held candle and full output, align's held item and
-	// full output
-	if n, want := fs[s1h].sent.Load(), int64(fakeBuffer+2*laneBuffer+2); n != want {
+	// the provider's full output, normalise's held candle and full output, align's item held at the
+	// gate, and an evaluate per ring slot
+	slots := int64(len(l.buf.rings[s1h].slots))
+	if n, want := fs[s1h].sent.Load(), fakeBuffer+laneBuffer+1+slots+1; n != want {
 		t.Fatalf("unread lane's provider sent %d bars, want %d", n, want)
 	}
 

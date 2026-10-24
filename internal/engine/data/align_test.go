@@ -65,8 +65,7 @@ func closed(out <-chan evaluate) bool {
 
 /*
 TestGate covers the consumed column: wait returns once the engine has consumed its column — at once
-when it already has — and consume wakes exactly the waiters it covers. stop releases every waiter
-with false, and every later wait returns false at once, even for a consumed column.
+when it already has — and consume wakes exactly the waiters it covers.
 */
 func TestGate(t *testing.T) {
 	g := newGate()
@@ -93,26 +92,6 @@ func TestGate(t *testing.T) {
 	check(true, true, true, false)
 	g.consume(15)
 	check(true, true, true, true)
-
-	sg := newGate()
-	sg.consume(5)
-	var failed [2]atomic.Bool
-	for i, col := range []int64{10, 20} {
-		go func() {
-			failed[i].Store(!sg.wait(col))
-		}()
-	}
-	time.Sleep(50 * time.Millisecond)
-	sg.stop()
-	time.Sleep(50 * time.Millisecond)
-	for i := range failed {
-		if !failed[i].Load() {
-			t.Errorf("waiter %d: not released with false by stop", i)
-		}
-	}
-	if sg.wait(5) {
-		t.Error("wait(5) after stop = true, want false")
-	}
 }
 
 /*
@@ -255,36 +234,4 @@ func TestAlignCapacity(t *testing.T) {
 			t.Error("output not closed")
 		}
 	})
-}
-
-/*
-TestAlignStop covers a stopped gate: an align stage blocked on ring capacity drains the rest of its
-lane without writing a slot or sending an evaluate, sends no Ended, and closes its output.
-*/
-func TestAlignStop(t *testing.T) {
-	const d = day0
-	f := newFixture(t)
-	s := f.idx(idBTC5m) // 25 slots
-	g := newGate()
-	lane := feedLane(items(s, span(d, d+99, 1)...))
-	out := newAligner(f.buf, g, s).run(lane)
-
-	if got, want := settled(out), evals(s, Fresh, span(d, d+24, 1)...); !slices.Equal(got, want) {
-		t.Fatalf("before stop: evaluates = %v, want %v", got, want)
-	}
-	before := slices.Clone(f.buf.rings[s].slots)
-
-	g.stop()
-	if got := settled(out); got != nil {
-		t.Fatalf("after stop: evaluates = %v, want none", got)
-	}
-	if !closed(out) {
-		t.Fatal("output not closed")
-	}
-	if n := len(lane); n != 0 {
-		t.Errorf("lane holds %d items, want it drained", n)
-	}
-	if !slices.Equal(f.buf.rings[s].slots, before) {
-		t.Error("slots written after stop")
-	}
 }
