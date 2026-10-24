@@ -1,5 +1,7 @@
 # Stage 5.1 — the layer is the pipeline (data layer v2, iteration 1)
 
+> Gate `stop` since removed: `Close` consumes each frame it discards; a start failure first frees the gate.
+
 ## Context
 
 Adjusts [stage 5](stage-5-consumption.md), as built, and the composer of stages

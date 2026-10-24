@@ -4,6 +4,8 @@
 > composer, `Layer.stages` and `Layer.providers`, `New`'s `subs`, `Init` in `Start`, a start failure
 > leaving the layer unstarted, and the pipeline tests.
 
+> Gate `stop` since removed: `Close` consumes each frame it discards; a start failure first frees the gate.
+
 ## Context
 
 Stage 5 of [main.md](main.md): the engine-side half of the module. `Layer` wraps the
