@@ -87,10 +87,10 @@ construction, one provider stream.
 
 ### Module and stages
 
-- **Module `internal/engine/data`.** In: `Subscription`s and provider instances. Out: in-order frame
-  events and the `FrameBuffer`.
-- **Stage order.** Per direct stream, one goroutine per stage: ingest → normalise → deadline (live
-  only) → align. Then one readiness stage (ready → commit) releases columns and emits their events in
+- **Module `internal/engine/data`.** In: provider instances, initialised by the engine and keyed by
+  their direct subscription. Out: in-order frame events and the `FrameBuffer`.
+- **Stage order.** Per direct stream, a lane, one goroutine per stage: ingest → normalise → deadline
+  (live only) → align. Then one readiness stage (ready → commit) releases columns and emits their events in
   column order. Aggregation runs when the engine dequeues an event (see Consumption).
 - **The `FrameBuffer` is the staging environment** — slots beyond the released head hold undecided
   columns. No separate staging model.
@@ -106,9 +106,12 @@ construction, one provider stream.
   per-stream lane stages, readiness, the engine); steps inside one goroutine are plain functions
   called in sequence. No third-party pipeline library: the hot path needs typed channels without
   per-item boxing or wrapping.
-- **One unexported composer** (`pipeline`) wires the stages in one place, per mode: replay leaves out
-  the deadline stage. The module exports a `data.New` constructor (stage 5); no package-level
-  instance.
+- **The `Layer` is the pipeline.** `New` instantiates a lane per direct stream — its provider,
+  normaliser and aligner — plus readiness and the aggregator; each lane starts its provider, then its
+  stages, under the layer's run context, and closes the provider when it is cancelled; `Start` joins
+  the lanes into readiness with `pipe.FanIn`. The mode is chosen per lane: the live lane adds the
+  deadline stage. No package-level instance and no generic pipeline tooling (`pipe.Pipeline` with
+  `Lanes` / `Then`): the `Layer` is the typed pipeline instance.
 
 ### Normalisation
 
@@ -156,8 +159,8 @@ construction, one provider stream.
 
 ### Deadline (live)
 
-- **Its own lane stage, between normalise and align, live only.** The replay composer leaves it out,
-  so align is identical in both modes and free of time.
+- **Its own lane stage, between normalise and align, live only.** The replay lane leaves it out, so
+  align is identical in both modes and free of time. It stops with the layer's run context.
 - **The deadline belongs to the column:** `boundary(c) + lateness`, `boundary(c) = c × Stride`. It is
   known before any data arrives and compared with the injected `Clock` (the NTP-synced host clock);
   `ReceivedAt` plays no part.
@@ -284,11 +287,13 @@ construction, one provider stream.
   and `Complete()`; there is no separate event type. `Next(ctx)` returns `(*View, error)`: the frame,
   valid until the next call, which consumes its column; `nil, nil` at the end of the run;
   `ErrNotStarted` before `Start`, `ErrClosed` after `Close`, `ctx.Err()` once `ctx` is done.
-- **Lifecycle.** `data.New` instantiates the layer and its pipeline without I/O; `Start` initialises
-  and starts the providers and runs the pipeline. `Close` is synchronous: it closes the providers,
-  stops the gate — waiting align stages give up and drain their input — and discards the frames not
-  yet returned. It never runs concurrently with `Next`; another goroutine stops a run by cancelling
-  `ctx`.
+- **Lifecycle.** The engine initialises the providers; `data.New` instantiates the layer's stages
+  without I/O; `Start` runs the lanes — a provider start failure closes the layer. `Close` is
+  synchronous: it cancels the layer's run context, so every lane closes its provider, stops the gate
+  — waiting align stages give up and drain their input — discards the frames not yet returned and
+  waits for the providers to close. It never runs concurrently with `Next`; another goroutine stops a
+  run by cancelling `ctx`. The run context is the layer's own: cancelling the engine's would end the
+  lanes like the end of the run, without the drain.
 - **Provider errors are drained and logged by the layer** — undrained, a provider blocks on its
   error channel — until the provider drop contract (Open Questions).
 
@@ -368,7 +373,7 @@ Detail below the decisions; built per `docs/plans/data-layer-v2` as far as WIP l
 
 ```
           ┌──────────────────────────────── data layer (internal/engine/data) ──────────────────────────────┐
-          │ per direct stream, one goroutine per stage                    │ 1 goroutine │ engine, on dequeue │
+          │ lane i per direct stream, one goroutine per stage             │ 1 goroutine │ engine, on dequeue │
 provider_i ─▶ normalise ─▶ deadline (live) ─▶ align ─evaluate─┐                                               │
 provider_j ─▶ normalise ─▶ deadline (live) ─▶ align ─evaluate─┼─▶ readiness: ready → commit ─▶ events ─▶ Next():  │
           │                                     │               ┘                               materialise      │
@@ -486,8 +491,8 @@ type Leg struct {
 }
 
 // Module API (stage 5)
-func New(subs []proto.Subscription, providers map[proto.Subscription]proto.DataProvider,
-    lookback int, log *logger.Logger) (*Layer, error)
+func New(providers map[proto.Subscription]proto.DataProvider, lookback int,
+    log *logger.Logger) (*Layer, error) // providers initialised for their key
 func (l *Layer) Start() error
 func (l *Layer) Next(ctx context.Context) (*View, error) // nil, nil at the end of the run
 func (l *Layer) Close()
@@ -587,8 +592,6 @@ func Records[T any](v View, s Section[T]) []T
 
 ## Open Questions
 
-- **Generic pipeline tooling** — `pipe.Pipeline[In, Out]` with `Lanes` and `Then` so the data layer
-  pipeline is a typed instance rather than a module-internal struct; proposed, undecided.
 - **Lateness** — per venue / timeframe from measured arrival delays; hardcoded until then.
 - **Guaranteeing replay lane order** — e.g. sorting each lane once at dataset conversion; the CSV
   quality check can flag violations. Until then, an out-of-order source file yields `Late` in replay.
@@ -627,6 +630,9 @@ func Records[T any](v View, s Section[T]) []T
 - Stage 5 (module API: `Layer` with `New`, `Start`, `Next`, `Close`; `Event` folded into `View`;
   rolling aggregation in `Next`; gate `stop`) implemented —
   `docs/plans/data-layer-v2/stage-5-consumption.md`.
+- Stage 5.1 (the `Layer` is the pipeline: a lane per direct stream owning its initialised provider,
+  normaliser and aligner, run under the layer's run context; `New` takes the provider map) implemented
+  — `docs/plans/data-layer-v2/stage-5.1-layer-pipeline.md`.
 - **Plan impact of the redesign**, reflected in `main.md`: iteration 2 gains the deadline stage,
   alongside `Pending` and `Late`.
 

@@ -57,16 +57,21 @@ From [data-layer-v2.md](../../discussions/data-layer-v2.md) and
 - **Minimal `FrameBuffer`.** Iteration 1 holds market legs only; revision metadata arrives in
   iteration 2, feature entries in iteration 4, record sections (signals, orders, fills) with the
   strategy step loop (out of scope).
-- **Pipeline construction** (decided in stages 3, 3.1 and 4). Stages follow `pipe.Stage`; one
-  unexported composer wires a lane of per-stream stages for each direct stream, per mode, and joins
-  their evaluates into readiness with `pipe.FanIn`; the module exports a `data.New` constructor
-  (stage 5) — no package-level instance. The module does not use `SynchronizerV2`.
-- **Module API** (decided in stage 5). `Event` folds into `View`, which carries `Status()` beside
-  `Col()` and `Complete()`. `New` instantiates the layer and its pipeline without I/O; `Start` runs
-  it; `Next(ctx)` returns `(*View, error)` — `nil, nil` at the end of the run, `ErrNotStarted`,
-  `ErrClosed`, `ctx.Err()`; `Close` is synchronous and discards the frames not yet returned.
-  Aggregation is a loop in `Next` on the engine goroutine. Provider errors are logged by the layer
-  until the provider drop contract (iteration 2).
+- **Pipeline construction** (decided in stages 3, 3.1 and 4, revised in 5.1). Stages follow
+  `pipe.Stage`. The `Layer` is the pipeline: `New` instantiates a lane per direct stream — its
+  provider, normaliser and aligner — readiness and the aggregator; each lane starts its provider,
+  then its stages, under the layer's run context, and closes the provider when it is cancelled;
+  `Start` joins the lanes' evaluates into readiness with `pipe.FanIn`. The mode is chosen per lane.
+  No package-level instance and no generic pipeline tooling. The module does not use
+  `SynchronizerV2`.
+- **Module API** (decided in stages 5 and 5.1). `Event` folds into `View`, which carries `Status()`
+  beside `Col()` and `Complete()`. `New` takes the provider map — keyed by direct subscription,
+  providers initialised by the engine — and instantiates the layer's stages without I/O; `Start`
+  runs it, and a provider start failure closes the layer; `Next(ctx)` returns `(*View, error)` —
+  `nil, nil` at the end of the run, `ErrNotStarted`, `ErrClosed`, `ctx.Err()`; `Close` is
+  synchronous: it cancels the run context, discards the frames not yet returned and waits for the
+  providers it closes. Aggregation is a loop in `Next` on the engine goroutine. Provider errors are
+  logged by the layer until the provider drop contract (iteration 2).
 
 ## Structure
 
@@ -77,11 +82,12 @@ Tiered. Stage docs live beside this one, produced iteratively:
 - `stage-3-lanes.md` — *implemented; partly superseded by 3.1.*
 - `stage-3.1-lanes.md` — *implemented.*
 - `stage-4-align-readiness.md` — *implemented.*
-- `stage-5-consumption.md` — *implemented.*
+- `stage-5-consumption.md` — *implemented; partly superseded by 5.1.*
+- `stage-5.1-layer-pipeline.md` — *implemented.*
 - `stage-6-data-logger-v2.md`
 
 Ordering: 1 first; 2 and 3 depend on 1 and are independent of each other; 3.1 on 3; 4 depends on 2
-and 3.1; 5 on 4; 6 on 5.
+and 3.1; 5 on 4; 5.1 on 5; 6 on 5.1.
 
 ## Iteration 1 — replay data layer
 
@@ -90,12 +96,12 @@ and rolling derivations, released in column order with completeness and leg stat
 engine, exported once per stream update. `data_logger` is unchanged.
 
 ```
-            ┌─────────────────────────── internal/engine/data ───────────────────────────┐
-provider_i ─▶ lane_i: normalise ─▶ align ─evaluate─┐                                       │
-provider_j ─▶ lane_j: normalise ─▶ align ─evaluate─┼▶ readiness: ready ─▶ commit ─▶ events
-            │                            │          ┘                                      │
-            │                            └── FrameBuffer slots beyond the released head    │
-            └─────────────────────────────────────────────────────────────────────┬───────┘
+┌──────────────────────────────── internal/engine/data ─────────────────────────────────┐
+│ lane_i: provider_i ─▶ normalise ─▶ align ─evaluate─┐                                  │
+│ lane_j: provider_j ─▶ normalise ─▶ align ─evaluate─┼▶ readiness: ready ─▶ commit ─▶ events
+│                                      │             ┘                                  │
+│                                      └── FrameBuffer slots beyond the released head   │
+└───────────────────────────────────────────────────────────────────────────────────────┘
 data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature bridge ─▶ exporter
 ```
 
@@ -210,7 +216,25 @@ data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature b
   dataset over a random four-month sample; a derivation of a coarse direct stream updates at its
   source's period; warm-up count; a brute-force model over gaps and an end; `Next` and `Close`
   states; `-race` clean with the align stages staging ahead.
-- Plan: `stage-5-consumption.md`.
+- Plan: `stage-5-consumption.md`. Partly superseded by stage 5.1 (the composer, `New`'s arguments,
+  provider lifecycle, start failures).
+
+### Stage 5.1 — the layer is the pipeline ✅ implemented
+
+- **Goal:** the data layer is the pipeline: each direct stream's lane owns its provider and stages.
+- **Touches:** new `internal/engine/data/lane.go`, `pipeline.go` deleted, `data.go`; tests
+  (`pipeline_test.go` → `lane_test.go`).
+- **Contents:** the `Layer` holds `lanes`, `ready` and `agg`; `New(providers, lookback, log)` builds
+  the stream table from the map's keys — a nil provider or one instance under two keys is an error —
+  and a lane per direct stream from its initialised provider; `lane.run(ctx)` starts the provider,
+  then normalise and align, and closes the provider through `context.AfterFunc` once the layer's run
+  context is cancelled; `Start` joins the lanes into readiness, and a provider start failure closes
+  the layer; `Close` cancels the run context, stops the gate, drains and waits for the providers to
+  close. The composer, its stage factories and `Init` in the layer are gone.
+- **Acceptance:** frames unchanged; each lane carries only its own stream's evaluates; an unread lane
+  stops only its own provider; providers closed exactly once by `Close`, also after a run that ended
+  on its own; start failures as above.
+- Plan: `stage-5.1-layer-pipeline.md`.
 
 ### Stage 6 — `data_logger_v2` engine
 
@@ -221,6 +245,8 @@ data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature b
   untouched; `internal/domains/features/feature.go` (evaluate a chain over a given window, beside
   `Process`); `internal/logger` (frame logging, beside `SyncEvent`); a config file exercising a coarse
   direct stream and a derivation. The default `config.json` and `data_logger` stay as they are.
+  `data_logger_v2` initialises each provider with its subscription, then passes its `_providers`
+  map to `data.New`; an `Init` failure is the engine's error.
 - **Acceptance:** the v2 config exports one record per stream update with features; with the `fixed`
   pacer every frame is released whatever the lanes' relative speed (the original skew problem);
   `--validate-only` valid for both configs; `make check` clean.
@@ -286,6 +312,8 @@ in [features.md](../../discussions/features.md) and the `Layout` declaration ope
 
 - Retiring `data_logger`, `SynchronizerV2` and `proto.SyncEventV2` — a follow-up once
   `data_logger_v2` replaces `data_logger`.
+- One provider instance per subscription at the composition root — until then `data.New` rejects a
+  shared instance.
 - Features in the `FrameBuffer` — iteration 4, not in this run.
 - The strategy, portfolio and execution step loop and the record sections — with
   [strategy-layer.md](../../discussions/strategy-layer.md) and the `signal_logger` / `full` engines.
