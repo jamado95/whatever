@@ -93,6 +93,7 @@ func (e DataError) Error() string {
 
 type DataProvider interface {
 	ID() string
+	Subscription() Subscription
 	Init(sub Subscription) error
 	Streams() (<-chan MarketData, <-chan error)
 	Start() error
