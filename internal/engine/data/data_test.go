@@ -45,6 +45,8 @@ type fakeProvider struct {
 
 func (p *fakeProvider) ID() string { return "fake" }
 
+func (p *fakeProvider) Subscription() proto.Subscription { return p.sub }
+
 func (p *fakeProvider) Init(sub proto.Subscription) error {
 	p.sub = sub
 	p.data, p.errc, p.done = make(chan proto.MarketData, fakeBuffer), make(chan error, 10), make(chan struct{})

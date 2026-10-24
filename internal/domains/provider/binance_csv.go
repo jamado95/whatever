@@ -30,10 +30,12 @@ func init() {
 		}
 
 		return &BinanceCSVProvider{
-			id:     id,
-			file:   cfg.File,
-			logger: logger,
-			mu:     sync.Mutex{},
+			baseProvider: baseProvider{
+				id:     id,
+				logger: logger,
+			},
+			file: cfg.File,
+			mu:   sync.Mutex{},
 		}, nil
 	})
 }
@@ -50,19 +52,11 @@ func (c *BinanceCSVConfig) Validate() error {
 }
 
 type BinanceCSVProvider struct {
-	id      string
-	sub     proto.Subscription
+	baseProvider
 	file    string
 	started bool
-	data    chan proto.MarketData
-	errs    chan error
 	done    chan struct{}
-	logger  *logger.Logger
 	mu      sync.Mutex
-}
-
-func (p *BinanceCSVProvider) ID() string {
-	return p.id
 }
 
 func (p *BinanceCSVProvider) Init(sub proto.Subscription) error {
@@ -80,10 +74,6 @@ func (p *BinanceCSVProvider) Init(sub proto.Subscription) error {
 	p.done = make(chan struct{})
 
 	return nil
-}
-
-func (p *BinanceCSVProvider) Streams() (<-chan proto.MarketData, <-chan error) {
-	return p.data, p.errs
 }
 
 func (p *BinanceCSVProvider) Start() error {

@@ -22,6 +22,10 @@ type lane struct {
 	closing   *sync.WaitGroup // the layer's: done once the provider is closed
 }
 
+func (ln *lane) Subscription() proto.Subscription {
+	return ln.provider.Subscription()
+}
+
 // newLane builds direct stream s's lane over its initialised provider; its align stage waits on g for
 // ring capacity.
 func newLane(

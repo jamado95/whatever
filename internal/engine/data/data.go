@@ -122,10 +122,10 @@ func (l *Layer) Start() error {
 	evals := make([]<-chan evaluate, 0, len(l.lanes))
 	errs := make([]<-chan error, 0, len(l.lanes))
 	var failed error
-	for i, ln := range l.lanes {
+	for _, ln := range l.lanes {
 		ev, er, err := ln.run(ctx)
 		if err != nil {
-			failed = fmt.Errorf("data: provider of %s: start: %w", l.streams.All[i].Sub.ID(), err)
+			failed = fmt.Errorf("data: provider of %s: start: %w", ln.Subscription().ID(), err)
 			break
 		}
 		evals, errs = append(evals, ev), append(errs, er)
