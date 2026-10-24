@@ -1,5 +1,9 @@
 # Stage 5 — consumption and rolling aggregation (data layer v2, iteration 1)
 
+> Partly superseded by [stage-5.1-layer-pipeline.md](stage-5.1-layer-pipeline.md): the `pipeline`
+> composer, `Layer.stages` and `Layer.providers`, `New`'s `subs`, `Init` in `Start`, a start failure
+> leaving the layer unstarted, and the pipeline tests.
+
 ## Context
 
 Stage 5 of [main.md](main.md): the engine-side half of the module. `Layer` wraps the
