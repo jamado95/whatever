@@ -153,6 +153,10 @@ construction, one provider stream.
   writes up to `consumed + spare·Period`, `spare` being the ring's slots beyond its kept bars.
   Otherwise it waits on the gate — the engine's consumed column, woken by consumption — and its
   provider blocks (replay) or buffers and drops (live). Only the stream ahead blocks.
+- **Align waits only on ring capacity.** Its evaluate channel holds one evaluate per ring slot. A
+  lane's unread evaluates are slots written beyond what readiness has decided, at most the ring's
+  length, so the send never blocks, even while readiness waits on a full event channel. The provider
+  sees backpressure only once the ring and the normaliser's buffer are full.
 - **The carried candle comes from the stream's previous slot** — align's own last write, which
   nothing else writes in iteration 1. From iteration 2 the engine writes `Late` candles into released
   slots, so align will keep it in its own state.
@@ -285,15 +289,24 @@ construction, one provider stream.
   history. No frame ever mixes old and revised values.
 - **A frame is its `View`.** The View pinned at the released column carries the frame's `Status()`
   and `Complete()`; there is no separate event type. `Next(ctx)` returns `(*View, error)`: the frame,
-  valid until the next call, which consumes its column; `nil, nil` at the end of the run;
-  `ErrNotStarted` before `Start`, `ErrClosed` after `Close`, `ctx.Err()` once `ctx` is done.
+  valid until the next `Next` or `Close`; `nil, nil` at the end of the run; `ErrNotStarted` before
+  `Start`, `ErrClosed` after `Close`, `ctx.Err()` once `ctx` is done.
+- **View lifetime.** The next `Next` consumes the View's column; `Close` consumes the frames it
+  discards. Either moves the gate past the View, so ring capacity lets align wrap onto its oldest
+  bars. Safe because `Close`, like `Next`, runs on the engine goroutine once it is done with the
+  View; reading a View concurrently with `Close` is a data race.
 - **Lifecycle.** The engine initialises the providers; `data.New` instantiates the layer's stages
   without I/O; `Start` runs the lanes — a provider start failure closes the layer. `Close` is
-  synchronous: it cancels the layer's run context, so every lane closes its provider, stops the gate
-  — waiting align stages give up and drain their input — discards the frames not yet returned and
-  waits for the providers to close. It never runs concurrently with `Next`; another goroutine stops a
-  run by cancelling `ctx`. The run context is the layer's own: cancelling the engine's would end the
-  lanes like the end of the run, without the drain.
+  synchronous: it cancels the layer's run context, so every lane closes its provider, discards the
+  frames not yet returned — consuming each, so align stages waiting on ring capacity proceed and every
+  lane ends with `Ended` — and waits for the providers to close. It never runs concurrently with
+  `Next`; another goroutine stops a run by cancelling `ctx`. The run context is the layer's own:
+  cancelling the engine's would end the lanes like the end of the run, without the drain.
+- **A start failure frees the gate before `Close`** by consuming the maximal column. Readiness
+  releases nothing while a lane never started, so `Close` would have no frame to consume and a lane
+  waiting on ring capacity would never end. Freeing the gate is safe only then: with nothing released,
+  readiness reads no View, while in a normal `Close` it still reads the View of each column it
+  releases, which the gate keeps clear of align's writes.
 - **Provider errors are drained and logged by the layer** — undrained, a provider blocks on its
   error channel — until the provider drop contract (Open Questions).
 
@@ -304,7 +317,9 @@ construction, one provider stream.
   (§ Alignment) — the whole ring at startup, `consumed + spare·Period` in steady state. It covers
   staged slots and released-but-unconsumed events.
 - **`defaultHeadroom` is 128 columns**; the event channel holds as many. Readiness blocking on a full
-  event channel costs throughput only: the engine's consumption depends on events alone.
+  event channel costs throughput only: the engine's consumption depends on events alone, and align
+  keeps staging into its own channel meanwhile (§ Alignment). Never blocking readiness would take the
+  longest direct ring span, `max(slots · Period)` — a startup skew can release a whole ring at once.
 - **When a stream's ring is full its align stage blocks, in replay and live alike**, pushing
   backpressure to that stream's provider. The engine's consumption wakes it.
 - **Live: the provider deals with backpressure.** Its buffered output channel accumulates candles
@@ -628,7 +643,7 @@ func Records[T any](v View, s Section[T]) []T
 - Stage 4 (align stages and the gate, readiness, each ring's first column; the composer joins the
   lanes with `pipe.FanIn`) implemented — `docs/plans/data-layer-v2/stage-4-align-readiness.md`.
 - Stage 5 (module API: `Layer` with `New`, `Start`, `Next`, `Close`; `Event` folded into `View`;
-  rolling aggregation in `Next`; gate `stop`) implemented —
+  rolling aggregation in `Next`) implemented —
   `docs/plans/data-layer-v2/stage-5-consumption.md`.
 - Stage 5.1 (the `Layer` is the pipeline: a lane per direct stream owning its initialised provider,
   normaliser and aligner, run under the layer's run context; `New` takes the provider map) implemented
