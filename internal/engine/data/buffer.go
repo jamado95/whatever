@@ -23,6 +23,27 @@ const (
 	Ended                 // the stream's lane closed; carries the last Fresh candle
 )
 
+type slot struct {
+	col   int64        // column held; -1 = empty
+	fresh int64        // newest Fresh column at or before col; -1 = none
+	c     proto.Candle // Fresh: its candle; Gap / Ended: the last Fresh candle
+	state LegState
+	count uint16 // derived: base candles in the window
+}
+
+type ring struct {
+	slots  []slot
+	period int64        // the stream's Period: columns between slots
+	bars   int64        // bars kept for reads; the slots beyond them are headroom
+	first  atomic.Int64 // first column; reads never go below it. 0 until start
+	end    atomic.Int64 // Ended column; math.MaxInt64 while open
+}
+
+// at returns the slot that holds col, or would.
+func (r *ring) at(col int64) *slot {
+	return &r.slots[(col/r.period)%int64(len(r.slots))]
+}
+
 /*
 FrameBuffer holds every stream's market legs, one ring per stream with one slot per update. A direct
 stream's align stage writes its slots until it sends their evaluate; the engine goroutine writes
@@ -32,21 +53,6 @@ publish the align stages' slots, and ring capacity keeps their writes off the sl
 type FrameBuffer struct {
 	streams *Streams
 	rings   []ring
-}
-
-type ring struct {
-	slots []slot
-	bars  int64        // bars kept for reads; the slots beyond them are headroom
-	first atomic.Int64 // first column; reads never go below it. 0 until start
-	end   atomic.Int64 // Ended column; math.MaxInt64 while open
-}
-
-type slot struct {
-	col   int64        // column held; -1 = empty
-	fresh int64        // newest Fresh column at or before col; -1 = none
-	c     proto.Candle // Fresh: its candle; Gap / Ended: the last Fresh candle
-	state LegState
-	count uint16 // derived: base candles in the window
 }
 
 /*
@@ -81,6 +87,7 @@ func newFrameBuffer(streams *Streams, lookback int, headroom int64) (*FrameBuffe
 		}
 
 		ring := &buf.rings[i]
+		ring.period = s.Period
 		ring.bars = bars
 		ring.slots = make([]slot, bars*s.Window+(headroom+s.Period-1)/s.Period+1)
 		for j := range ring.slots {
@@ -100,30 +107,24 @@ func (b *FrameBuffer) start(s int, col int64) {
 	b.rings[s].first.Store(col)
 }
 
-// at returns the slot that holds col, or would.
-func (r *ring) at(col, period int64) *slot {
-	return &r.slots[(col/period)%int64(len(r.slots))]
-}
-
 /*
 put writes stream s's slot at col, one of the stream's update columns. A Gap or Ended slot carries
 the last Fresh candle from the stream's previous slot, or a zero candle when there is none; Ended
 also records the end column. Rewriting a column replaces its slot.
 */
 func (b *FrameBuffer) put(s int, col int64, c proto.Candle, state LegState, count uint16) {
-	period := b.streams.All[s].Period
 	r := &b.rings[s]
 
 	sl := slot{col: col, fresh: col, c: c, state: state, count: count}
 	if state != Fresh {
 		sl.c, sl.fresh = proto.Candle{}, -1
-		if pc := col - period; pc >= 0 {
-			if prev := r.at(pc, period); prev.col == pc {
+		if pc := col - r.period; pc >= 0 {
+			if prev := r.at(pc); prev.col == pc {
 				sl.c, sl.fresh = prev.c, prev.fresh
 			}
 		}
 	}
-	*r.at(col, period) = sl
+	*r.at(col) = sl
 
 	if state == Ended {
 		r.end.Store(col)

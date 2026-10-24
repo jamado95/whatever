@@ -27,17 +27,16 @@ func (v View) Status() Status { return v.status }
 // slot once past the end — or nil if the stream has not started. Below the stream's first column no
 // slot is read.
 func (v View) latest(s int) *slot {
-	period := v.buf.streams.All[s].Period
 	r := &v.buf.rings[s]
 
-	a := v.col - v.col%period
+	a := v.col - v.col%r.period
 	if end := r.end.Load(); a >= end {
 		a = end
 	}
 	if a < r.first.Load() {
 		return nil
 	}
-	if sl := r.at(a, period); sl.col == a {
+	if sl := r.at(a); sl.col == a {
 		return sl
 	}
 	return nil
@@ -91,7 +90,7 @@ func (v View) Candles(stream, n int, dst []proto.Candle) []proto.Candle {
 	step := st.Period * st.Window
 	first := r.first.Load()
 	for i, col := int64(0), sl.col; i < r.bars && col >= first && len(dst) < n; i, col = i+1, col-step {
-		s := r.at(col, st.Period)
+		s := r.at(col)
 		if s.col != col {
 			break
 		}
