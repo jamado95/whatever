@@ -12,17 +12,17 @@ import (
 
 const idRoll1dOf5m = "BTCUSDT:1d:derived_BTCUSDT:5m:btc_5m"
 
-// lane is a direct stream's slots as its align stage writes them: Fresh at each column of fresh
+// staged is a direct stream's slots as its align stage writes them: Fresh at each column of fresh
 // (sorted), Gap at its other due columns between the first and the last, then Ended one period after
 // the last when ended.
-type lane struct {
+type staged struct {
 	fresh []int64
 	ended bool
 }
 
-// state returns the lane's slot state at col, a due column of its stream with period p; ok false
+// state returns the stream's slot state at col, a due column of its stream with period p; ok false
 // when it has no slot there.
-func (l lane) state(col, p int64) (LegState, bool) {
+func (l staged) state(col, p int64) (LegState, bool) {
 	if len(l.fresh) == 0 || col < l.fresh[0] {
 		return 0, false
 	}
@@ -40,13 +40,13 @@ func (l lane) state(col, p int64) (LegState, bool) {
 }
 
 /*
-drive writes each lane's slots at every column from..to, as its align stage would, steps agg at each
-column, as Next would, then calls check. c gives stream s's Fresh candle at col.
+drive writes each stream's staged slots at every column from..to, as its align stage would, steps
+agg at each column, as Next would, then calls check. c gives stream s's Fresh candle at col.
 */
-func drive(f fixture, agg *aggregator, lanes map[int]lane, c func(s int, col int64) proto.Candle,
+func drive(f fixture, agg *aggregator, streams map[int]staged, c func(s int, col int64) proto.Candle,
 	from, to int64, check func(col int64)) {
 	for col := from; col <= to; col++ {
-		for s, l := range lanes {
+		for s, l := range streams {
 			p := f.st.All[s].Period
 			if col%p != 0 {
 				continue
@@ -92,11 +92,11 @@ func readLeg(v View, s int) leg {
 }
 
 /*
-expect computes derived stream d's leg at col by brute force over its source's lane: the source's
+expect computes derived stream d's leg at col by brute force over its source's staged slots: the source's
 latest update at or before col decides the state; the candle aggregates the Fresh bars in the window
 ending at the source's latest Fresh bar, which Gap and Ended carry.
 */
-func expect(st *Streams, d int, l lane, c func(int64) proto.Candle, col int64) leg {
+func expect(st *Streams, d int, l staged, c func(int64) proto.Candle, col int64) leg {
 	ds := st.All[d]
 	p := ds.Period
 	a := col - col%p
@@ -154,8 +154,8 @@ func TestAggregate(t *testing.T) {
 	t.Run("warm-up and the closed bar", func(t *testing.T) {
 		f, agg, c := setup(t)
 		s := f.idx(idBTC5m)
-		l := lane{fresh: span(d+1, d+48, 1)}
-		drive(f, agg, map[int]lane{s: l}, c, d, d+48, func(col int64) {
+		l := staged{fresh: span(d+1, d+48, 1)}
+		drive(f, agg, map[int]staged{s: l}, c, d, d+48, func(col int64) {
 			if col == d {
 				return
 			}
@@ -172,9 +172,9 @@ func TestAggregate(t *testing.T) {
 	t.Run("a gap is carried, then left out", func(t *testing.T) {
 		f, agg, c := setup(t)
 		s := f.idx(idBTC5m)
-		l := lane{fresh: without(span(d+1, d+60, 1), d+30)}
+		l := staged{fresh: without(span(d+1, d+60, 1), d+30)}
 		cs := func(x int64) proto.Candle { return c(s, x) }
-		drive(f, agg, map[int]lane{s: l}, c, d+1, d+60, func(col int64) {
+		drive(f, agg, map[int]staged{s: l}, c, d+1, d+60, func(col int64) {
 			want := expect(f.st, f.idx(idRoll1h), l, cs, col)
 			switch {
 			case col == d+30:
@@ -191,9 +191,9 @@ func TestAggregate(t *testing.T) {
 	t.Run("open from the next Fresh bar", func(t *testing.T) {
 		f, agg, c := setup(t)
 		s := f.idx(idBTC5m)
-		l := lane{fresh: without(span(d+1, d+60, 1), d+30, d+31, d+32)}
+		l := staged{fresh: without(span(d+1, d+60, 1), d+30, d+31, d+32)}
 		next := bar(f.st, s, d+33)
-		drive(f, agg, map[int]lane{s: l}, c, d+1, d+60, func(col int64) {
+		drive(f, agg, map[int]staged{s: l}, c, d+1, d+60, func(col int64) {
 			if col < d+41 || col > d+44 {
 				return
 			}
@@ -206,9 +206,9 @@ func TestAggregate(t *testing.T) {
 	t.Run("the source's end is carried", func(t *testing.T) {
 		f, agg, c := setup(t)
 		s, r := f.idx(idBTC5m), f.idx(idRoll1h)
-		l := lane{fresh: span(d+1, d+40, 1), ended: true}
+		l := staged{fresh: span(d+1, d+40, 1), ended: true}
 		last := expect(f.st, r, l, func(x int64) proto.Candle { return c(s, x) }, d+40).c
-		drive(f, agg, map[int]lane{s: l}, c, d+1, d+60, func(col int64) {
+		drive(f, agg, map[int]staged{s: l}, c, d+1, d+60, func(col int64) {
 			if col < d+41 {
 				return
 			}
@@ -222,9 +222,9 @@ func TestAggregate(t *testing.T) {
 	t.Run("a coarse source updates at its period", func(t *testing.T) {
 		f, agg, c := setup(t)
 		s, r := f.idx(idBTC1h), f.idx(idRoll1d)
-		l := lane{fresh: span(d+12, d+12*30, 12)}
+		l := staged{fresh: span(d+12, d+12*30, 12)}
 		cs := func(x int64) proto.Candle { return c(s, x) }
-		drive(f, agg, map[int]lane{s: l}, c, d+12, d+12*30, func(col int64) {
+		drive(f, agg, map[int]staged{s: l}, c, d+12, d+12*30, func(col int64) {
 			if written := f.slot(r, col).col == col; written != (col%12 == 0) {
 				t.Errorf("col d+%d: written %v", col-d, written)
 			}
@@ -242,8 +242,8 @@ func TestAggregate(t *testing.T) {
 	t.Run("a source not yet started", func(t *testing.T) {
 		f, agg, c := setup(t)
 		s, r := f.idx(idBTC5m), f.idx(idRoll1h)
-		l := lane{fresh: span(d+30, d+40, 1)}
-		drive(f, agg, map[int]lane{s: l}, c, d, d+40, func(col int64) {
+		l := staged{fresh: span(d+30, d+40, 1)}
+		drive(f, agg, map[int]staged{s: l}, c, d, d+40, func(col int64) {
 			if col >= d+30 {
 				return
 			}
@@ -284,10 +284,10 @@ func TestAggregateModel(t *testing.T) {
 		candles[col], p = c, next
 		fresh = append(fresh, col)
 	}
-	l := lane{fresh: fresh, ended: true}
+	l := staged{fresh: fresh, ended: true}
 	cs := func(x int64) proto.Candle { return candles[x] }
 
-	drive(f, newAggregator(f.buf), map[int]lane{s: l}, func(_ int, col int64) proto.Candle { return candles[col] },
+	drive(f, newAggregator(f.buf), map[int]staged{s: l}, func(_ int, col int64) proto.Candle { return candles[col] },
 		d, d+2880, func(col int64) {
 			v := f.buf.view(col, false)
 			for _, r := range []int{r1h, r1d} {

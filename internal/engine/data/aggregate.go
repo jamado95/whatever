@@ -33,6 +33,11 @@ func (d *deque) push(col int64, v float64) {
 	for d.n > 0 && d.vals[(d.head+d.n-1)%len(d.cols)] <= v {
 		d.n--
 	}
+
+	if d.n == len(d.cols) {
+		panic("deque capacity exceeded: expire entries before push")
+	}
+
 	i := (d.head + d.n) % len(d.cols)
 	d.cols[i], d.vals[i] = col, v
 	d.n++
