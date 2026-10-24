@@ -31,7 +31,7 @@ subscriptions through the ordered V2 synchronizer.
 | `proto.Subscription` | `{Symbol, Timeframe, Provider}`; `ID()` = `symbol:timeframe:provider`. It is the stream key. |
 | `proto.MarketData` | `{Subscription, Candle, ReceivedAt}`. `Candle.CloseTs` is the venue's close time verbatim — for Binance **ms, 1ms before the boundary**. `Timeframe` exposes `TimeframeS()` and `TimeframeMs()`. |
 | `config.Config.Subscriptions` | Top-level list; required fields, unique `ID()`, provider reference resolved at the composition root. |
-| Provider instances | Keyed by instance `name`; each sub is injected the instance its `provider` names (`_providers map[Subscription]DataProvider`). Subs naming the same block **share one instance** and `Init` overwrites its sub — the per-sub materialisation decided in §3 is not implemented. The default config sidesteps it with one block per sub. |
+| Provider instances | Keyed by instance `name`; each sub is injected the instance its `provider` names (`_providers map[Subscription]DataProvider`). Subs naming the same block **share one instance** and `Init` overwrites its sub — the per-sub materialisation decided in §3 is not implemented. The default config sidesteps it with one block per sub; `data.New` rejects one instance under two subscriptions until it is. |
 | `data_logger` | Per sub: `provider → ticker → FeatureChain`; lanes → `align.NewOrderedSynchronizer` → one shared exporter, exporting each leg with `CloseTs == Time()`. |
 | `FeatureChain` | One `SortedWindow` per chain, one chain per sub — the shared-window blocker below is resolved in `data_logger`. |
 | `Ticker` | One instance per lane. `fixedInterval` releases one value per tick regardless of timeframe; `realtime` does not pace. |

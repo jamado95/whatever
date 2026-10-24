@@ -14,6 +14,10 @@ Entry Point
 Core Architecture
 - internal/domains: domain logic (execution, market, monitor, features, provider, risk, strategy)
 - internal/engine: orchestration (backtesting, logging, full runtime)
+  - internal/engine/data: data layer v2 module — the `Layer` is the pipeline: stream table,
+    FrameBuffer, per-stream lanes (provider, normalise, align), readiness joined with pipe.FanIn,
+    and rolling aggregation; API `New` (providers initialised by the engine), `Start`, `Next`,
+    `Close`, as built per `docs/plans/data-layer-v2`
 - internal/flow: data-flow primitives — pipe (generic combinators, fanout), align (cross-stream synchronizers), timing (tickers)
 - internal/protocol: domain interfaces
 - internal/registry: registers all internal component factories
@@ -25,6 +29,9 @@ Design Rules
 - Engine wires domains together
 - Protocol defines contracts; implementations live in domains
 - `flow/pipe` is the primary data/control flow mechanism
+  - Pipeline stages follow `pipe.Stage`: a stage owns its goroutine and closes its output when its
+    input closes. Channel hops only where parallelism or blocking needs them; steps
+    within one goroutine are plain function calls.
 - Factories must not perform I/O. Construction is inert; all I/O belongs in `Init()`. This is what
   makes `--validate-only` a genuine dry run.
 - Each component declares a config struct beside its factory and decodes into it with

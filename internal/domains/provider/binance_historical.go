@@ -31,10 +31,12 @@ func init() {
 		}
 
 		return &BinanceHistoricalProvider{
-			id:        id,
+			baseProvider: baseProvider{
+				id:     id,
+				logger: logger,
+			},
 			startTime: cfg.StartTime,
 			endTime:   cfg.EndTime,
-			logger:    logger,
 			http:      &http.Client{},
 			mu:        sync.Mutex{},
 		}, nil
@@ -70,21 +72,13 @@ func (c *BinanceHistoricalConfig) Validate() error {
 }
 
 type BinanceHistoricalProvider struct {
-	id        string
-	sub       proto.Subscription
+	baseProvider
 	startTime int64
 	endTime   int64
-	data      chan proto.MarketData
-	errs      chan error
 	done      chan struct{}
 	started   bool
-	logger    *logger.Logger
 	mu        sync.Mutex
 	http      *http.Client
-}
-
-func (p *BinanceHistoricalProvider) ID() string {
-	return p.id
 }
 
 func (p *BinanceHistoricalProvider) Init(sub proto.Subscription) error {
@@ -102,10 +96,6 @@ func (p *BinanceHistoricalProvider) Init(sub proto.Subscription) error {
 	p.done = make(chan struct{})
 
 	return nil
-}
-
-func (p *BinanceHistoricalProvider) Streams() (<-chan proto.MarketData, <-chan error) {
-	return p.data, p.errs
 }
 
 func (p *BinanceHistoricalProvider) Start() error {

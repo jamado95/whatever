@@ -49,11 +49,15 @@ func init() {
 			return nil, err
 		}
 
-		// validate every sub has a matching provider
+		// validate every sub has a matching provider and no derivations
 		for _, sub := range subscriptions {
 			if _, ok := providers[sub]; !ok {
 				return nil, fmt.Errorf(
 					"data_logger: subscription %q has no provider injected", sub.ID())
+			}
+			if sub.Derive != 0 {
+				return nil, fmt.Errorf(
+					"data_logger: subscription %q: derived subscriptions are not supported", sub.ID())
 			}
 		}
 
