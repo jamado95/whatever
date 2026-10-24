@@ -52,7 +52,7 @@ func (f fixture) fresh(s int, cols ...int64) {
 
 // slot returns stream s's slot for col.
 func (f fixture) slot(s int, col int64) slot {
-	return *f.buf.rings[s].at(col, f.st.All[s].Period)
+	return *f.buf.rings[s].at(col)
 }
 
 // candle is distinct per stream and column.

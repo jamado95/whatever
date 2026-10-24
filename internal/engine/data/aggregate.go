@@ -44,10 +44,10 @@ func (d *deque) push(col int64, v float64) {
 }
 
 /*
-window is one derived stream's rolling state over its source's bars at columns
+streamAggWindow is one derived stream's rolling state over its source's bars at columns
 col − (W−1)·Period … col; only the engine goroutine touches it.
 */
-type window struct {
+type streamAggWindow struct {
 	buf            *FrameBuffer
 	stream, source int
 	period, w      int64   // w: source bars per window
@@ -70,7 +70,7 @@ bars, so the leaving bar is still readable. The window's candle takes Open and O
 Fresh bar, Close and CloseTs from the bar at col, High and Low from the deques and Volume from the
 compensated running sum.
 */
-func (w *window) update(col int64) {
+func (w *streamAggWindow) update(col int64) {
 	src := w.buf.view(col, false).latest(w.source)
 	if src == nil || src.col != col {
 		return
@@ -86,7 +86,7 @@ func (w *window) update(col int64) {
 	first := srcRing.first.Load()
 	out := col - w.w*w.period
 	if out >= first {
-		if sl := srcRing.at(out, w.period); sl.col == out && sl.state == Fresh {
+		if sl := srcRing.at(out); sl.col == out && sl.state == Fresh {
 			w.fresh--
 			w.add(-sl.c.Volume)
 		}
@@ -111,7 +111,7 @@ func (w *window) update(col int64) {
 		w.oldest = w.nextFresh(max(out+w.period, first), col)
 	}
 
-	openC := srcRing.at(w.oldest, w.period).c
+	openC := srcRing.at(w.oldest).c
 	w.count = uint16(w.fresh)
 
 	w.buf.put(w.stream, col, proto.Candle{
@@ -126,10 +126,10 @@ func (w *window) update(col int64) {
 }
 
 // nextFresh returns the first Fresh source column in from … to; to is Fresh.
-func (w *window) nextFresh(from, to int64) int64 {
+func (w *streamAggWindow) nextFresh(from, to int64) int64 {
 	r := &w.buf.rings[w.source]
 	for col := from; col < to; col += w.period {
-		if sl := r.at(col, w.period); sl.col == col && sl.state == Fresh {
+		if sl := r.at(col); sl.col == col && sl.state == Fresh {
 			return col
 		}
 	}
@@ -137,7 +137,7 @@ func (w *window) nextFresh(from, to int64) int64 {
 }
 
 // add adds x to the running volume with Neumaier compensation.
-func (w *window) add(x float64) {
+func (w *streamAggWindow) add(x float64) {
 	t := w.vol + x
 	if math.Abs(w.vol) >= math.Abs(x) {
 		w.comp += (w.vol - t) + x
@@ -149,14 +149,14 @@ func (w *window) add(x float64) {
 
 // aggregator materialises the derived legs of released columns on the engine goroutine.
 type aggregator struct {
-	windows []window // one per derived stream, in stream-table order
+	streamAggWindows []streamAggWindow // one per derived stream, in stream-table order
 }
 
 func newAggregator(buf *FrameBuffer) *aggregator {
 	st := buf.streams
-	a := &aggregator{windows: make([]window, 0, len(st.All)-st.Directs)}
+	a := &aggregator{streamAggWindows: make([]streamAggWindow, 0, len(st.All)-st.Directs)}
 	for i, s := range st.All[st.Directs:] {
-		a.windows = append(a.windows, window{
+		saw := streamAggWindow{
 			buf:    buf,
 			stream: st.Directs + i,
 			source: s.Source,
@@ -165,15 +165,17 @@ func newAggregator(buf *FrameBuffer) *aggregator {
 			oldest: -1,
 			hi:     newDeque(s.Window),
 			lo:     newDeque(s.Window),
-		})
+		}
+
+		a.streamAggWindows = append(a.streamAggWindows, saw)
 	}
 	return a
 }
 
 // step aggregates col, the column just released: update on each window whose source updates there.
 func (a *aggregator) step(col int64) {
-	for i := range a.windows {
-		if w := &a.windows[i]; col%w.period == 0 {
+	for i := range a.streamAggWindows {
+		if w := &a.streamAggWindows[i]; col%w.period == 0 {
 			w.update(col)
 		}
 	}
