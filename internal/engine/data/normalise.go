@@ -40,7 +40,8 @@ past its boundary would land one column late.
 */
 const spanTolerance = 1000 // ms
 
-// laneBuffer is the output capacity of each lane stage, matching the provider and feature-chain buffers.
+// laneBuffer is the output capacity of the lane stages before align, matching the provider and
+// feature-chain buffers.
 const laneBuffer = 100
 
 // normaliser is the normalise stage of one direct stream's lane; only its goroutine touches its state.

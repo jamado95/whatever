@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 
 	"whatever/internal/flow/pipe"
@@ -105,9 +106,10 @@ func (l *Layer) Streams() *Streams { return l.streams }
 
 /*
 Start runs each lane under the layer's run context — its provider, then its stages — and joins their
-evaluates into readiness; provider errors are logged. A provider failing to start closes the layer,
-the lanes already running included, and Start returns its error. A layer runs once: Start again is
-an error, and after Close it returns ErrClosed.
+evaluates into readiness; provider errors are logged. A provider failing to start frees the gate —
+readiness releases nothing while a lane never started, so Close would have no frame to consume — then
+closes the layer, the lanes already running included, and Start returns its error. A layer runs
+once: Start again is an error, and after Close it returns ErrClosed.
 */
 func (l *Layer) Start() error {
 	switch {
@@ -134,8 +136,10 @@ func (l *Layer) Start() error {
 	l.errsDone = pipe.Forward(pipe.FanIn(errs...), func(err error) { l.log.Error(err, "provider error") })
 	l.views = l.ready.run(pipe.FanIn(evals...))
 
-	// Close drains the lanes already running
+	// Close and drain the lanes already running
 	if failed != nil {
+		// readiness releases nothing, so reads nothing, while a lane never started: free the gate
+		l.gate.consume(math.MaxInt64)
 		l.Close()
 		return failed
 	}
@@ -176,10 +180,12 @@ func (l *Layer) Next(ctx context.Context) (*View, error) {
 }
 
 /*
-Close stops the run: it cancels the run context, so every running lane closes its provider, stops
-the gate and discards the remaining frames until every stage has exited, then waits for the providers
-to close. It returns with the output drained. A layer never started has nothing to stop. Next returns
-ErrClosed from then on. It must not run concurrently with Next.
+Close stops the run: it cancels the run context, so every running lane closes its provider, and
+discards the remaining frames until every stage has exited, consuming each so align stages waiting
+on ring capacity proceed; then it waits for the providers to close. It returns with the output
+drained. The View from the last Next is invalid from then on: the consumed frames let align wrap
+onto its oldest bars. A layer never started has nothing to stop. Next returns ErrClosed from then on.
+It must not run concurrently with Next.
 */
 func (l *Layer) Close() {
 	if l.closed {
@@ -191,10 +197,10 @@ func (l *Layer) Close() {
 	}
 
 	l.cancel()
-	l.gate.stop()
 
 	//discard any remaining frames
-	for range l.views {
+	for v := range l.views {
+		l.gate.consume(v.col) // drain gate to flush any frames waiting on align
 	}
 
 	l.closing.Wait()

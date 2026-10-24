@@ -31,7 +31,8 @@ const fakeBuffer = 100
 type fakeProvider struct {
 	candles   []proto.Candle
 	errs      []error
-	throttle  bool // pause every 50 candles
+	throttle  bool          // pause every 50 candles
+	delay     time.Duration // Start waits this long first
 	startErr  error
 	sub       proto.Subscription
 	data      chan proto.MarketData
@@ -57,6 +58,7 @@ func (p *fakeProvider) Streams() (<-chan proto.MarketData, <-chan error) { retur
 
 func (p *fakeProvider) Start() error {
 	p.starts.Add(1)
+	time.Sleep(p.delay)
 	if p.startErr != nil {
 		return p.startErr
 	}
@@ -387,7 +389,8 @@ func TestLayerClose(t *testing.T) {
 
 /*
 TestLayerStart covers Start: a provider failing to start closes the layer — the lanes already
-running included — and leaves nothing for Close; a layer starts once, and not after Close.
+running included, even one whose align stage waits on ring capacity — and leaves nothing for Close;
+a layer starts once, and not after Close.
 */
 func TestLayerStart(t *testing.T) {
 	st := NewStreams(testSubs())
@@ -426,6 +429,22 @@ func TestLayerStart(t *testing.T) {
 		l.Close()
 		if again := []int32{fs[0].closes.Load(), fs[1].closes.Load(), fs[2].closes.Load()}; !slices.Equal(again, closes) {
 			t.Errorf("Close touched providers: closes %v, want %v", again, closes)
+		}
+	})
+
+	t.Run("a Start failure after a lane fills its ring", func(t *testing.T) {
+		// readiness releases nothing while a lane never started, so only Close frees the 1h lane
+		l, fs := build(t, func(fs []*fakeProvider) {
+			fs[s1h].candles = bars(st, s1h, span(day0, day0+12*1000, 12)...)
+			fs[s5m].startErr, fs[s5m].delay = errors.New("refused"), 100*time.Millisecond
+		})
+		within(t, "Start", func() {
+			if err := l.Start(); err == nil {
+				t.Error("Start succeeded")
+			}
+		})
+		if n := fs[s1h].closes.Load(); n != 1 {
+			t.Errorf("1h provider closed %d times, want 1", n)
 		}
 	})
 
