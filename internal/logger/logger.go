@@ -125,8 +125,8 @@ func (l *Logger) SyncEvent(ev proto.SyncEventV2) {
 		Msg("SyncEvent")
 }
 
-// Frame logs a released data-layer frame; streams lists the streams that updated at its column.
-func (l *Logger) Frame(boundary, col int64, status int, complete bool, streams []string, legs int) {
+// View logs a released data-layer frame; streams lists the streams that updated at its column.
+func (l *Logger) View(boundary, col int64, status int, complete bool, streams []string, legs int) {
 	l.zl.Info().
 		Str("event", "frame").
 		Int64("time", boundary).

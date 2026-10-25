@@ -26,6 +26,7 @@ them in that order and is the only place that knows the topology.
 | Engine | File | State |
 |---|---|---|
 | `data_logger` | `internal/engine/data_logger.go` | **Working.** provider → ticker → feature chain → ordered synchronizer → log + export. `limit` caps synchronizer frames; reaching it closes providers for a graceful shutdown. The only exercised path in the repo. |
+| `data_logger_v2` | `internal/engine/data_logger_v2.go` | **Working.** Data layer v2 (`internal/engine/data`) → `Next` → replay pacer (`ticker` block: `realtime` unpaced, `fixed` one frame per interval) → feature bridge over each updated stream's history → log + export, one record per stream update. `limit` caps frames. Built per `docs/plans/data-layer-v2/stage-6-data-logger-v2.md`. |
 | `signal_logger` | `internal/engine/signal_logger.go` | Wired, but has no strategies to run and a goroutine-leak bug (below). No feature chain. |
 | `full` | `internal/engine/full.go` | **Cannot be instantiated.** Requires `_risk` and `_executors`; `cmd/main.go` never provides them, and neither component exists. |
 | `backtesting` | `internal/engine/backtesting.go` | A single comment line. |

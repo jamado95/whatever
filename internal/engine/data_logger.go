@@ -94,8 +94,8 @@ type DataLogger struct {
 }
 
 type DataLoggerOptions struct {
-	// Limit caps synchronizer frames; reaching it closes providers and shuts
-	// down. 0 = unlimited.
+	// Limit caps frames; reaching it closes providers and shuts down.
+	// 0 = unlimited.
 	Limit  int           `json:"limit"`
 	Ticker *TickerConfig `json:"ticker"`
 }
