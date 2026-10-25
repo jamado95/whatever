@@ -19,8 +19,8 @@ func candles(s int, cols ...int64) []proto.Candle {
 
 /*
 TestViewLeg covers what a view reports for one stream: a Fresh leg, a coarse stream carried between
-its closes, gaps carrying the last Fresh candle, ends, a stream not started, and pinning before an
-end already written.
+its closes, gaps carrying the last Fresh candle, past the ring's length too, ends, a stream not
+started, and pinning before an end already written.
 */
 func TestViewLeg(t *testing.T) {
 	type leg struct {
@@ -62,6 +62,20 @@ func TestViewLeg(t *testing.T) {
 		expect(t, f, s, 12, leg{candle(s, 0), Gap, 12})
 		f.buf.put(s, 24, proto.Candle{}, Gap, 0)
 		expect(t, f, s, 30, leg{candle(s, 0), Gap, 30})
+	})
+
+	t.Run("a gap longer than the ring carries a candle no slot holds", func(t *testing.T) {
+		f := newFixture(t)
+		s := f.idx(idBTC1h) // 27 slots
+		f.fresh(s, 0)
+		for _, col := range span(12, 720, 12) { // 60 Gap slots
+			f.buf.put(s, col, proto.Candle{}, Gap, 0)
+		}
+		if f.slot(s, 0).col == 0 {
+			t.Fatal("column 0's slot not overwritten")
+		}
+		expect(t, f, s, 720, leg{candle(s, 0), Gap, 720})
+		expect(t, f, s, 725, leg{candle(s, 0), Gap, 725})
 	})
 
 	t.Run("Fresh after a gap resets the age", func(t *testing.T) {

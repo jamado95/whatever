@@ -534,6 +534,48 @@ func TestDataPipelineSkew(t *testing.T) {
 	}
 }
 
+/*
+TestDataPipelineLongGap covers gaps longer than the ring through the layer with headroom 4: 100 5m
+columns over a 25-slot ring and 54 1h bars over a 27-slot ring, each proven by its lane's next candle
+and staged slot by slot as consumption frees the ring. With either lane throttled, the run returns
+the model's frames, and every leg, direct and derived, carries the last Fresh candle across the gap.
+*/
+func TestDataPipelineLongGap(t *testing.T) {
+	const d = day0
+	st := NewStreams(testSubs())
+	s5m, s1h, s1d := mustIndex(t, st, idBTC5m), mustIndex(t, st, idBTC1h), mustIndex(t, st, idETH1d)
+	cols := map[int][]int64{
+		s5m: slices.DeleteFunc(span(d, d+1440, 1), func(c int64) bool { return c >= d+100 && c < d+200 }),
+		s1h: slices.DeleteFunc(span(d, d+1440, 12), func(c int64) bool { return c >= d+600 && c <= d+1236 }),
+		s1d: span(d, d+1440, 288),
+	}
+
+	for _, slow := range []string{idBTC5m, idBTC1h} {
+		dp, _ := startDataPipeline(t, 4, quiet(), func(st *Streams, fs []*fakeProvider) {
+			for s, cs := range cols {
+				fs[s].candles = bars(st, s, cs...)
+				fs[s].throttle = st.All[s].Sub.ID() == slow
+			}
+		})
+		got := nextAll(t, dp, func(v *View) {
+			for s, stream := range st.All {
+				src := s
+				if stream.Kind == Derived {
+					src = stream.Source
+				}
+				want := expect(st, s, staged{fresh: cols[src], ended: true},
+					func(x int64) proto.Candle { return bar(st, src, x) }, v.Col())
+				if g := readLeg(*v, s); !sameLeg(g, want) {
+					t.Fatalf("slow %s, col d+%d, %s: %+v, want %+v", slow, v.Col()-d, stream.Sub.ID(), g, want)
+				}
+			}
+		})
+		if want := model(dp.buf, cols); !slices.Equal(got, want) {
+			t.Fatalf("slow %s: %d frames, want %d", slow, len(got), len(want))
+		}
+	}
+}
+
 // sampleCSV copies the rows of src whose OpenTs (ms, first column) lies in [from, to) to dst.
 func sampleCSV(t *testing.T, src, dst string, from, to int64) {
 	t.Helper()
