@@ -19,6 +19,7 @@ Opened 2026-07-26 from a full review of the codebase at commit `fbee380`.
 | [engine.md](engine.md) | Engine | `data_logger` and `data_logger_v2` work; `signal_logger` blocked; `full` uninstantiable; `backtesting` unstarted |
 | [multi-subscription.md](multi-subscription.md) | Cross-cutting — multi-stream flows | **Under active research** — nothing implemented, no plan |
 | [pipeline-runtime.md](pipeline-runtime.md) | Cross-cutting — runtime model, alignment point, clock | **Direction set** — frame-based data layer; partly implemented through data-layer-v2 (replay data layer, engine-side pacer, `data_logger_v2`) |
+| [instrumentation.md](instrumentation.md) | Cross-cutting — metrics for benchmarking and monitoring | **Under discussion** — own package, recording separate from exposure, data layer first; nothing implemented, no plan |
 
 ## Cross-cutting themes
 

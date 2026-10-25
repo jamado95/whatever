@@ -145,7 +145,7 @@ closed by that work.
 - Multi-provider / multi-symbol engines: how does the topology change? One engine per symbol with a supervising process, or one engine fanning many subscriptions through one feature-chain-per-symbol?
 - Should `data_logger` and `signal_logger` merge into one composable "observation" engine now that the difference is just which stage terminates? Or does keeping them separate remain worth the duplication?
 - Does the `Ticker` abstraction need the `Simulated` (factor-based) and `Manual` implementations its interface already implies, or should `SetFactor`/`Tick` be dropped until something needs them?
-- Where do metrics and health reporting live? Nothing measures throughput, latency or channel occupancy today, and the parallelism goals in `Architecture.md` cannot be evaluated without them.
+- Where do metrics and health reporting live? Nothing measures throughput, latency or channel occupancy today, and the parallelism goals in `Architecture.md` cannot be evaluated without them. Taken up in [[instrumentation]]: its own package, one framework for replay and live, the data layer instrumented first.
 
 ## WIP
 
