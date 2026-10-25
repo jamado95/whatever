@@ -40,12 +40,12 @@ func TestLane(t *testing.T) {
 	}
 	want[s5m] = append(want[s5m], evals(s5m, Ended, d+289)...)
 
-	l, err := newLayer(provs, 20, 600, quiet())
+	dp, err := newDataPipeline(provs, 20, 600, quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	for s, ln := range l.lanes {
+	for s, ln := range dp.lanes {
 		evs, errs, err := ln.run(ctx)
 		if err != nil {
 			t.Fatalf("lane %d: %v", s, err)
@@ -65,7 +65,7 @@ func TestLane(t *testing.T) {
 	}
 
 	cancel()
-	l.closing.Wait()
+	dp.closing.Wait()
 	for s, f := range fs {
 		if n := f.closes.Load(); n != 1 {
 			t.Errorf("lane %d: provider closed %d times after cancel, want 1", s, n)
@@ -87,18 +87,18 @@ func TestLaneIndependent(t *testing.T) {
 	fs[s5m].candles = bars(st, s5m, span(d+1, d+288, 1)...)
 	fs[s1d].candles = bars(st, s1d, d+288)
 
-	l, err := newLayer(provs, 20, 1200, quiet()) // the read lanes' rings never make align wait
+	dp, err := newDataPipeline(provs, 20, 1200, quiet()) // the read lanes' rings never make align wait
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer func() {
 		cancel()
-		l.closing.Wait()
+		dp.closing.Wait()
 	}()
 
-	evs := make([]<-chan evaluate, len(l.lanes))
-	for s, ln := range l.lanes {
+	evs := make([]<-chan evaluate, len(dp.lanes))
+	for s, ln := range dp.lanes {
 		if evs[s], _, err = ln.run(ctx); err != nil {
 			t.Fatalf("lane %d: %v", s, err)
 		}
@@ -116,13 +116,13 @@ func TestLaneIndependent(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	// the provider's full output, normalise's held candle and full output, align's item held at the
 	// gate, and an evaluate per ring slot
-	slots := int64(len(l.buf.rings[s1h].slots))
+	slots := int64(len(dp.buf.rings[s1h].slots))
 	if n, want := fs[s1h].sent.Load(), fakeBuffer+laneBuffer+1+slots+1; n != want {
 		t.Fatalf("unread lane's provider sent %d bars, want %d", n, want)
 	}
 
 	for e := range evs[s1h] { // drain, consuming as the engine would, so every goroutine exits
-		l.gate.consume(e.col)
+		dp.gate.consume(e.col)
 	}
 	if n := fs[s1h].sent.Load(); n != 1000 {
 		t.Fatalf("provider sent %d bars after its lane was drained, want 1000", n)

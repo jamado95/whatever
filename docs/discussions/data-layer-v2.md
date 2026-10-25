@@ -106,12 +106,12 @@ construction, one provider stream.
   per-stream lane stages, readiness, the engine); steps inside one goroutine are plain functions
   called in sequence. No third-party pipeline library: the hot path needs typed channels without
   per-item boxing or wrapping.
-- **The `Layer` is the pipeline.** `New` instantiates a lane per direct stream — its provider,
-  normaliser and aligner — plus readiness and the aggregator; each lane starts its provider, then its
-  stages, under the layer's run context, and closes the provider when it is cancelled; `Start` joins
-  the lanes into readiness with `pipe.FanIn`. The mode is chosen per lane: the live lane adds the
-  deadline stage. No package-level instance and no generic pipeline tooling (`pipe.Pipeline` with
-  `Lanes` / `Then`): the `Layer` is the typed pipeline instance.
+- **`DataPipeline` is the data layer's pipeline.** `New` instantiates a lane per direct stream — its
+  provider, normaliser and aligner — plus readiness and the aggregator; each lane starts its
+  provider, then its stages, under the layer's run context, and closes the provider when it is
+  cancelled; `Start` joins the lanes into readiness with `pipe.FanIn`. The mode is chosen per lane:
+  the live lane adds the deadline stage. No package-level instance and no generic pipeline tooling
+  (`pipe.Pipeline` with `Lanes` / `Then`): `DataPipeline` is the typed pipeline instance.
 
 ### Normalisation
 
@@ -505,12 +505,12 @@ type Leg struct {
     Data   proto.MarketData
 }
 
-// Module API (stage 5)
+// Module API (stage 5; Layer renamed DataPipeline in stage 6)
 func New(providers map[proto.Subscription]proto.DataProvider, lookback int,
-    log *logger.Logger) (*Layer, error) // providers initialised for their key
-func (l *Layer) Start() error
-func (l *Layer) Next(ctx context.Context) (*View, error) // nil, nil at the end of the run
-func (l *Layer) Close()
+    log *logger.Logger) (*DataPipeline, error) // providers initialised for their key
+func (dp *DataPipeline) Start() error
+func (dp *DataPipeline) Next(ctx context.Context) (*View, error) // nil, nil at the end of the run
+func (dp *DataPipeline) Close()
 ```
 
 Columns are absolute, never ring slots. `Col` is carried on every frame so "Current is the newest
