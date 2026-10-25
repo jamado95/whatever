@@ -91,6 +91,31 @@ func (fc *FeatureChain) Process(in <-chan proto.MarketData) <-chan proto.Extende
 	return out
 }
 
+// Lookback is the longest history any feature in the chain reads, in candles; 0 without features.
+func (fc *FeatureChain) Lookback() int {
+	return calculateRequiredCapacity(fc.features)
+}
+
+/*
+Evaluate runs the chain once over one stream's history and returns the snapshot. history is newest
+first, history[0] the candle being evaluated, and should hold Lookback candles where available. It
+refills the chain's window, so a chain serves either Process or Evaluate, from one goroutine.
+*/
+func (fc *FeatureChain) Evaluate(sub proto.Subscription, history []proto.Candle) proto.Snapshot {
+	fc.window.Clear()
+	for i := len(history) - 1; i >= 0; i-- {
+		if err := fc.window.Push(proto.MarketData{Subscription: sub, Candle: history[i]}); err != nil {
+			fc.logger.Warn(fmt.Sprintf("skipping candle: %v", err))
+		}
+	}
+
+	snap := proto.NewSnapshot()
+	for _, feat := range fc.features {
+		feat.Update(fc.window, &snap)
+	}
+	return snap
+}
+
 func (fc *FeatureChain) AvailableKeys() []proto.KeyRef {
 	keys := make([]proto.KeyRef, len(fc.features))
 	for i, feat := range fc.features {

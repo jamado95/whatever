@@ -150,7 +150,7 @@ Same switch as `newTicker`: `fixed` → `timing.Fixed(interval)`, `realtime` and
 
 ```go
 // Frame logs a released data-layer frame; streams lists the streams that updated at its column.
-func (l *Logger) Frame(time, col int64, status int, complete bool, streams []string, legs int)
+func (l *Logger) Frame(boundary, col int64, status int, complete bool, streams []string, legs int)
 ```
 
 Fields: `event` = `frame`, `time` (boundary, Unix ms), `col`, `status`, `complete`, `now_count`,
