@@ -33,6 +33,7 @@ subscriptions through the ordered V2 synchronizer.
 | `config.Config.Subscriptions` | Top-level list; required fields, unique `ID()`, provider reference resolved at the composition root. |
 | Provider instances | Keyed by instance `name`; each sub is injected the instance its `provider` names (`_providers map[Subscription]DataProvider`). Subs naming the same block **share one instance** and `Init` overwrites its sub — the per-sub materialisation decided in §3 is not implemented. The default config sidesteps it with one block per sub; `data.New` rejects one instance under two subscriptions until it is. |
 | `data_logger` | Per sub: `provider → ticker → FeatureChain`; lanes → `align.NewOrderedSynchronizer` → one shared exporter, exporting each leg with `CloseTs == Time()`. |
+| `data_logger_v2` | Runs on the data layer v2 module (`internal/engine/data`) beside `SynchronizerV2`, which `data_logger` keeps: per-stream lanes, readiness, rolling derivations, an engine-side pacer; one export per stream update ([[data-layer-v2]]). |
 | `FeatureChain` | One `SortedWindow` per chain, one chain per sub — the shared-window blocker below is resolved in `data_logger`. |
 | `Ticker` | One instance per lane. `fixedInterval` releases one value per tick regardless of timeframe; `realtime` does not pace. |
 | `pipe.FanIn` / `pipe.OrderedFanIn` | `FanIn` merges lanes in arrival order. `OrderedFanIn` is a k-way merge by a `less` func: it emits the least pending value and blocks while any open input has none. |
@@ -240,15 +241,12 @@ it violated its own invariants under out-of-order arrival. V2 replaces it.
 
 - How does the engine choose the ordered synchronizer (replay) vs `FanIn` (live)? No replay/live
   switch exists today; the provider type is the obvious signal.
-- Live ordering: a timeframe-aware merge (after a close at T, a lane's next close is ≥ T + timeframe,
-  so earlier data releases without its head), with a deadline for missing candles.
-- Pacing: one ticker on the synchronizer's output (one aligned frame per tick) instead of per-lane
-  tickers?
+- Live ordering, pacing and derive-versus-subscribe — answered in [[data-layer-v2]]: per-stream
+  lanes with a deadline stage per lane (live, iteration 2), an engine-side pacer, and coarser series
+  derived where finer data exists. Replay is built in `data_logger_v2`.
 - V2 window `width` policy — fixed `2 × coarsest period` gives same-timeframe sets one column of lag
   tolerance.
 - Live: does V2 serve live as well, or does a wall-clock emitter sit beside it (§4)?
-- Derive coarse timeframes by aggregation, or subscribe to each independently? If aggregation, what
-  component owns it?
 - Should `Lookback()` become duration-based rather than candle-based once one engine sees several
   timeframes?
 - Does `RiskManager.Init` take one merged data channel or a keyed set? A merged channel is a smaller

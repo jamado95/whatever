@@ -85,8 +85,8 @@ Tiered. Stage docs live beside this one, produced iteratively:
 - `stage-4-align-readiness.md` — *implemented.*
 - `stage-5-consumption.md` — *implemented; partly superseded by 5.1.*
 - `stage-5.1-layer-pipeline.md` — *implemented.*
-- `stage-6-data-logger-v2.md` — one plan in four steps: rename `Layer` → `DataPipeline`, engine
-  building blocks, the engine, the v2 config.
+- `stage-6-data-logger-v2.md` — *implemented*; one plan in four steps: rename `Layer` →
+  `DataPipeline`, engine building blocks, the engine, the v2 config.
 
 Ordering: 1 first; 2 and 3 depend on 1 and are independent of each other; 3.1 on 3; 4 depends on 2
 and 3.1; 5 on 4; 5.1 on 5; 6 on 5.1.
@@ -104,7 +104,7 @@ engine, exported once per stream update. `data_logger` is unchanged.
 │                                      │             ┘                                  │
 │                                      └── FrameBuffer slots beyond the released head   │
 └───────────────────────────────────────────────────────────────────────────────────────┘
-data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature bridge ─▶ exporter
+data_logger_v2 loop: data.Next() (aggregate, view) ─▶ pacer ─▶ feature bridge ─▶ exporter
 ```
 
 ### Stage 1 — subscription model and stream table ✅ implemented
@@ -238,16 +238,17 @@ data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature b
   on its own; start failures as above.
 - Plan: `stage-5.1-layer-pipeline.md`.
 
-### Stage 6 — `data_logger_v2` engine
+### Stage 6 — `data_logger_v2` engine ✅ implemented
 
 - **Goal:** a new engine that consumes the module and exports featured stream updates.
 - **Touches:** `internal/engine/data` (`Layer` renamed `DataPipeline`); new
   `internal/engine/data_logger_v2.go` (registered as `data_logger_v2`; loop: `Next` → pacer →
   feature bridge → exporter → limit) and its tests; an engine-side pacer in `flow/timing` from the
   existing `realtime` / `fixed` ticker modes, reusing the `ticker` config shape and leaving
-  `Ticker.Gate` untouched; `internal/domains/features/feature.go` (evaluate a chain over a given window, beside
-  `Process`); `internal/logger` (frame logging, beside `SyncEvent`); a config file exercising a coarse
-  direct stream and a derivation. The default `config.json` and `data_logger` stay as they are.
+  `Ticker.Gate` untouched; `internal/domains/features/feature.go` (evaluate a chain over a given
+  window, beside `Process`); `internal/logger` (frame logging, beside `SyncEvent`);
+  `configs/data_logger_v2.json`, exercising a coarse direct stream and a derivation. The default
+  `config.json` and `data_logger` stay as they are.
   `data_logger_v2` initialises each provider with its subscription, then passes its `_providers`
   map to `data.New`; an `Init` failure is the engine's error.
 - **Contents:** one plan in four steps, each reviewed and committed before the next: (1) rename
@@ -256,6 +257,7 @@ data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature b
 - **Acceptance:** the v2 config exports one record per stream update with features; with the `fixed`
   pacer every frame is released whatever the lanes' relative speed (the original skew problem);
   `--validate-only` valid for both configs; `make check` clean.
+- Plan: `stage-6-data-logger-v2.md`.
 
 ### Iteration 1 — done when
 
@@ -333,4 +335,4 @@ in [features.md](../../discussions/features.md) and the `Layout` declaration ope
 - Headroom value, event channel capacity, evaluate delivery and the wake-up — resolved in stage 4.
 - Stopping align stages waiting on the gate (`Close`) and the derived leg state under source gaps —
   resolved in stage 5.
-- Frame logging format and the v2 config file's location — stage 6.
+- Frame logging format and the v2 config file's location — resolved in stage 6.

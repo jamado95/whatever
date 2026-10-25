@@ -41,6 +41,20 @@ make validate
 ./whatever --config configs/generated-042.json --validate-only
 ```
 
+### Data layer v2 run
+
+`configs/data_logger_v2.json` runs the `data_logger_v2` engine on the data layer v2 module
+(`internal/engine/data`): BTCUSDT 5m deriving a rolling 1h, plus a direct 1d, from the 2024
+`binance_csv` files, with `config.json`'s features, `fixed` pacing at 50 ms and `limit` 1000 frames.
+Each frame is logged (`event=frame`); every stream update is exported once, with its features, to
+one JSONL file in `data/exports/` (`multi_multi_data_logger_v2_<start>_<end>.jsonl`) — 5m, rolling
+1h and 1d rows mixed, told apart by `timeframe`. The rolling 1h updates at every 5m close.
+
+```bash
+make validate CONFIG=configs/data_logger_v2.json
+make run CONFIG=configs/data_logger_v2.json
+```
+
 ### Config validation
 
 `config.json` is validated strictly. Unknown keys, wrong value types and out-of-range enum values

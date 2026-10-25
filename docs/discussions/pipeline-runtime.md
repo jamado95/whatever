@@ -120,6 +120,10 @@ network, the alignment wait and the order round trip — unmeasured, plausibly m
   written through the execution section's writer and do not pass through ingestion or alignment
   ([[data-layer-v2]]).
 - **The data layer is the module `internal/engine/data`** ([[data-layer-v2]]).
+- **Migration: a separate engine.** `data_logger_v2` runs on the module beside `data_logger`, which
+  stays until it is retired; features reach it through a temporary bridge — the `FeatureChain`
+  evaluated over each updated stream's `View` history — until they move into the `FrameBuffer`
+  ([[data-layer-v2]] plan, stage 6).
 
 These reverse recorded positions not yet updated in their own documents:
 
@@ -130,7 +134,7 @@ These reverse recorded positions not yet updated in their own documents:
 
 ## Solution
 
-Direction only; no plan. Earlier options — a synchronous core alone, and alignment at ingestion with
+Direction; the data layer part is planned and built in [[data-layer-v2]]. Earlier options — a synchronous core alone, and alignment at ingestion with
 strictly increasing output — are subsumed here; strictly increasing output was dropped in favour of
 `Late` revisions.
 
@@ -263,6 +267,8 @@ frames are consumed belongs to the engine. Replay output is therefore identical 
 - **Pacer (engine), replay only** — live runs unpaced. Modes map onto today's `Ticker`: none
   (`realtime`), fixed per frame (`fixedInterval`), factor (`SetFactor`, unimplemented), manual
   (`Tick`, unimplemented). This settles [[engine]]'s question on the `Simulated` / `Manual` tickers.
+  Implemented in `flow/timing` as `Pacer` with `Unpaced` and `Fixed`, mapped from the `ticker` block;
+  `data_logger_v2` waits on it after `Next`, once the frame's time is known.
 
 ```go
 // flow/timing — times in ms, matching CloseTs
@@ -308,8 +314,6 @@ Readiness alone accounts for ~34 min of a 1000-stream backtest run.
 
 ## Open Questions
 
-- **Migration path** — rewrite, or add `Step` / `Push` methods beside the channel APIs first and
-  build a backtest engine on them while `data_logger` stays on channels.
 - **Recursive features under `Late`** — save state per column across the window, or accept revisions
   going forward only?
 - **Overrun policy** — coalesce pending frames into one step (union of dirty sets; features see every
@@ -328,7 +332,9 @@ Readiness alone accounts for ~34 min of a 1000-stream backtest run.
 
 ## WIP
 
-- Nothing implemented, no plan.
+- Built through [[data-layer-v2]] (`docs/plans/data-layer-v2`, iteration 1 complete): the replay
+  data layer, the engine-side pacer and the `data_logger_v2` engine. The live path, the step loop
+  and features in the `FrameBuffer` are not started.
 - Unit costs above come from micro-benchmarks run outside the repository; no benchmark is checked in.
 
 ## Resources

@@ -628,7 +628,9 @@ func Records[T any](v View, s Section[T]) []T
   due column (a delay, never early).
 - **Multiplexing providers** — `Init([]Subscription)` from [[data-layer]] still open; the module's
   input edge should not preclude it.
-- **Exporter** — read from the `FrameBuffer` directly?
+- **Exporter** — read from the `FrameBuffer` directly? Until the record carries the stream, a
+  rolling and a direct stream of one timeframe export identical `symbol` / `timeframe`;
+  `configs/data_logger_v2.json` avoids the pair.
 
 ## WIP
 
@@ -648,6 +650,10 @@ func Records[T any](v View, s Section[T]) []T
 - Stage 5.1 (the `Layer` is the pipeline: a lane per direct stream owning its initialised provider,
   normaliser and aligner, run under the layer's run context; `New` takes the provider map) implemented
   — `docs/plans/data-layer-v2/stage-5.1-layer-pipeline.md`.
+- Stage 6 (`Layer` renamed `DataPipeline`; the feature bridge, the replay pacer in `flow/timing`
+  and frame logging; the `data_logger_v2` engine; `configs/data_logger_v2.json`) implemented —
+  `docs/plans/data-layer-v2/stage-6-data-logger-v2.md`. **Iteration 1 is complete**: replay runs on
+  the module end to end; iteration 2 (live release path) is next.
 - **Plan impact of the redesign**, reflected in `main.md`: iteration 2 gains the deadline stage,
   alongside `Pending` and `Late`.
 
