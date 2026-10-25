@@ -39,7 +39,7 @@ unstaged for review; the step is committed once approved, then the next starts.
   manual modes stay unimplemented.
 - **The pacer waits after `Next`**, since `Wait` takes the frame's time — not before, as main.md's
   loop reads today.
-- **Frame logging.** `logger` cannot import `data` (`data` imports `logger`), so `Logger.Frame`
+- **Frame logging.** `logger` cannot import `data` (`data` imports `logger`), so `Logger.View`
   takes plain values: boundary, column, status, completeness, the streams updated, the leg count —
   `SyncEvent`'s fields, per column.
 - **A stream updates at a column when its leg is `Fresh` with age 0.** Each update exports one
@@ -149,8 +149,8 @@ Same switch as `newTicker`: `fixed` → `timing.Fixed(interval)`, `realtime` and
 ### Frame logging — `internal/logger/logger.go`
 
 ```go
-// Frame logs a released data-layer frame; streams lists the streams that updated at its column.
-func (l *Logger) Frame(boundary, col int64, status int, complete bool, streams []string, legs int)
+// View logs a released data-layer frame; streams lists the streams that updated at its column.
+func (l *Logger) View(boundary, col int64, status int, complete bool, streams []string, legs int)
 ```
 
 Fields: `event` = `frame`, `time` (boundary, Unix ms), `col`, `status`, `complete`, `now_count`,
@@ -170,7 +170,7 @@ Fields: `event` = `frame`, `time` (boundary, Unix ms), `col`, `status`, `complet
     `context.Canceled` within 100 ms.
 - `internal/engine/ticker_test.go`: **`TestNewPacer`** — nil and `realtime` do not wait; `fixed` at
   20 ms waits at least 15 ms before its first frame.
-- `Frame` is exercised by step 3's engine tests, which read frames back from the log.
+- `View` is exercised by step 3's engine tests, which read frames back from the log.
 
 ### Documentation
 
@@ -235,7 +235,7 @@ func (e *DataLoggerV2) Close()
      updated list; with an exporter, `chain.Evaluate(sub, v.Candles(s, lookback, history))` and
      `Export(MarketData{Subscription: sub, Candle: c}, &snap)` — an export error is logged.
      `history` is one slice reused across streams and frames.
-  4. `logger.Frame(v.Boundary(), v.Col(), int(v.Status()), v.Complete(), updated, len(All))`.
+  4. `logger.View(v.Boundary(), v.Col(), int(v.Status()), v.Complete(), updated, len(All))`.
   5. Counts the frame; at `limit`, logs "limit reached" and ends the run.
 - Locals avoid the name `data`, which would shadow the package: the pipeline is `dp`.
 - `internal/engine/data_logger.go`: `DataLoggerOptions.Limit`'s comment → "caps frames"; nothing
