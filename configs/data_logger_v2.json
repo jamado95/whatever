@@ -1,0 +1,78 @@
+{
+  "providers": [
+    {
+      "type": "binance_csv",
+      "name": "btcusdt_5m",
+      "file": "./data/BTCUSDT/BTCUSDT-5m-2024-01.csv"
+    },
+    {
+      "type": "binance_csv",
+      "name": "btcusdt_1d",
+      "file": "./data/BTCUSDT/BTCUSDT-1d-2024-01.csv"
+    }
+  ],
+  "features": [
+    {
+      "type": "engulfing_candle"
+    },
+    {
+      "type": "vwap",
+      "variants": [
+        { "period": 20 },
+        { "period": 50 }
+      ]
+    },
+    {
+      "type": "rsi",
+      "disabled": true,
+      "variants": [
+        { "period": 14 },
+        { "period": 21 }
+      ]
+    },
+    {
+      "type": "sma",
+      "disabled": true,
+      "variants": [
+        { "period": 20 },
+        { "period": 50 },
+        { "period": 100 }
+      ]
+    },
+    {
+      "type": "ema",
+      "variants": [
+        { "period": 20, "smoothing": 2.0 },
+        { "period": 50 }
+      ]
+    }
+  ],
+  "subscriptions": [
+    {
+      "symbol": "BTCUSDT",
+      "timeframe": "5m",
+      "provider": "btcusdt_5m",
+      "derive": ["1h"]
+    },
+    {
+      "symbol": "BTCUSDT",
+      "timeframe": "1d",
+      "provider": "btcusdt_1d"
+    }
+  ],
+  "engine": {
+    "type": "data_logger_v2",
+    "strategies": [],
+    "exporter": {
+      "type": "jsonl",
+      "output_dir": "data/exports"
+    },
+    "options": {
+      "ticker": {
+        "type": "fixed",
+        "interval": "50ms"
+      },
+      "limit": 1000
+    }
+  }
+}
