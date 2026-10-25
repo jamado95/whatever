@@ -10,6 +10,7 @@ import (
 type stubProvider struct{}
 
 func (stubProvider) ID() string                                       { return "stub" }
+func (stubProvider) Subscription() proto.Subscription                 { return proto.Subscription{} }
 func (stubProvider) Init(proto.Subscription) error                    { return nil }
 func (stubProvider) Streams() (<-chan proto.MarketData, <-chan error) { return nil, nil }
 func (stubProvider) Start() error                                     { return nil }

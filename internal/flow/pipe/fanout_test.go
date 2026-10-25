@@ -1,6 +1,8 @@
 package pipe
 
 import (
+	"fmt"
+	"math/rand/v2"
 	"slices"
 	"testing"
 	"time"
@@ -82,5 +84,71 @@ func TestOrderedFanInWaitsForSlowInput(t *testing.T) {
 	close(slow)
 	if got := drain(out); !slices.Equal(got, []int{1, 2, 3}) {
 		t.Fatalf("got %v, want [1 2 3]", got)
+	}
+}
+
+/*
+TestOrderedFanInModel checks the heap against a reference: many inputs of random length holding
+sorted values from a small range, so ties are frequent. The output must equal a stable sort of every
+value by value, then input.
+*/
+func TestOrderedFanInModel(t *testing.T) {
+	for seed := range uint64(5) {
+		t.Run(fmt.Sprintf("seed=%d", seed), func(t *testing.T) {
+			rng := rand.New(rand.NewPCG(seed, 0))
+			inputs := make([][]int, 50)
+			var want []tagged
+			for i := range inputs {
+				vals := make([]int, rng.IntN(41))
+				for j := range vals {
+					vals[j] = rng.IntN(20)
+				}
+				slices.Sort(vals)
+				inputs[i] = vals
+				for _, v := range vals {
+					want = append(want, tagged{v, i})
+				}
+			}
+			slices.SortStableFunc(want, func(a, b tagged) int { return a.v - b.v })
+
+			ins := make([]<-chan tagged, len(inputs))
+			for i, vals := range inputs {
+				ins[i] = feed(i, vals...)
+			}
+			if got := drain(OrderedFanIn(lessTagged, ins...)); !slices.Equal(got, want) {
+				t.Fatalf("got %v,\nwant %v", got, want)
+			}
+		})
+	}
+}
+
+/*
+BenchmarkOrderedFanIn measures the merge per value with n inputs that all carry the same sequence, so
+every value ties, as streams on one grid do. Inputs are filled and closed before the timer starts.
+*/
+func BenchmarkOrderedFanIn(b *testing.B) {
+	for _, n := range []int{10, 100, 1000} {
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			per := b.N/n + 1
+			ins := make([]<-chan int, n)
+			for i := range ins {
+				ch := make(chan int, per)
+				for v := range per {
+					ch <- v
+				}
+				close(ch)
+				ins[i] = ch
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			out := OrderedFanIn(func(a, b int) bool { return a < b }, ins...)
+			for range b.N {
+				<-out
+			}
+			b.StopTimer()
+			for range out { // drain the remainder so the merge goroutine exits
+			}
+		})
 	}
 }

@@ -1,7 +1,8 @@
 # Commands
 
-Every command runs from the **repo root** — `cmd/main.go` loads `config.json` relative to the
-current directory, and the `uv` project lives at the root.
+Every command runs from the **repo root** — `cmd/main.go` loads its config (default
+`configs/data_logger_v2.json`) relative to the current directory, and the `uv` project lives at the
+root.
 
 Go tooling is driven by the `Makefile`. Python tooling is managed by [uv](https://docs.astral.sh/uv/)
 from `pyproject.toml` / `uv.lock`; `uv run` provisions the interpreter and syncs `.venv` on demand,
@@ -18,38 +19,56 @@ so there is no Python setup step.
 | Command | Description |
 |---|---|
 | `make build` | Compile the engine to `./whatever`. |
-| `make run [CONFIG=]` | Run the engine from source (`CONFIG` defaults to `config.json`). |
+| `make run [CONFIG=]` | Run the engine from source (`CONFIG` defaults to `configs/data_logger_v2.json`). |
 | `make validate [CONFIG=]` | Validate a config and exit without running anything. |
 | `./whatever [flags]` | Run a previously built binary. |
 
 Engine type, provider, features, symbol and limits are all set in the config file; the two flags
-below only choose *which* file and *whether to run it*. Ctrl-C shuts down cleanly. As checked in,
-`make run` executes the `data_logger` engine: `binance_csv` → feature chain → console log + JSONL
-export to `data/exports/`.
+below only choose *which* file and *whether to run it*. Ctrl-C shuts down cleanly. Configs live in
+`configs/`. As checked in, `make run` executes the `data_logger_v2` engine
+([below](#data-layer-v2-run)); `configs/data_logger.json` runs the `data_logger` engine:
+`binance_csv` → feature chain → ordered synchronizer → console log + JSONL export to
+`data/exports/`.
 
 | Flag | Description |
 |---|---|
-| `--config <path>` | Config file to load. Default `config.json`. |
+| `--config <path>` | Config file to load. Default `configs/data_logger_v2.json`. |
 | `--validate-only` | Construct every enabled component, report any config errors, then exit without running the engine. |
 
 ```bash
 # Run against an alternative config
-make run CONFIG=configs/btc-1h.json
+make run CONFIG=configs/data_logger.json
 
 # Check a config without connecting to a data source or writing exports
 make validate
 ./whatever --config configs/generated-042.json --validate-only
 ```
 
+### Data layer v2 run
+
+`configs/data_logger_v2.json`, the default config, runs the `data_logger_v2` engine on the data
+layer v2 module (`internal/engine/data`): BTCUSDT 5m deriving a rolling 1h, plus a direct 1d, from
+the 2024 `binance_csv` files, with `configs/data_logger.json`'s features, `fixed` pacing at 50 ms
+and `limit` 1000 frames.
+Each frame is logged (`event=frame`); every stream update is exported once, with its features, to
+one JSONL file in `data/exports/` (`multi_multi_data_logger_v2_<start>_<end>.jsonl`) — 5m, rolling
+1h and 1d rows mixed, told apart by `timeframe`. The rolling 1h updates at every 5m close.
+
+```bash
+# CONFIG defaults to configs/data_logger_v2.json
+make validate
+make run
+```
+
 ### Config validation
 
-`config.json` is validated strictly. Unknown keys, wrong value types and out-of-range enum values
+Configs are validated strictly. Unknown keys, wrong value types and out-of-range enum values
 are startup errors naming the offending path, rather than being silently ignored:
 
 ```
-config.json: feature "ema" variant 0: json: unknown field "smoothingg"
-config.json: engine "data_logger": invalid ticker type "fixedinterval", want one of [realtime fixed]
-config.json: failed to parse config: invalid timeframe "1hr", want one of [1m 5m 15m 1h 1d]
+configs/data_logger.json: feature "ema" variant 0: json: unknown field "smoothingg"
+configs/data_logger.json: engine "data_logger": invalid ticker type "fixedinterval", want one of [realtime fixed]
+configs/data_logger.json: failed to parse config: invalid timeframe "1hr", want one of [1m 5m 15m 1h 1d]
 ```
 
 A single run reports every independent problem it finds, not just the first. Components disabled
@@ -64,13 +83,17 @@ block surface on the next run, once the dependency is fixed.
 
 | Command | Description |
 |---|---|
-| `make test` | Run the Go test suite — covers `cmd`, `internal/config`, `internal/engine`, `internal/protocol`, `internal/flow/align`, `internal/flow/pipe`, features and providers; the remaining packages report "no test files". |
+| `make test` | Run the Go test suite — covers `cmd`, `internal/config`, `internal/engine`, `internal/engine/data`, `internal/protocol`, `internal/flow/align`, `internal/flow/pipe`, `internal/flow/timing`, features and providers; the remaining packages report "no test files". |
 | `make fmt` | Format all Go sources and fix imports with `goimports -w`. |
 | `make tidy` | Prune and sync `go.mod` / `go.sum`. |
 | `make lint` | Run `staticcheck` over every package. |
 | `make check` | Run `fmt` → `tidy` → `test` → `lint` in sequence. |
 | `go build ./...` | Compile every package without producing a binary. |
 | `go vet ./...` | Go's built-in static analysis. |
+| `go test -run '^$' -bench OrderedFanIn -benchmem ./internal/flow/pipe/` | Benchmark the ordered merge at 10, 100 and 1000 inputs, per value. |
+| `go test -run '^$' -bench Readiness -benchmem ./internal/engine/data/` | Benchmark align → `pipe.FanIn` → readiness at 10, 100 and 1000 1m streams, per released column and per evaluate. |
+| `go test -run '^$' -bench Aggregate -benchmem ./internal/engine/data/` | Benchmark rolling aggregation at 10, 100 and 1000 derived streams, per column and per derivation. |
+| `go test -count=1 -run Reference -v ./internal/engine/data/` | Compare rolling 1h and 1d from 5m with the direct bars of the BTCUSDT reference dataset (`data/BTCUSDT/BTCUSDT-{5m,1h,1d}-2024-01.csv`, all of 2024) over a random four-month sample, logged. Skipped without the files; `-count=1` bypasses the test cache, which would otherwise replay the last sample. |
 
 `make fmt` and `make lint` need the tools on `PATH`:
 
@@ -145,7 +168,7 @@ uv run scripts/csv_quality.py path/to/klines.csv --interval 5m
 
 ## Visualisation
 
-The engine writes the JSONL export itself (via the `exporter` configured in `config.json`);
+The engine writes the JSONL export itself (via the `exporter` configured in the config);
 `scripts/plot_market_data.py` renders it to a standalone interactive HTML file, written next to the
 input with an `.html` suffix.
 

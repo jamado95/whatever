@@ -1,7 +1,6 @@
 package proto
 
 import (
-	"encoding/json"
 	"fmt"
 	"slices"
 )
@@ -12,68 +11,6 @@ const (
 	Buy  Side = "buy"
 	Sell Side = "sell"
 )
-
-type Timeframe string
-
-const (
-	Timeframe1m  Timeframe = "1m"
-	Timeframe5m  Timeframe = "5m"
-	Timeframe15m Timeframe = "15m"
-	Timeframe1h  Timeframe = "1h"
-	Timeframe1d  Timeframe = "1d"
-)
-
-func (t Timeframe) IsValid() bool {
-	switch t {
-	case Timeframe1m, Timeframe5m, Timeframe15m, Timeframe1h, Timeframe1d:
-		return true
-	default:
-		return false
-	}
-}
-
-// ValidTimeframes lists every accepted value, for error messages.
-func ValidTimeframes() []Timeframe {
-	return []Timeframe{Timeframe1m, Timeframe5m, Timeframe15m, Timeframe1h, Timeframe1d}
-}
-
-// UnmarshalJSON rejects any timeframe outside the known set, so a typo such as
-// "1hr" fails at config load instead of being carried as an opaque string.
-func (t *Timeframe) UnmarshalJSON(b []byte) error {
-	var s string
-	if err := json.Unmarshal(b, &s); err != nil {
-		return fmt.Errorf("timeframe must be a string: %w", err)
-	}
-
-	tf := Timeframe(s)
-	if !tf.IsValid() {
-		return fmt.Errorf("invalid timeframe %q, want one of %v", s, ValidTimeframes())
-	}
-
-	*t = tf
-	return nil
-}
-
-func (t *Timeframe) TimeframeS() int {
-	switch *t {
-	case Timeframe1m:
-		return 60
-	case Timeframe5m:
-		return 5 * 60
-	case Timeframe15m:
-		return 60 * 15
-	case Timeframe1h:
-		return 60 * 60
-	case Timeframe1d:
-		return 24 * 60 * 60
-	}
-
-	return 0
-}
-
-func (t *Timeframe) TimeframeMs() int64 {
-	return int64(t.TimeframeS()) * 1000
-}
 
 type Candle struct {
 	OpenTs  int64
@@ -93,18 +30,6 @@ type MarketData struct {
 
 func (m MarketData) Timestamp() int64 {
 	return m.Candle.CloseTs
-}
-
-type Subscription struct {
-	Symbol    string
-	Timeframe Timeframe
-	Provider  string
-}
-
-// ID is the canonical identity of a subscription, "symbol:timeframe:provider".
-// It is the reference handle strategies use and the key the seam events carry.
-func (s Subscription) ID() string {
-	return s.Symbol + ":" + string(s.Timeframe) + ":" + s.Provider
 }
 
 //////////////////// SYNC V2
@@ -168,6 +93,7 @@ func (e DataError) Error() string {
 
 type DataProvider interface {
 	ID() string
+	Subscription() Subscription
 	Init(sub Subscription) error
 	Streams() (<-chan MarketData, <-chan error)
 	Start() error

@@ -43,18 +43,3 @@ func TestNewSyncEventV2Ordering(t *testing.T) {
 		t.Error("mutating Data() result changed the event")
 	}
 }
-
-func TestTimeframeMs(t *testing.T) {
-	for _, tf := range ValidTimeframes() {
-		if got, want := tf.TimeframeMs(), int64(tf.TimeframeS())*1000; got != want {
-			t.Errorf("%s: TimeframeMs = %d, want %d", tf, got, want)
-		}
-	}
-}
-
-func TestSubscriptionID(t *testing.T) {
-	s := Subscription{Symbol: "BTCUSDT", Timeframe: Timeframe5m, Provider: "binance_csv"}
-	if got, want := s.ID(), "BTCUSDT:5m:binance_csv"; got != want {
-		t.Fatalf("ID() = %q, want %q", got, want)
-	}
-}
