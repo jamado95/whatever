@@ -57,21 +57,22 @@ From [data-layer-v2.md](../../discussions/data-layer-v2.md) and
 - **Minimal `FrameBuffer`.** Iteration 1 holds market legs only; revision metadata arrives in
   iteration 2, feature entries in iteration 4, record sections (signals, orders, fills) with the
   strategy step loop (out of scope).
-- **Pipeline construction** (decided in stages 3, 3.1 and 4, revised in 5.1). Stages follow
-  `pipe.Stage`. The `Layer` is the pipeline: `New` instantiates a lane per direct stream — its
-  provider, normaliser and aligner — readiness and the aggregator; each lane starts its provider,
-  then its stages, under the layer's run context, and closes the provider when it is cancelled;
-  `Start` joins the lanes' evaluates into readiness with `pipe.FanIn`. The mode is chosen per lane.
-  No package-level instance and no generic pipeline tooling. The module does not use
+- **Pipeline construction** (decided in stages 3, 3.1 and 4, revised in 5.1 and 6). Stages follow
+  `pipe.Stage`. `DataPipeline` is the data layer's pipeline: `New` instantiates a lane per direct
+  stream — its provider, normaliser and aligner — readiness and the aggregator; each lane starts its
+  provider, then its stages, under the layer's run context, and closes the provider when it is
+  cancelled; `Start` joins the lanes' evaluates into readiness with `pipe.FanIn`. The mode is chosen
+  per lane. No package-level instance and no generic pipeline tooling. The module does not use
   `SynchronizerV2`.
-- **Module API** (decided in stages 5 and 5.1). `Event` folds into `View`, which carries `Status()`
-  beside `Col()` and `Complete()`. `New` takes the provider map — keyed by direct subscription,
-  providers initialised by the engine — and instantiates the layer's stages without I/O; `Start`
-  runs it, and a provider start failure closes the layer; `Next(ctx)` returns `(*View, error)` —
-  `nil, nil` at the end of the run, `ErrNotStarted`, `ErrClosed`, `ctx.Err()`; `Close` is
-  synchronous: it cancels the run context, discards the frames not yet returned and waits for the
-  providers it closes. Aggregation is a loop in `Next` on the engine goroutine. Provider errors are
-  logged by the layer until the provider drop contract (iteration 2).
+- **Module API** (decided in stages 5 and 5.1; `Layer` renamed `DataPipeline` in stage 6). `Event`
+  folds into `View`, which carries `Status()` beside `Col()` and `Complete()`. `New` takes the
+  provider map — keyed by direct subscription, providers initialised by the engine — and returns a
+  `*DataPipeline`, its stages instantiated without I/O; `Start` runs it, and a provider start
+  failure closes the layer; `Next(ctx)` returns `(*View, error)` — `nil, nil` at the end of the run,
+  `ErrNotStarted`, `ErrClosed`, `ctx.Err()`; `Close` is synchronous: it cancels the run context,
+  discards the frames not yet returned and waits for the providers it closes. Aggregation is a loop
+  in `Next` on the engine goroutine. Provider errors are logged by the layer until the provider drop
+  contract (iteration 2).
 
 ## Structure
 
@@ -84,7 +85,8 @@ Tiered. Stage docs live beside this one, produced iteratively:
 - `stage-4-align-readiness.md` — *implemented.*
 - `stage-5-consumption.md` — *implemented; partly superseded by 5.1.*
 - `stage-5.1-layer-pipeline.md` — *implemented.*
-- `stage-6-data-logger-v2.md`
+- `stage-6-data-logger-v2.md` — one plan in four steps: rename `Layer` → `DataPipeline`, engine
+  building blocks, the engine, the v2 config.
 
 Ordering: 1 first; 2 and 3 depend on 1 and are independent of each other; 3.1 on 3; 4 depends on 2
 and 3.1; 5 on 4; 5.1 on 5; 6 on 5.1.
@@ -239,14 +241,18 @@ data_logger_v2 loop: pacer ─▶ data.Next() (aggregate, view) ─▶ feature b
 ### Stage 6 — `data_logger_v2` engine
 
 - **Goal:** a new engine that consumes the module and exports featured stream updates.
-- **Touches:** new `internal/engine/data_logger_v2.go` (registered as `data_logger_v2`; loop: pacer →
-  `Next` → feature bridge → exporter → limit) and its tests; an engine-side pacer from the existing
-  `realtime` / `fixed` ticker modes, reusing the `ticker` config shape and leaving `Ticker.Gate`
-  untouched; `internal/domains/features/feature.go` (evaluate a chain over a given window, beside
+- **Touches:** `internal/engine/data` (`Layer` renamed `DataPipeline`); new
+  `internal/engine/data_logger_v2.go` (registered as `data_logger_v2`; loop: `Next` → pacer →
+  feature bridge → exporter → limit) and its tests; an engine-side pacer in `flow/timing` from the
+  existing `realtime` / `fixed` ticker modes, reusing the `ticker` config shape and leaving
+  `Ticker.Gate` untouched; `internal/domains/features/feature.go` (evaluate a chain over a given window, beside
   `Process`); `internal/logger` (frame logging, beside `SyncEvent`); a config file exercising a coarse
   direct stream and a derivation. The default `config.json` and `data_logger` stay as they are.
   `data_logger_v2` initialises each provider with its subscription, then passes its `_providers`
   map to `data.New`; an `Init` failure is the engine's error.
+- **Contents:** one plan in four steps, each reviewed and committed before the next: (1) rename
+  `Layer` → `DataPipeline`; (2) engine building blocks — feature bridge, pacer, frame logger; (3) the
+  engine; (4) the v2 config and closing iteration 1.
 - **Acceptance:** the v2 config exports one record per stream update with features; with the `fixed`
   pacer every frame is released whatever the lanes' relative speed (the original skew problem);
   `--validate-only` valid for both configs; `make check` clean.

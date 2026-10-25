@@ -109,32 +109,32 @@ func fakes(st *Streams) ([]*fakeProvider, map[proto.Subscription]proto.DataProvi
 	return fs, m
 }
 
-// startLayer builds a layer over testSubs with fake providers fed by feed, and starts it.
-func startLayer(t *testing.T, headroom int64, log *logger.Logger, feed func(*Streams, []*fakeProvider)) (*Layer, []*fakeProvider) {
+// startDataPipeline builds a layer over testSubs with fake providers fed by feed, and starts it.
+func startDataPipeline(t *testing.T, headroom int64, log *logger.Logger, feed func(*Streams, []*fakeProvider)) (*DataPipeline, []*fakeProvider) {
 	t.Helper()
 	st := NewStreams(testSubs())
 	fs, provs := fakes(st)
 	feed(st, fs)
-	l, err := newLayer(provs, 20, headroom, log)
+	dp, err := newDataPipeline(provs, 20, headroom, log)
 	if err != nil {
-		t.Fatalf("newLayer: %v", err)
+		t.Fatalf("newDataPipeline: %v", err)
 	}
-	if err := l.Start(); err != nil {
+	if err := dp.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	t.Cleanup(l.Close)
-	return l, fs
+	t.Cleanup(dp.Close)
+	return dp, fs
 }
 
 // nextAll calls Next until the run ends, passing each frame to fn and collecting it; a stall of
 // 10 s fails.
-func nextAll(t *testing.T, l *Layer, fn func(*View)) []View {
+func nextAll(t *testing.T, dp *DataPipeline, fn func(*View)) []View {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var got []View
 	for {
-		v, err := l.Next(ctx)
+		v, err := dp.Next(ctx)
 		if err != nil {
 			t.Fatalf("Next after %d frames: %v", len(got), err)
 		}
@@ -236,12 +236,12 @@ func TestNew(t *testing.T) {
 
 	t.Run("built, not run", func(t *testing.T) {
 		fs, provs := fakes(st)
-		l, err := New(provs, 20, quiet())
+		dp, err := New(provs, 20, quiet())
 		if err != nil {
 			t.Fatal(err)
 		}
 		for i, s := range st.All {
-			if j, ok := l.Streams().Index(s.Sub.ID()); !ok || j != i {
+			if j, ok := dp.Streams().Index(s.Sub.ID()); !ok || j != i {
 				t.Errorf("stream %s at %d, %v; want %d", s.Sub.ID(), j, ok, i)
 			}
 		}
@@ -250,22 +250,22 @@ func TestNew(t *testing.T) {
 				t.Errorf("provider of %s started or closed", st.All[s].Sub.ID())
 			}
 		}
-		if _, err := l.Next(context.Background()); !errors.Is(err, ErrNotStarted) {
+		if _, err := dp.Next(context.Background()); !errors.Is(err, ErrNotStarted) {
 			t.Errorf("Next = %v, want ErrNotStarted", err)
 		}
 	})
 }
 
 /*
-TestLayerRun covers a run through Next with headroom 4: the TestPipelineRun input releases each
-column once, in order, with the model's completeness, and the derived legs match the brute-force
-aggregation; then Next returns nil, nil, again on the next call.
+TestDataPipelineRun covers a run through Next with headroom 4: the TestPipelineRun input releases
+each column once, in order, with the model's completeness, and the derived legs match the
+brute-force aggregation; then Next returns nil, nil, again on the next call.
 */
-func TestLayerRun(t *testing.T) {
+func TestDataPipelineRun(t *testing.T) {
 	const d = day0
 	var s5m, s1h, s1d int
 	var fiveMin []int64
-	l, _ := startLayer(t, 4, quiet(), func(st *Streams, fs []*fakeProvider) {
+	dp, _ := startDataPipeline(t, 4, quiet(), func(st *Streams, fs []*fakeProvider) {
 		s5m, s1h, s1d = mustIndex(t, st, idBTC5m), mustIndex(t, st, idBTC1h), mustIndex(t, st, idETH1d)
 		fiveMin = slices.DeleteFunc(span(d+1, d+288, 1), func(c int64) bool { return c == d+50 })
 		fs[s5m].candles = bars(st, s5m, fiveMin...)
@@ -274,7 +274,7 @@ func TestLayerRun(t *testing.T) {
 		fs[s1d].candles = bars(st, s1d, d, d+288)
 	})
 
-	st := l.Streams()
+	st := dp.Streams()
 	accepted := map[int][]int64{
 		s5m: slices.DeleteFunc(slices.Clone(fiveMin), func(c int64) bool { return c == d+60 }),
 		s1h: span(d+12, d+132, 12),
@@ -283,7 +283,7 @@ func TestLayerRun(t *testing.T) {
 	r1h, r1d := mustIndex(t, st, idRoll1h), mustIndex(t, st, idRoll1d)
 	sources := map[int]int{r1h: s5m, r1d: s1h}
 
-	got := nextAll(t, l, func(v *View) {
+	got := nextAll(t, dp, func(v *View) {
 		if v.Status() != Current {
 			t.Errorf("col d+%d: status %d, want Current", v.Col()-d, v.Status())
 		}
@@ -295,42 +295,43 @@ func TestLayerRun(t *testing.T) {
 			}
 		}
 	})
-	if want := model(l.buf, accepted); !slices.Equal(got, want) {
+	if want := model(dp.buf, accepted); !slices.Equal(got, want) {
 		t.Fatalf("%d frames, want %d", len(got), len(want))
 	}
 	for range 2 {
-		if v, err := l.Next(context.Background()); v != nil || err != nil {
+		if v, err := dp.Next(context.Background()); v != nil || err != nil {
 			t.Fatalf("Next after the run = %v, %v; want nil, nil", v, err)
 		}
 	}
 }
 
-// TestLayerCancel covers a cancelled context: Next returns its error, and Close still returns.
-func TestLayerCancel(t *testing.T) {
-	l, _ := startLayer(t, 4, quiet(), func(st *Streams, fs []*fakeProvider) {
+// TestDataPipelineCancel covers a cancelled context: Next returns its error, and Close still
+// returns.
+func TestDataPipelineCancel(t *testing.T) {
+	dp, _ := startDataPipeline(t, 4, quiet(), func(st *Streams, fs []*fakeProvider) {
 		s := mustIndex(t, st, idBTC5m)
 		fs[s].candles = bars(st, s, span(day0, day0+1000, 1)...)
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if v, err := l.Next(ctx); v != nil || !errors.Is(err, context.Canceled) {
+	if v, err := dp.Next(ctx); v != nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("Next = %v, %v; want nil, context.Canceled", v, err)
 	}
-	within(t, "Close", l.Close)
+	within(t, "Close", dp.Close)
 }
 
 /*
-TestLayerClose covers Close mid-run after one frame: with headroom 4 the align stages wait on the
-gate, with headroom 600 readiness blocks on its full channel and align on its evaluates. Close
+TestDataPipelineClose covers Close mid-run after one frame: with headroom 4 the align stages wait on
+the gate, with headroom 600 readiness blocks on its full channel and align on its evaluates. Close
 returns with every provider closed and every channel drained; the frames left are never returned,
 and a second Close is a no-op. After a run that ended on its own, Close still returns with every
 provider closed once.
 */
-func TestLayerClose(t *testing.T) {
+func TestDataPipelineClose(t *testing.T) {
 	const d = day0
 	for _, headroom := range []int64{4, 600} {
 		t.Run(strconv.FormatInt(headroom, 10), func(t *testing.T) {
-			l, fs := startLayer(t, headroom, quiet(), func(st *Streams, fs []*fakeProvider) {
+			dp, fs := startDataPipeline(t, headroom, quiet(), func(st *Streams, fs []*fakeProvider) {
 				for s, cols := range map[string][]int64{
 					idBTC5m: span(d, d+2000, 1), idBTC1h: span(d, d+2000, 12), idETH1d: span(d, d+2000, 288),
 				} {
@@ -338,29 +339,29 @@ func TestLayerClose(t *testing.T) {
 					fs[i].candles = bars(st, i, cols...)
 				}
 			})
-			if v, err := l.Next(context.Background()); v == nil || err != nil {
+			if v, err := dp.Next(context.Background()); v == nil || err != nil {
 				t.Fatalf("first Next = %v, %v", v, err)
 			}
 
-			within(t, "Close", l.Close)
+			within(t, "Close", dp.Close)
 			for s, f := range fs {
 				if n := f.closes.Load(); n != 1 {
 					t.Errorf("provider %d closed %d times, want 1", s, n)
 				}
 			}
-			if _, ok := <-l.views; ok {
+			if _, ok := <-dp.views; ok {
 				t.Error("event channel not drained")
 			}
 			select {
-			case <-l.errsDone:
+			case <-dp.errsDone:
 			default:
 				t.Error("error channels not drained")
 			}
-			if v, err := l.Next(context.Background()); v != nil || !errors.Is(err, ErrClosed) {
+			if v, err := dp.Next(context.Background()); v != nil || !errors.Is(err, ErrClosed) {
 				t.Errorf("Next after Close = %v, %v; want nil, ErrClosed", v, err)
 			}
 
-			l.Close()
+			dp.Close()
 			for s, f := range fs {
 				if n := f.closes.Load(); n != 1 {
 					t.Errorf("second Close: provider %d closed %d times, want 1", s, n)
@@ -370,15 +371,15 @@ func TestLayerClose(t *testing.T) {
 	}
 
 	t.Run("after the run ends", func(t *testing.T) {
-		l, fs := startLayer(t, 4, quiet(), func(st *Streams, fs []*fakeProvider) {
+		dp, fs := startDataPipeline(t, 4, quiet(), func(st *Streams, fs []*fakeProvider) {
 			for s := range fs {
 				fs[s].candles = bars(st, s, span(d+288, d+576, st.All[s].Period)...)
 			}
 		})
-		if frames := nextAll(t, l, func(*View) {}); len(frames) == 0 {
+		if frames := nextAll(t, dp, func(*View) {}); len(frames) == 0 {
 			t.Fatal("no frames")
 		}
-		l.Close()
+		dp.Close()
 		for s, f := range fs {
 			if n := f.closes.Load(); n != 1 {
 				t.Errorf("provider %d closed %d times, want 1", s, n)
@@ -388,27 +389,27 @@ func TestLayerClose(t *testing.T) {
 }
 
 /*
-TestLayerStart covers Start: a provider failing to start closes the layer — the lanes already
-running included, even one whose align stage waits on ring capacity — and leaves nothing for Close;
-a layer starts once, and not after Close.
+TestDataPipelineStart covers Start: a provider failing to start closes the layer — the lanes
+already running included, even one whose align stage waits on ring capacity — and leaves nothing for
+Close; a layer starts once, and not after Close.
 */
-func TestLayerStart(t *testing.T) {
+func TestDataPipelineStart(t *testing.T) {
 	st := NewStreams(testSubs())
-	build := func(t *testing.T, fail func([]*fakeProvider)) (*Layer, []*fakeProvider) {
+	build := func(t *testing.T, fail func([]*fakeProvider)) (*DataPipeline, []*fakeProvider) {
 		fs, provs := fakes(st)
 		fail(fs)
-		l, err := New(provs, 20, quiet())
+		dp, err := New(provs, 20, quiet())
 		if err != nil {
 			t.Fatal(err)
 		}
-		return l, fs
+		return dp, fs
 	}
 	// direct streams in table order: BTCUSDT 1h, BTCUSDT 5m, ETHUSDT 1d
 	s1h, s5m, s1d := mustIndex(t, st, idBTC1h), mustIndex(t, st, idBTC5m), mustIndex(t, st, idETH1d)
 
 	t.Run("a Start failure", func(t *testing.T) {
-		l, fs := build(t, func(fs []*fakeProvider) { fs[s5m].startErr = errors.New("refused") })
-		if err := l.Start(); err == nil || !strings.Contains(err.Error(), idBTC5m) {
+		dp, fs := build(t, func(fs []*fakeProvider) { fs[s5m].startErr = errors.New("refused") })
+		if err := dp.Start(); err == nil || !strings.Contains(err.Error(), idBTC5m) {
 			t.Fatalf("Start = %v, want an error naming %s", err, idBTC5m)
 		}
 		closes := []int32{fs[0].closes.Load(), fs[1].closes.Load(), fs[2].closes.Load()}
@@ -420,13 +421,13 @@ func TestLayerStart(t *testing.T) {
 		if n := fs[s1d].starts.Load(); n != 0 {
 			t.Errorf("1d provider started %d times, want 0", n)
 		}
-		if _, err := l.Next(context.Background()); !errors.Is(err, ErrClosed) {
+		if _, err := dp.Next(context.Background()); !errors.Is(err, ErrClosed) {
 			t.Errorf("Next = %v, want ErrClosed", err)
 		}
-		if err := l.Start(); !errors.Is(err, ErrClosed) {
+		if err := dp.Start(); !errors.Is(err, ErrClosed) {
 			t.Errorf("Start again = %v, want ErrClosed", err)
 		}
-		l.Close()
+		dp.Close()
 		if again := []int32{fs[0].closes.Load(), fs[1].closes.Load(), fs[2].closes.Load()}; !slices.Equal(again, closes) {
 			t.Errorf("Close touched providers: closes %v, want %v", again, closes)
 		}
@@ -434,12 +435,12 @@ func TestLayerStart(t *testing.T) {
 
 	t.Run("a Start failure after a lane fills its ring", func(t *testing.T) {
 		// readiness releases nothing while a lane never started, so only Close frees the 1h lane
-		l, fs := build(t, func(fs []*fakeProvider) {
+		dp, fs := build(t, func(fs []*fakeProvider) {
 			fs[s1h].candles = bars(st, s1h, span(day0, day0+12*1000, 12)...)
 			fs[s5m].startErr, fs[s5m].delay = errors.New("refused"), 100*time.Millisecond
 		})
 		within(t, "Start", func() {
-			if err := l.Start(); err == nil {
+			if err := dp.Start(); err == nil {
 				t.Error("Start succeeded")
 			}
 		})
@@ -449,15 +450,15 @@ func TestLayerStart(t *testing.T) {
 	})
 
 	t.Run("once, and not after Close", func(t *testing.T) {
-		l, _ := build(t, func([]*fakeProvider) {})
-		if err := l.Start(); err != nil {
+		dp, _ := build(t, func([]*fakeProvider) {})
+		if err := dp.Start(); err != nil {
 			t.Fatal(err)
 		}
-		if err := l.Start(); err == nil {
+		if err := dp.Start(); err == nil {
 			t.Error("second Start succeeded")
 		}
-		l.Close()
-		if err := l.Start(); !errors.Is(err, ErrClosed) {
+		dp.Close()
+		if err := dp.Start(); !errors.Is(err, ErrClosed) {
 			t.Errorf("Start after Close = %v, want ErrClosed", err)
 		}
 	})
@@ -475,12 +476,12 @@ func (b *lockedBuffer) Write(p []byte) (int, error) {
 	return b.buf.Write(p)
 }
 
-// TestLayerProviderErrors covers provider errors: more than a provider's buffer holds are drained
-// and each is logged, and the run completes.
-func TestLayerProviderErrors(t *testing.T) {
+// TestDataPipelineProviderErrors covers provider errors: more than a provider's buffer holds are
+// drained and each is logged, and the run completes.
+func TestDataPipelineProviderErrors(t *testing.T) {
 	const n = 25
 	var out lockedBuffer
-	l, _ := startLayer(t, 4, logger.NewLogger(logger.LoggerConfig{Level: "debug", Output: &out}),
+	dp, _ := startDataPipeline(t, 4, logger.NewLogger(logger.LoggerConfig{Level: "debug", Output: &out}),
 		func(st *Streams, fs []*fakeProvider) {
 			s := mustIndex(t, st, idBTC5m)
 			fs[s].candles = bars(st, s, span(day0, day0+100, 1)...)
@@ -488,22 +489,22 @@ func TestLayerProviderErrors(t *testing.T) {
 				fs[s].errs = append(fs[s].errs, errors.New("bad record"))
 			}
 		})
-	if frames := nextAll(t, l, func(*View) {}); len(frames) == 0 {
+	if frames := nextAll(t, dp, func(*View) {}); len(frames) == 0 {
 		t.Fatal("no frames")
 	}
-	l.Close()
+	dp.Close()
 	if got := strings.Count(out.buf.String(), "bad record"); got != n {
 		t.Errorf("logged %d provider errors, want %d", got, n)
 	}
 }
 
 /*
-TestLayerSkew covers per-stream blocking through the layer with headroom 4: ten days of 5m, 1h and
-1d bars, the 5m provider throttled, then the coarse ones. Both runs return the model's frames, and
-every stream's legs and history are read at each frame while the align stages stage ahead —
-meaningful under -race.
+TestDataPipelineSkew covers per-stream blocking through the layer with headroom 4: ten days of 5m,
+1h and 1d bars, the 5m provider throttled, then the coarse ones. Both runs return the model's
+frames, and every stream's legs and history are read at each frame while the align stages stage
+ahead — meaningful under -race.
 */
-func TestLayerSkew(t *testing.T) {
+func TestDataPipelineSkew(t *testing.T) {
 	const d = day0
 	st := NewStreams(testSubs())
 	cols := map[int][]int64{
@@ -513,21 +514,21 @@ func TestLayerSkew(t *testing.T) {
 	}
 
 	for _, slow := range [][]string{{idBTC5m}, {idBTC1h, idETH1d}} {
-		l, _ := startLayer(t, 4, quiet(), func(st *Streams, fs []*fakeProvider) {
+		dp, _ := startDataPipeline(t, 4, quiet(), func(st *Streams, fs []*fakeProvider) {
 			for s, cs := range cols {
 				fs[s].candles = bars(st, s, cs...)
 				fs[s].throttle = slices.Contains(slow, st.All[s].Sub.ID())
 			}
 		})
 		dst := make([]proto.Candle, 0, 20)
-		got := nextAll(t, l, func(v *View) {
+		got := nextAll(t, dp, func(v *View) {
 			for s := range st.All {
 				v.Leg(s)
 				v.Count(s)
 				dst = v.Candles(s, 20, dst)
 			}
 		})
-		if want := model(l.buf, cols); !slices.Equal(got, want) {
+		if want := model(dp.buf, cols); !slices.Equal(got, want) {
 			t.Fatalf("slow %v: %d frames, want %d", slow, len(got), len(want))
 		}
 	}
@@ -564,13 +565,13 @@ func sampleCSV(t *testing.T, src, dst string, from, to int64) {
 }
 
 /*
-TestLayerReference compares rolling 1h and 1d legs over BTCUSDT 5m with the direct 1h and 1d bars of
-the reference dataset — all of 2024, agreeing exactly in decimal — over four months sampled at random
-each run. Every hour and day of the sample is compared: timestamps and OHLC exactly, volume within
-1e-9 relative. Rolling 1d over 5m equals rolling 1d over the rolling 1h, so a 1h → 1d derivation's
-match follows. Skipped without data/BTCUSDT.
+TestDataPipelineReference compares rolling 1h and 1d legs over BTCUSDT 5m with the direct 1h and 1d
+bars of the reference dataset — all of 2024, agreeing exactly in decimal — over four months sampled
+at random each run. Every hour and day of the sample is compared: timestamps and OHLC exactly,
+volume within 1e-9 relative. Rolling 1d over 5m equals rolling 1d over the rolling 1h, so a 1h → 1d
+derivation's match follows. Skipped without data/BTCUSDT.
 */
-func TestLayerReference(t *testing.T) {
+func TestDataPipelineReference(t *testing.T) {
 	const dir = "../../../data/BTCUSDT"
 	tfs := []proto.Timeframe{proto.Timeframe5m, proto.Timeframe1h, proto.Timeframe1d}
 	for _, tf := range tfs {
@@ -604,16 +605,16 @@ func TestLayerReference(t *testing.T) {
 		provs[subs[i]] = p
 	}
 
-	l, err := New(provs, 1, quiet())
+	dp, err := New(provs, 1, quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := l.Start(); err != nil {
+	if err := dp.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
+	defer dp.Close()
 
-	st := l.Streams()
+	st := dp.Streams()
 	pairs := []struct {
 		direct, rolling string
 		count           int
@@ -625,7 +626,7 @@ func TestLayerReference(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	for {
-		v, err := l.Next(ctx)
+		v, err := dp.Next(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
