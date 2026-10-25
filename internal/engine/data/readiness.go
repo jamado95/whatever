@@ -43,7 +43,12 @@ nothing is ever released. The scan runs only when this evaluate can change its o
 the stream blocking head+1, head+1 is decided and waits on reach, or it completes the reports.
 */
 func (r *readiness) step(e evaluate, dst []View) []View {
+	// scan only if:
+	// (1) stream is at cursor, since [0, cursor[ streams are already decided for head+1
+	// (2) all streams are decided but are waiting on reach; only matters once streams have ended
 	scan := e.stream == r.cursor || r.cursor == len(r.through)
+
+	// init streams
 	if r.through[e.stream] == math.MinInt64 {
 		r.unreported--
 		switch e.state {
@@ -76,7 +81,7 @@ func (r *readiness) release(dst []View) []View {
 	for {
 		col := r.head + 1
 		for ; r.cursor < len(r.through); r.cursor++ {
-			// due at col and not yet decided: col is held.
+			// due at col and not yet decided (through < col): col is held.
 			if col%r.buf.streams.All[r.cursor].Period == 0 && r.through[r.cursor] < col {
 				return dst
 			}
