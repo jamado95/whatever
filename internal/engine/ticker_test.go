@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -91,5 +92,35 @@ func TestAbsentTickerMeansRealtime(t *testing.T) {
 	}
 	if ticker == nil {
 		t.Error("expected a realtime ticker for an absent block")
+	}
+}
+
+// TestNewPacer verifies an absent or realtime ticker block paces nothing and a fixed one waits its
+// interval before the first frame.
+func TestNewPacer(t *testing.T) {
+	for _, c := range []*TickerConfig{nil, {Type: Realtime}} {
+		p, err := newPacer(c)
+		if err != nil {
+			t.Fatalf("newPacer(%+v): %v", c, err)
+		}
+		start := time.Now()
+		if err := p.Wait(context.Background(), 0); err != nil {
+			t.Fatalf("newPacer(%+v): Wait: %v", c, err)
+		}
+		if d := time.Since(start); d > 10*time.Millisecond {
+			t.Errorf("newPacer(%+v) waited %v, want no wait", c, d)
+		}
+	}
+
+	p, err := newPacer(&TickerConfig{Type: FixedInterval, Interval: config.Duration(20 * time.Millisecond)})
+	if err != nil {
+		t.Fatalf("newPacer(fixed): %v", err)
+	}
+	start := time.Now()
+	if err := p.Wait(context.Background(), 0); err != nil {
+		t.Fatalf("newPacer(fixed): Wait: %v", err)
+	}
+	if d := time.Since(start); d < 15*time.Millisecond {
+		t.Errorf("fixed 20ms pacer waited %v before its first frame, want at least 15ms", d)
 	}
 }

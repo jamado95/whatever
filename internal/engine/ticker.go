@@ -79,3 +79,19 @@ func newTicker(c *TickerConfig) (timing.Ticker[proto.SyncEventV2], error) {
 		return nil, fmt.Errorf("unsupported ticker type %q", c.Type)
 	}
 }
+
+// newPacer builds the replay pacer for a ticker block. A nil block means realtime: unpaced.
+func newPacer(c *TickerConfig) (timing.Pacer, error) {
+	if c == nil {
+		return timing.Unpaced(), nil
+	}
+
+	switch c.Type {
+	case FixedInterval:
+		return timing.Fixed(c.Interval.Duration()), nil
+	case Realtime:
+		return timing.Unpaced(), nil
+	default:
+		return nil, fmt.Errorf("unsupported ticker type %q", c.Type)
+	}
+}
