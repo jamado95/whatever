@@ -23,7 +23,7 @@ import (
 	_ "whatever/internal/engine"
 )
 
-const defaultConfigPath = "config.json"
+const defaultConfigPath = "configs/data_logger_v2.json"
 
 func main() {
 	log := logger.NewLogger(logger.DefaultLoggerConfig())

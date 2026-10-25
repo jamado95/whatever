@@ -2,7 +2,7 @@
 
 GO := go
 
-CONFIG ?= config.json
+CONFIG ?= configs/data_logger_v2.json
 
 build:
 	$(GO) build -o whatever ./cmd
@@ -90,7 +90,7 @@ check: fmt tidy test lint
 UV := uv
 PYTHON := $(UV) run
 
-# Where the engine's exporter writes JSONL (must match "output_dir" in config.json)
+# Where the engine's exporter writes JSONL (must match "output_dir" in the configs)
 EXPORT_DIR := data/exports
 
 # Explicitly materialise .venv from uv.lock (optional; `uv run` does this itself)
