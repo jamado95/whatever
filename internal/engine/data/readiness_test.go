@@ -5,6 +5,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"testing"
+	"time"
 
 	"whatever/internal/flow/pipe"
 	proto "whatever/internal/protocol"
@@ -199,6 +200,91 @@ func TestReadinessRun(t *testing.T) {
 	}
 	if want := frames(f.buf, segment{d, d + 24, true}); !slices.Equal(got, want) {
 		t.Fatalf("frames %v, want %v", got, want)
+	}
+}
+
+// TestReadinessCapacity covers the output's capacity: the largest spare·Period over direct streams.
+func TestReadinessCapacity(t *testing.T) {
+	tests := []struct {
+		name     string
+		subs     []proto.Subscription
+		headroom int64
+		want     int
+	}{
+		{"a coarse stream beyond headroom: 1d, 2 spare × 288", testSubs(), 4, 576},
+		{"1h, 12 spare × 12, over 5m's 129",
+			[]proto.Subscription{
+				sub("BTCUSDT", proto.Timeframe5m, "btc_5m"),
+				sub("BTCUSDT", proto.Timeframe1h, "btc_1h"),
+			}, 128, 144},
+		{"same period: headroom + 1",
+			[]proto.Subscription{
+				sub("BTCUSDT", proto.Timeframe5m, "btc_5m"),
+				sub("ETHUSDT", proto.Timeframe5m, "eth_5m"),
+			}, 200, 201},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixtureWith(t, tt.subs, 20, tt.headroom)
+			in := make(chan evaluate)
+			close(in)
+			if out := newReadiness(f.buf).run(in); cap(out) != tt.want {
+				t.Fatalf("capacity %d, want %d", cap(out), tt.want)
+			}
+		})
+	}
+}
+
+/*
+TestReadinessBacklog runs two 5m streams through align and readiness at headroom 200: once the rings
+hold full history, the output holds every frame align resolved past the engine's column, headroom +
+1, and refills as the engine consumes.
+*/
+func TestReadinessBacklog(t *testing.T) {
+	const d, lead = day0, 201
+	f := newFixtureWith(t, []proto.Subscription{
+		sub("BTCUSDT", proto.Timeframe5m, "btc_5m"),
+		sub("ETHUSDT", proto.Timeframe5m, "eth_5m"),
+	}, 20, 200)
+
+	g := newGate()
+	evs := make([]<-chan evaluate, f.st.Directs)
+	for s := range evs {
+		evs[s] = newAligner(f.buf, g, s).run(feedLane(items(s, span(d, d+999, 1)...)))
+	}
+	out := newReadiness(f.buf).run(pipe.FanIn(evs...))
+
+	var got []View
+	next := func() {
+		v := <-out
+		g.consume(v.Col())
+		got = append(got, v)
+	}
+	// fills waits until the output holds lead frames; 10 s fails.
+	fills := func(what string) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for len(out) < lead {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: %d frames queued, want %d", what, len(out), lead)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	for len(got) == 0 || got[len(got)-1].Col() < d+100 {
+		next()
+	}
+	fills("past startup")
+	next()
+	fills("after one more frame")
+
+	for v := range out {
+		g.consume(v.Col())
+		got = append(got, v)
+	}
+	if want := frames(f.buf, segment{d, d + 999, true}); !slices.Equal(got, want) {
+		t.Fatalf("%d frames, want %d", len(got), len(want))
 	}
 }
 

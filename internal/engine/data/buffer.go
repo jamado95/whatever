@@ -11,7 +11,7 @@ import (
 // maxHistoryMs caps the history a stream may keep: 365 days.
 const maxHistoryMs = 365 * 24 * 60 * 60 * 1000
 
-// defaultHeadroom sizes each ring's slots beyond its kept bars, in columns; also the event channel's capacity.
+// defaultHeadroom sizes each ring's slots beyond its kept bars, in columns.
 const defaultHeadroom = 128
 
 // LegState is the state of a stream's latest update at or before a column.

@@ -316,10 +316,13 @@ construction, one provider stream.
   slots beyond its kept bars; align's limit is the ring's capacity from the oldest readable bar
   (§ Alignment) — the whole ring at startup, `consumed + spare·Period` in steady state. It covers
   staged slots and released-but-unconsumed events.
-- **`defaultHeadroom` is 128 columns**; the event channel holds as many. Readiness blocking on a full
-  event channel costs throughput only: the engine's consumption depends on events alone, and align
-  keeps staging into its own channel meanwhile (§ Alignment). Never blocking readiness would take the
-  longest direct ring span, `max(slots · Period)` — a startup skew can release a whole ring at once.
+- **`defaultHeadroom` is 128 columns.** The event channel holds the largest `spare·Period` over
+  direct streams: the most columns align can resolve past the engine's column once rings hold full
+  history. After startup, readiness never blocks on the engine, and every resolved column is already
+  released when `Next` asks for it. At startup a stream fills its whole ring and readiness may block
+  on a full channel. That costs throughput only: the engine's consumption depends on events alone,
+  and align keeps staging into its own channel meanwhile (§ Alignment). Never blocking at startup too
+  would take the longest direct ring span, `max(slots · Period)`.
 - **When a stream's ring is full its align stage blocks, in replay and live alike**, pushing
   backpressure to that stream's provider. The engine's consumption wakes it.
 - **Live: the provider deals with backpressure.** Its buffered output channel accumulates candles
@@ -656,6 +659,8 @@ func Records[T any](v View, s Section[T]) []T
   the module end to end; iteration 2 (live release path) is next.
 - **Plan impact of the redesign**, reflected in `main.md`: iteration 2 gains the deadline stage,
   alongside `Pending` and `Late`.
+- Readiness's event channel sized from the rings, the largest `spare·Period` over direct streams,
+  instead of `defaultHeadroom` — `docs/plans/readiness-views-capacity.md`.
 
 ## Resources
 

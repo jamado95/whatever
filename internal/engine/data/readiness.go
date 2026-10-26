@@ -18,6 +18,7 @@ type readiness struct {
 	reach      int64   // latest Fresh or Gap column across streams
 	head       int64   // last released column
 	cursor     int     // direct streams below it are decided at head+1; all of them: waiting on reach
+	lead       int64   // output capacity: the most columns align resolves past the engine's column
 }
 
 func newReadiness(buf *FrameBuffer) *readiness {
@@ -33,6 +34,12 @@ func newReadiness(buf *FrameBuffer) *readiness {
 	for i := range r.through {
 		r.through[i] = math.MinInt64
 	}
+	// largest spare·Period over direct streams; direct rings hold one slot per bar
+	for i := range n {
+		rg := &buf.rings[i]
+		r.lead = max(r.lead, (int64(len(rg.slots))-rg.bars)*rg.period)
+	}
+
 	return r
 }
 
@@ -108,9 +115,13 @@ func (r *readiness) complete(col int64) bool {
 	return true
 }
 
-// run is the readiness stage, a pipe.Stage over the joined evaluates; its output closes once its input does.
+/*
+run is the readiness stage, a pipe.Stage over the joined evaluates; its output closes once its input
+does. The output holds lead frames, every frame align can resolve past the engine's column once rings
+hold full history, so from then on it never blocks on the engine; at startup it may.
+*/
 func (r *readiness) run(in <-chan evaluate) <-chan View {
-	out := make(chan View, defaultHeadroom)
+	out := make(chan View, r.lead)
 
 	go func() {
 		defer close(out)
