@@ -269,16 +269,8 @@ data_logger_v2 loop: data.Next() (aggregate, view) ─▶ pacer ─▶ feature b
 
 ## Iteration 2 — live release path
 
-High-level only.
-
-- `Clock` in `flow/timing`; the deadline stage per lane, between normalise and align — one timer at
-  its next due column's `boundary + lateness`, `Pending` markers; `Pending` legs; hardcoded lateness.
-- `Late` events: a candle for a released column travels in its event; `Next()` writes it, recomputes
-  affected derived rows, records revision metadata; `View.Revised()`. The bridge reads revised
-  history from then on; recomputing stored feature history waits for iteration 4.
-- Out-of-order candles become `Late` instead of normalise dropping them.
-- Provider drop contract.
-- Tested with a fake clock and simulated lanes; an end-to-end live run waits for a live provider.
+Planned in its own tiered plan:
+[`docs/plans/data-layer-live-mode/`](../data-layer-live-mode/main.md).
 
 ## Iteration 3 — warm-up and backfill
 
