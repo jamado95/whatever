@@ -2,13 +2,14 @@
 
 ## Topic
 
-The feature layer turns raw `MarketData` into a timestamped snapshot of derived metrics —
-indicators, patterns, technical signals — that strategies consume. Features must be composable
-(a feature may depend on other features) and must not leak future information.
+The feature layer turns aligned market data into derived metrics — indicators, statistics,
+cross-asset relations — that strategies consume. Features must be composable (a feature may depend
+on other features, on one stream or across streams), must not leak future information, and must
+scale to hundreds or thousands of streams.
 
-Objective of this discussion: pin down the purity/statelessness decision that shapes this layer,
-document the composition mechanism that exists but is unused, and identify what blocks features
-from reaching strategies.
+Objective of this discussion: the **feature graph** that replaces today's per-stream `FeatureChain`
+once features move onto the `FrameBuffer` (iteration 4 of `docs/plans/data-layer-v2`) — node shape,
+composition, scheduling, firing, storage, identity and stream binding.
 
 ## Current Understanding
 
@@ -25,164 +26,315 @@ type Feature interface {
 }
 ```
 
-The file states the intent explicitly: *"Features are PURE FUNCTIONS wrapped in structs. They have
-NO mutable state — only configuration (immutable after construction). All state comes from
-parameters."* Every registered feature honours this: the struct holds only `id` and `period`.
+Features are pure functions wrapped in structs: configuration only, all state from parameters.
+Every registered feature honours this — the struct holds only `id` and `period`. `Update` reads the
+rolling window and writes its output into a per-candle `Snapshot`; composition would work by reading
+an upstream key out of the same snapshot, but `Dependencies()` is declared and unused.
 
-`Update` receives the full rolling window and a per-candle `Snapshot`, and writes its output into the snapshot. Composition works by a downstream feature reading an upstream key out of the same snapshot — the dependency graph only controls evaluation order.
+### Snapshot
 
-### Snapshot and typed keys
-
-`internal/protocol/snapshot.go` implements a heterogeneous map with generic accessors:
-`Key[T]` carries a phantom type, `NewKey[T](name)`, `GetSnapshot[T]`/`SetSnapshot[T]`.
-`KeyRef{Name}` is the untyped form used for the dependency graph (a `Key[T]` cannot be stored in a `[]KeyRef` without erasing T).
-
-The comment claims this is "completely safe at runtime". That is not quite right: `GetSnapshot`
-does an unchecked `val.(T)` (`snapshot.go:45`) which panics if two `Key`s with different `T` share a name. Safety rests on the key-to-type invariant being maintained by convention — nothing enforces uniqueness of feature IDs across type parameters.
+`internal/protocol/snapshot.go` — a heterogeneous map with typed keys (`Key[T]`,
+`GetSnapshot[T]` / `SetSnapshot[T]`); `KeyRef{Name}` is the untyped form for the dependency graph.
+`GetSnapshot` does an unchecked `val.(T)` (`snapshot.go:45`), so type safety rests on convention.
+The `Snapshot` leaves the data path in iteration 4 ([[data-layer-v2]]).
 
 ### FeatureChain
 
-`internal/domains/features/feature.go` — construction is `duplicate check → topological sort → size window`:
+`internal/domains/features/feature.go` — construction is `duplicate check → topological sort → size
+window`:
 
 - `checkDuplicates` errors on two features sharing a `KeyRef`.
 - `topologicalSort` is Kahn's algorithm over `Dependencies()`.
-- `calculateRequiredCapacity` sizes one shared `SortedWindow[MarketData]` to the **maximum**
-  `Lookback()` across all features.
-- `Process(in <-chan MarketData) <-chan ExtendedMarketData` runs one goroutine: push candle to the window, run every feature in sorted order against a fresh `Snapshot`, emit.
+- One `SortedWindow[MarketData]` per chain, sized to the **maximum** `Lookback()`.
+- `Process(in)` runs one goroutine: push the candle, run every feature in sorted order against a
+  fresh `Snapshot`, emit. Used by `data_logger`, one chain per subscription.
+- `Evaluate(sub, history)` runs the chain once over one stream's history — the `data_logger_v2`
+  bridge, evaluated over each updated stream's `View` history (data-layer-v2 plan, stage 6).
 
-Features that do not yet have enough history simply do not write to the snapshot. The exported
-JSONL confirms this — early rows are missing indicator columns entirely (`data/exports/*.jsonl` row 1 has no `engulfing_candle`, row 2 does).
+Features without enough history write nothing; exported rows have ragged columns.
 
 ### Implementations
 
 | Feature | Output type | Notes |
 |---|---|---|
-| `sma` | `float64` | Straightforward window mean of closes. |
-| `ema` | `float64` | Windowed recomputation, not recursive — see Decisions. `Lookback = 2 × period`. |
+| `sma` | `float64` | Window mean of closes. |
+| `ema` | `float64` | Windowed recomputation, not recursive: seeded with an SMA inside a `2 × period` window, so the seed moves with the window. |
 | `rsi` | `float64` | Simple average gain/loss, **not** Wilder's smoothing. |
 | `vwap` | `float64` | Rolling `period`-candle VWAP over typical price, not session-anchored. |
 | `engulfing_candle` | `DirectionalMarker` (int) | Strict engulfing; documented rationale in-file. |
 | `swing_highlow` | `DirectionalMarker` | Behind `//go:build wip`, **does not compile** — empty `for neigh := range candles {}` and references to undefined `checkIdx`/`state`/`engulfing`. |
 
-All float outputs are rounded to 6 decimals via `roundDecimals` before being written.
+All float outputs are rounded to 6 decimals via `roundDecimals`. `ema` and `rsi` therefore differ
+from the conventional values charting tools report; Decisions § Feature graph makes the exact,
+recursive forms possible.
 
 ### Known gaps and defects
 
 1. **Missing dependency reports as a cycle.** `topologicalSort` sets in-degree from
-   `len(Dependencies())` without checking the dependency exists in the set, so a feature depending on an unconfigured feature can never reach in-degree 0 and the chain fails with "circular dependency detected in processors" — a misleading error for a common misconfiguration.
-2. **No tests.** Indicator maths — the one part of this codebase that is trivially unit-testable
-   against known reference values — has near-zero coverage (only `Process` output buffering and
-   malformed-candle dropping are guarded).
+   `len(Dependencies())` without checking the dependency exists, so a feature depending on an
+   unconfigured feature fails with "circular dependency detected in processors".
+2. **Indicator maths is untested.** Tests cover `Process` buffering, malformed-candle dropping,
+   `Evaluate` against `Process` and `Lookback`; no feature is checked against reference values.
 
 ## Decisions
 
-- **Features are pure functions over a shared window.** State lives in `SortedWindow`, not in the feature. Rationale: a stateless feature can be re-instantiated cheaply for parameter sweeps, run on arbitrary slices of history, and produces identical output for identical input — which is what the backtesting pipeline (`docs/Backtesting.md`) requires for reproducibility.
-- **One shared window, sized to the maximum lookback.** Avoids N buffers of the same data. Cost: every feature pays the memory of the greediest one, and lookback is expressed in candles rather than in time.
-- **Composition through the snapshot, ordering through the dependency graph.** Features do not call each other; they read each other's outputs by key. Keeps features independent and the graph explicit.
-- **Insufficient history means "absent", not "zero".** A feature that cannot compute writes nothing, so consumers can distinguish "not ready" from a real value. This is why exported rows have ragged columns.
-- **Strict definitions over permissive ones** for pattern features (documented for `engulfing`): lower signal frequency, higher information content, better suited to statistical validation.
-- **A feature ID encodes every parameter that distinguishes one instance from another.** Defaulted values are omitted so common names (`ema_20`, `vwap_50`) stay stable; only a non-default extends the ID (`ema_20_s3`). A duplicate ID is therefore a construction error — two variants configured identically — not a silent drop. See [[config]].
-- **Feature evaluation stays serial for now.** `Process` runs a candle's features in one goroutine. Parallelising independent graph levels was rejected at the current scale: per-candle dispatch/join overhead is the same order as the feature work itself, and `Snapshot`'s `map[string]any` (`snapshot.go:28`) is not safe for concurrent writes even to distinct keys, so parallelism would need a synchronised write path that adds the cost back. Revisit when features are numerous or expensive, or for multi-symbol chains — gated on a benchmark.
-- **The feature layer evolves toward a layered feature engine.** Features become organised into
-  families — Technical, Statistical, Market/Microstructure, Cross-Asset, Fundamental/Alternative —
-  assembling into a feature vector consumed by strategy logic, rather than one flat chain ordered by
-  a generic dependency graph. Directional roadmap, not a rewrite: only Technical and Statistical are
-  reachable today, Cross-Asset waits on the seam ([[multi-subscription]]), and Market/Microstructure
-  and Fundamental/Alternative wait on non-candle data ([[data-layer]]). See Solution for the diagram.
+- **Features are pure functions.** Configuration only, no state of their own; identical output for
+  identical input, cheap to re-instantiate for sweeps — the reproducibility `docs/Backtesting.md`
+  requires.
+- **Insufficient history means "absent", not "zero".** A feature that cannot compute writes nothing.
+- **Strict definitions over permissive ones** for pattern features (documented for `engulfing`).
+- **A feature ID encodes every parameter that distinguishes one instance from another.** Defaulted
+  values are omitted (`ema_20`, `vwap_50`); a non-default extends the ID (`ema_20_s3`). A duplicate
+  ID is a construction error. See [[config]].
 - **Cross-asset metrics are features, not strategy internals.** Correlation, spread, beta and
-  similar cross-stream derived series live in the feature layer as a distinct **multi-stream
-  feature** that runs after the per-stream chains on synchronised (aligned) streams — never computed
-  inside a strategy. They are pure functions of aligned windows, so they keep the reproducibility,
-  reuse and exporter visibility every other feature has; strategy-internal math has none of these.
-  Which inputs to correlate (symbols/timeframes) is a feature-variant parameter, not a strategy
-  concern. Requires a second feature shape beyond today's single-window `Update`; the alignment
-  mechanism (the "seam") and the exact shape are tracked in [[multi-subscription]].
+  similar live in the feature layer as pure functions of aligned history, with the reproducibility
+  and exporter visibility of every other feature.
+- **Families are a taxonomy, not execution tiers.** Technical, Statistical, Market/Microstructure,
+  Cross-Asset and Fundamental/Alternative describe what features exist and what data they need;
+  every family's features are nodes of one feature graph (Solution).
+
+### Feature graph
+
+Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its tier barrier.
+
+- **One node shape.** A node is a feature instance at a coordinate — a stream, or a pair of streams.
+  It reads its coordinate's candles, or its dependencies' results at the same coordinate (on each
+  end, for a pair). Direct, feature-of-feature, cross-raw and cross-feature are derived from that,
+  not separate mechanisms.
+- **Composition is in code, never in config.** A feature receives only the `View`; how it reads its
+  dependencies is internal to it. `Dependencies()` names the feature types it reads, each once
+  (`zscore` reports `rsi`), and nothing when it reads candles only. It validates the config and
+  builds the graph; it is not an input list. `Lookback()` is its read depth: its dependencies'
+  results, or its candles.
+- **An instance is bound at construction** to its coordinate and its dependencies' variants, and
+  reads them for the streams it was instantiated on.
+- **One instance per dependency variant, at every level.** With `rsi_14` and `rsi_21` configured,
+  `zscore_50` becomes `zscore_50-rsi_14` and `zscore_50-rsi_21`; instances multiply across a
+  feature's own variants and every level of its dependencies. A dependency type with no configured
+  variant is a construction error naming both features.
+- **Combining variants of one type is not a feature.** No instance sees two variants of one type, so
+  a crossover (`ema_20` against `ema_50`) is not a feature. Indicators built from variants of one type
+  (MACD) compute them internally and store their own struct as the result's value.
+- **Feature types declare their properties in code:** arity (single-stream or pair) and, for pair
+  features, symmetry.
+- **Pair features expand like any other.** `corr` declares `returns` once; each pair gets one
+  instance per `returns` variant (`corr_100-returns_1`, `corr_100-returns_5`), reading that variant
+  on both of its streams.
+- **Edges are same-column reads.** Reads of the past — a dependency's or a feature's own — set
+  depth, not order.
+- **Depth and warm-up come from the graph.** A result's depth is the largest `Lookback` among its
+  readers; warm-up adds along paths (`zscore_50-rsi_14` is valid after about 64 bars). Computed at
+  construction — the features' part of the `Layout` declaration ([[data-layer-v2]]).
+- **Recursive features stay pure.** `x_c = f(x_prev, input_c)` reads `x_prev` from its own result's
+  history at its coordinate's step; state beyond the output (Wilder's average gain and loss, running
+  sums) is stored in the result. No feature keeps state of its own. Exact EMA and Wilder RSI become
+  possible; values depend on the seed column, so warm-up length matters, and across a gap the
+  recursion steps from the last `Fresh` value.
+- **Determinism by construction.** Each node writes only its own result, so writes are disjoint and
+  need no locks; the counter decrement publishes a write to same-frame readers; nothing is emitted
+  in completion order.
+- **Composed IDs are the composition, in order, dash-separated**, outermost first, generated by
+  `ID()`: `zscore_50-rsi_14`, `corr_100-returns_1`. Several dependencies compose in `Dependencies()`
+  order (`f_1-rsi_14-vwap_20`), unambiguous since each type's dependencies are fixed in code. A single
+  feature's ID never contains `-`.
+
+### Scheduling and firing
+
+- **Ready-driven scheduling.** A node runs once its inputs at the column are computed, through
+  pending-input counters over the frame's active subgraph. Each stream's local subgraph is one task,
+  run serially in topological order, nodes feeding pair nodes first; finishing such a node
+  decrements its pair dependents' counters mid-task, so synchronisation is paid only on cross-stream
+  edges. Stream tasks are sharded statically over a fixed worker pool; ready pair nodes go on a
+  shared queue.
+- **Serial first.** One worker is a precomputed serial topological order with no atomics — the sweep
+  default (one run per core) and the first thing built. The parallel scheduler is gated on a
+  benchmark at realistic scale: a goroutine hand-off (36–109 ns) costs as much as a cheap feature
+  (SMA-50, 21 ns).
+- **Features complete within one engine cycle**, between `Next` calls. Running features on arrival,
+  before release, stays rejected ([[pipeline-runtime]]).
+- **Firing.** A node fires at column `c` only if every input it reads at `c` is `Fresh`. A carried
+  input — a `Gap`, `Pending` or `Ended` leg at a due column, or a coarse stream between its due
+  columns — does not fire it. `Partial` frames compute over their `Fresh` streams. A skipped column
+  leaves the result absent and history reads skip it, like `Gap` candle slots. A node that runs but
+  writes nothing (warm-up) still releases its dependents.
+- **A pair's sampling clock** defaults to the least common multiple of its streams' periods, so both
+  ends are due where it fires.
+- **Due-pattern schedules.** Which nodes may fire at `c` depends only on which periods divide `c`, a
+  small fixed set of patterns. Each pattern's schedule — stream tasks per worker, pair nodes,
+  initial counters, topological order — is built at construction. Per frame: pick the pattern, drop
+  streams whose leg is not `Fresh` and pair nodes with a non-`Fresh` end (both known when `Next()`
+  returns), copy the counters, run.
+
+### Feature buffer
+
+- **One ring per result, each result stored once.** A result is a feature instance at its
+  coordinate, keyed `(feature ID, stream)` or `(feature ID, pair)`. A pair result is one ring,
+  referenced from both streams.
+- **Slots are `{col, value}`.** A column the feature skipped leaves its slot holding an older column
+  (or −1), so a reader checking `col` sees it absent — no flag, no `nil`, no allocation.
+- **A value is a float, or the feature's own struct** for multi-output features (MACD). Each ring is
+  typed by its feature's value type, so writes never allocate.
+- **Sized at construction.** A ring holds `depth × Window` slots at its coordinate's period (the
+  stream's, or the pair's sampling clock); a value sits at `(col / Period) % size`. No headroom:
+  results are written only on the engine goroutine, at the column being processed.
+- **Per-stream feature map, built once and read-only:** `s → map[key]int`, the key a feature ID plus,
+  for pair features, the pair — one entry per feature on `s` and one per pair feature for every pair
+  `s` belongs to. Features never look it up: their inputs' rings are resolved at construction;
+  consumers resolve their keys once, when wired.
+- **Memory warning.** Construction estimates the feature buffer's memory (results × slots × slot
+  size) and logs a warning above 1 GB, naming the largest universes.
+
+### Universes
+
+- **Every feature binds to a universe**, single-stream and pair alike, so each stream has its own
+  feature set. A single-stream feature without one runs on every stream; a pair feature must name
+  one, and a universe without pairs is a validation error for it.
+- **Dependencies follow their dependents.** A feature instantiates its dependency variants on its
+  own streams, also where the dependency's universe does not reach.
+- **A universe is a list of self-contained rules.** Its streams are those its rules select or name;
+  its pairs are the union of its rules' pairs. Duplicates collapse; self-pairs are excluded.
+- **A rule has filters and at most one pairing:**
+  - none — selects the streams passing its filters;
+  - `references` — each reference paired with every stream passing the filters;
+  - `pairs` — a list of explicit pairs, or `"*"` for every pair of streams passing the filters.
+
+  Named streams are taken as named; filters choose their partners.
+- **Filters:** symbol (with globs, `*USDT`), timeframe, provider, kind (direct / derived). A list is
+  OR, fields are AND.
+- **No rules over both ends of a pair.** Same-timeframe pairs come from one `*` rule per timeframe.
 
 ## Solution
 
-The purity decision has a cost worth stating: **`ema` recomputes from the window each candle rather than carrying the recursive state**, seeding with an SMA of the oldest `period` candles inside a `2 × period` window. This is an approximation of a true EMA — the seed moves with the window, so the value differs from a continuously-accumulated EMA, and the error depends on `period`. The same concern applies to `rsi`, which uses a simple average rather than Wilder's smoothing and therefore does not match the conventional RSI most references and charting tools report.
+No plan executed for the feature graph yet; iteration 4 of `docs/plans/data-layer-v2` is its
+implementation vehicle.
 
-Alternatives if exactness matters:
+### Node shape
 
-- **Allow recursive state in features**, with an explicit `Reset()`. Exact, cheaper per candle
-  (O(1) vs O(period)), but breaks reproducibility guarantees and complicates parameter sweeps.
-- **Keep purity, increase warm-up.** Seed further back (e.g. `5 × period`) so the seed's influence decays below tolerance. Cheap to do, costs memory and warm-up candles.
-- **Keep purity, accept the approximation, document it.** Defensible if strategies are validated against these exact feature definitions rather than against external charts.
+| Category | Reads | Example |
+|---|---|---|
+| Direct | Its stream's candles | `rsi_14` |
+| Feature of feature | A dependency's result on its stream | `zscore_50-rsi_14` |
+| Pair, raw | Both streams' candles | `corr_100` over closes |
+| Pair, features | A dependency's result on each end | `corr_100-returns_1` |
 
-Not yet decided. This matters most when comparing engine output against third-party charts or
-published strategies; it matters little if features are only ever compared against themselves.
+### Scheduling
+
+```
+worker 1: [A: returns ─▶ rsi ─▶ zscore-rsi]
+              │           │
+              ▼           ▼
+   corr(returns A,B)   corr(rsi A,B)    ← queued when its counter reaches 0
+              ▲           ▲
+worker 2: [B: returns ─▶ rsi ─▶ …]
+```
+
+With tier barriers a frame takes the slowest worker's time per tier, summed over tiers; ready-driven
+it takes roughly the larger of the longest dependency chain and total work over workers. The gain is
+load imbalance and stacked barriers (pair nodes feeding pair nodes); small for uniform cheap
+features over evenly sharded streams.
+
+**Due patterns, example.** A 5m grid with direct 5m, 1h and 1d streams has periods {1, 12, 288} in
+grid columns, and three patterns: `c % 288 == 0` (everything may fire), `c % 12 == 0` (5m and 1h
+nodes) and every other column (5m nodes). Derived streams take their source's period.
+
+### Feature buffer
+
+```
+results   r → ring of {col, value}          one per (feature ID, stream) or (feature ID, pair)
+streams   A → { rsi_14: r1, zscore_50-rsi_14: r2, corr_100-returns_1 (A,B): r7, (A,C): r8 }
+          B → { rsi_14: r3, zscore_50-rsi_14: r4, corr_100-returns_1 (A,B): r7 }   ← r7 stored once
+```
+
+### Universes
+
+Illustrative config, not settled syntax:
+
+```json
+"universes": [
+  { "name": "usdt", "rules": [ { "symbol": ["*USDT"] } ] },
+  { "name": "btc_lead",
+    "rules": [
+      { "references": ["BTCUSDT:1h:binance"], "timeframe": ["1h"], "provider": ["binance"] },
+      { "pairs": [["ETHUSDT:1h:binance", "SOLUSDT:1h:binance"]] }
+    ] },
+  { "name": "majors_1h", "rules": [ { "pairs": "*", "symbol": ["*USDT"], "timeframe": ["1h"] } ] }
+],
+"features": [
+  { "type": "rsi", "universe": "usdt", "variants": [{ "period": 14 }, { "period": 21 }] },
+  { "type": "zscore", "variants": [{ "period": 50 }] },
+  { "type": "returns", "variants": [{ "period": 1 }] },
+  { "type": "corr", "universe": "btc_lead", "variants": [{ "period": 100 }] }
+]
+```
+
+`zscore` depends on `rsi` and `corr` on `returns` in code, giving `zscore_50-rsi_14`,
+`zscore_50-rsi_21` on the `usdt` streams and `corr_100-returns_1` on the `btc_lead` pairs, with
+`returns_1` pulled onto each end.
+
+```
+S(rule)      = streams passing the rule's filters
+pairs(rule)  = references × S(rule)  |  explicit pairs  |  every pair of S(rule)
+pairs(U)     = ∪ pairs(rule)          streams(U) = ∪ streams each rule selects or names
+```
 
 ### Target architecture: layered feature engine
 
-The layer evolves from a flat chain executed by a generic dependency graph into a **layered feature
-engine** — features grouped into families, each with its own data and timing needs, assembling into
-a feature vector the strategy consumes.
-
 ```
-Market Data
-      │
-      ▼
-Feature Engineering
-      ├── Technical Features
-      ├── Statistical Features
-      ├── Market/Microstructure Features
-      ├── Cross-Asset Features
-      └── Fundamental/Alternative Features
-              │
-              ▼
-        Feature Vector
-              │
-              ▼
-          Strategy Logic
-              │
-              ▼
-      Buy / Sell / Hold
+Market Data ─▶ Feature Engineering ─▶ Feature Vector ─▶ Strategy Logic ─▶ Buy / Sell / Hold
+                 ├── Technical
+                 ├── Statistical
+                 ├── Market/Microstructure
+                 ├── Cross-Asset
+                 └── Fundamental/Alternative
 ```
 
-- **Technical** — single-stream price/volume indicators (today's `sma`, `ema`, `rsi`, `vwap`,
-  `engulfing`). Reachable now.
-- **Statistical** — distributional / time-series stats over a window (volatility, z-score,
-  autocorrelation, moments). Reachable now over candle windows.
-- **Market/Microstructure** — order-book and trade-flow features (spread, imbalance, volume
-  profile). Needs non-candle data — gated on [[data-layer]].
-- **Cross-Asset** — correlation, spread, beta, cointegration across streams; the multi-stream
-  feature decided above, running after per-stream chains on the aligned seam ([[multi-subscription]]).
-- **Fundamental/Alternative** — funding, on-chain, sentiment, macro; needs external data sources not
-  modelled today.
+- **Technical** — single-stream price/volume indicators (`sma`, `ema`, `rsi`, `vwap`, `engulfing`).
+  Reachable now.
+- **Statistical** — volatility, z-score, autocorrelation, moments. Reachable now.
+- **Market/Microstructure** — order-book and trade-flow features. Needs non-candle data — gated on
+  [[data-layer]].
+- **Cross-Asset** — correlation, spread, beta, cointegration; pair features bound to universes.
+- **Fundamental/Alternative** — funding, on-chain, sentiment, macro; needs data sources not modelled
+  today.
 
-The shift is from *mechanism* (topological execution order) to *taxonomy* (families with distinct
-data, windows and execution tiers): the generic dependency graph persists as intra-family ordering,
-not the top-level structure. The **feature vector** is the assembled per-instant output the strategy
-consumes — today's `Snapshot` / `ExtendedMarketData` is its embryonic, single-stream form; its
-concrete shape is bound up with the strategy input contract ([[strategy-layer]]).
+The **feature vector** is the per-column feature results a strategy reads; its read contract is
+bound up with the strategy input contract ([[strategy-layer]]).
 
 ## Open Questions
 
-- EMA/RSI exactness: which of the three options above? What tolerance is acceptable?
-- Multi-symbol chain topology: one chain instance per stream, or a window keyed by symbol? Leaning
-  per-stream chains — tracked in [[multi-subscription]].
-- Cross-asset feature shape: placement is now decided (feature layer, see Decisions); the open part
-  is the mechanism — a distinct multi-stream feature consuming the synchronised (aligned) streams
-  after the per-stream chains, versus a keyed multi-window `Update`. Tracked in [[multi-subscription]].
-- Should the type-safety hole in `Snapshot` be closed (registry of key name → type, checked at chain construction), or is the convention sufficient?
-- `Dependencies()` is declared but unused. Is it kept for the composition roadmap, or removed until a real composite feature demands it?
-- Layered engine mechanics: is the dependency graph per-family or global, and do families run in
-  tiers (per-stream → aligned cross-asset → …) or in parallel? Is the feature vector a fixed schema
-  or the current heterogeneous `Snapshot`? (Ties the [[strategy-layer]] input contract.)
+- **Asymmetric pair order** (beta, hedged spread, lead-lag) — which stream is the first operand, for
+  reference rules and `*`. Proposed: `(stream, reference)` from reference rules, both orders from
+  `*`, explicit pairs as written; symmetric features store each pair once, in sorted order.
+- **Parameters in IDs** must not emit `-`: `iDWithParam` formats with `'g'` (`ema_20_s1e-05`), and
+  negative values carry a sign.
+- **Per-stream map key** — a struct `{feature ID, pair}` versus a built string, or a dense
+  `idx[s][k]` table with −1 where absent; plan-level.
+- **`Late` revisions** (pinned) — recompute the subgraph reachable from the revised stream over
+  `[c, now]`, pair nodes included.
+- **Strategies as graph nodes**, run as soon as their inputs are ready — pending measurements.
+- **Heavy features** — asynchronous computation with results in a later frame ([[pipeline-runtime]]).
 
 ## WIP
 
+- Feature graph agreed in discussion (Decisions § Feature graph onwards); not planned.
 - Registered and working: `sma`, `ema`, `rsi`, `vwap`, `engulfing_candle`.
-- `swing_highlow` is broken behind a `wip` build tag. It duplicates swing-detection logic that also exists (also broken) inside `buy_the_dip` — see [[strategy-layer]]. Consolidating swing detection into this feature is the obvious next step.
-- `config.json` currently enables `engulfing_candle`, `vwap` (20, 50) and `ema` (20, smoothing 2.0); `rsi` and `sma` are disabled.
-- Every feature now declares a config struct decoded strictly ([[config]]); `PeriodConfig` is shared by the period-only features, `swing_highlow` adds an even-period rule in `Validate()` — unexercised, since it sits behind the `wip` build tag.
+- `swing_highlow` is broken behind a `wip` build tag. It duplicates swing-detection logic that also
+  exists (also broken) inside `buy_the_dip` — see [[strategy-layer]]. Consolidating swing detection
+  into this feature is the obvious next step.
+- `config.json` enables `engulfing_candle`, `vwap` (20, 50) and `ema` (20, smoothing 2.0); `rsi` and
+  `sma` are disabled.
+- Every feature declares a config struct decoded strictly ([[config]]); `PeriodConfig` is shared by
+  the period-only features, `swing_highlow` adds an even-period rule in `Validate()` — unexercised,
+  since it sits behind the `wip` build tag.
 - Fibonacci and trend features are listed as ToDo in `WIP.md`.
-- `Process` now drops and warns on candles the window rejects (zero timestamp), instead of running features over stale history and forwarding the bad candle. This is a defensive stopgap at the consumer; malformed-candle validation properly belongs upstream at ingestion — tracked as robustness work in [[data-layer]].
+- `Process` drops and warns on candles the window rejects (zero timestamp) — a stopgap at the
+  consumer; `data_logger_v2` validates at ingestion ([[data-layer-v2]] § Normalisation).
 
 ## Resources
 
 - `internal/protocol/feature.go`, `internal/protocol/snapshot.go`, `internal/protocol/sorted_window.go`
-- `internal/domains/features/`
+- `internal/domains/features/`, `internal/engine/data_logger_v2.go` (bridge),
+  `internal/engine/data/view.go`, `internal/engine/data/buffer.go`
 - `docs/Protocol.md` § Features
-- Related: [[data-layer]] (produces `MarketData`), [[strategy-layer]] (intended consumer),
-  [[engine]] (only `data_logger` runs the chain)
+- Related: [[data-layer-v2]] (`FrameBuffer`, periods, leg states), [[pipeline-runtime]] (step loop,
+  Features phase), [[multi-subscription]], [[strategy-layer]] (consumer), [[data-layer]], [[engine]]

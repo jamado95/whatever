@@ -129,7 +129,6 @@ These reverse recorded positions not yet updated in their own documents:
 
 - `Architecture.md` — "`flow/pipe` is the primary data/control flow mechanism".
 - [[multi-subscription]] — seam after the per-stream chains; `Stale` semantics; dispatch-once.
-- [[features]] — one `SortedWindow` per chain; cross-asset features as a stage after the chains.
 - [[engine]] — the ticker as a gate between provider and pipeline.
 
 ## Solution
@@ -164,7 +163,7 @@ Stage-level detail in [[data-layer-v2]].
 ```go
 for {
     f, err := data.Next(ctx)          // pinned View, derived legs aggregated; nil, nil at the end
-    fd := features.Step(f)            // tier 0 parallel over dirty legs → barrier → tier 1+
+    fd := features.Step(f)            // ready-driven over the frame's active feature graph
     sigs := strategies.Step(f, fd)    // parallel over woken strategies; merged in ID order
     orders := portfolio.Step(f, sigs) // serial: one ledger, netting, limits
     exec.Submit(orders)               // async; the engine appends fills to the next frame
@@ -180,9 +179,9 @@ for {
   only its stream's slots beyond the released head and the engine side only released slots, so no
   locks are needed.
 - **Dirty sets drive work.** A frame event carries the legs that closed and the cells revised.
-  Features step only dirty streams, cross features run when an input is dirty and their sampling
-  clock fires, strategies wake when their subs or keys change. Without this a `Late` frame would
-  recompute every stream instead of the revised ones.
+  Features step only dirty streams, cross features run when their sampling clock fires and every
+  input is fresh ([[features]] § Feature graph), strategies wake when their subs or keys change.
+  Without this a `Late` frame would recompute every stream instead of the revised ones.
 - **Determinism** holds at any worker count provided every phase merges its outputs in a fixed order.
 
 ### Frame record rules
@@ -223,22 +222,22 @@ warm-up and reconnect backfills.
 - **One graph keyed by `(stream, feature)`.** Cross features are ordinary nodes depending on several
   streams' keys; no seam, split or re-sync. The earlier question of how a cross feature emits —
   annotating each leg's snapshot versus a derived stream — is moot.
-- **Tiers:** tier 0 (own stream only) runs parallel over dirty legs; tier 1+ (depends on a cross
-  node) runs after a barrier.
-- **`Dependencies()` becomes `(key, depth)`**, so the buffer sizes each feature's ring to its deepest
-  reader.
+- **Scheduling is ready-driven**, with no tier barrier: a node runs once its inputs at the column are
+  computed. Graph, firing rules and scheduling in [[features]] § Feature graph.
+- **`Dependencies()` names feature types; depth is each reader's `Lookback`**, so the buffer sizes
+  each result's ring to its deepest reader ([[features]] § Feature graph).
 - **Cross features declare a sampling clock** (every column, or a window step). Rolling legs update
   every column, so a correlation of rolling 1h returns sampled every minute uses overlapping
   windows; sampling at the window step avoids it.
-- Running tier 0 on arrival, before alignment, was considered for latency; unnecessary at candle
-  timeframes, where compute is far below the alignment wait.
+- Running single-stream features on arrival, before alignment, was considered for latency;
+  unnecessary at candle timeframes, where compute is far below the alignment wait.
 
 ### Parallelism per phase
 
 | Phase | Unit | Notes |
 |---|---|---|
-| Features, tier 0 | Streams sharded across a fixed worker pool | Worker owns its shard's state; inline for narrow frames |
-| Features, tier 1+ | Cross-feature nodes | After the tier-0 barrier |
+| Features, per stream | Streams sharded across a fixed worker pool | One task per stream's local subgraph; serial for one worker |
+| Features, cross | Cross-feature nodes | Queued once their inputs are computed ([[features]]) |
 | Strategies | Strategy instances | Own state, read the immutable buffer; outputs merged by ID |
 | Portfolio / risk | Mostly serial | One ledger; per-instrument marking can parallelise |
 | Execution | Async I/O per venue | Engine appends returned fills to the next frame |
