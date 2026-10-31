@@ -337,7 +337,8 @@ construction, one provider stream.
   only its own section's writer.
 - **One ring per stream, one slot per update:** `slot = (col / Period) % size`. Each ring is sized to
   its own stream's reads, so a coarse stream costs its own bars and one deep read no longer sets the
-  depth of every stream. Feature entries will follow the same rings (iteration 4).
+  depth of every stream. Features write an entry for each data view entry (iteration 4,
+  [[features]] § Feature buffer).
 - **Stream shape: `Period` and `Window`** on the stream table. `Period` is the columns between a
   stream's updates — a direct stream's timeframe ÷ grid, a derived stream's source `Period`;
   `Window` is the updates one bar spans — 1 direct, source bars per window derived. A bar spans
@@ -573,11 +574,8 @@ func (v View) Leg(stream int) (c proto.Candle, s LegState, age int) // carried: 
 func (v View) Count(stream int) int
 func (v View) Candles(stream, n int, dst []proto.Candle) []proto.Candle // newest first
 
-// Later: features (iteration 4), revisions (iteration 2), records (strategy step loop).
-func (v View) Feature(key FeatureKey, stream, n int, dst []float64) []float64
+// Later: revisions (iteration 2), records (strategy step loop).
 func (v View) Revised() []int // streams whose legs changed at Col; empty if never revised
-
-type FeatureWriter interface{ Set(stream int, v float64) } // bound to one feature key
 
 type Section[T any] struct{ id int }                   // Signals, Orders, Fills
 type RecordWriter[T any] interface{ Append(recs ...T) } // bound to the current column and the owner's ID

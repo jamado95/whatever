@@ -149,6 +149,20 @@ Resolved by this work: silent ticker fallback, triplicated engine parsers, untyp
   validated today; enabling it will surface the mismatch.
 - `swing_highlow` was updated but sits behind a `//go:build wip` tag, so it is not in the default
   build and its `Validate()` (even period) is unexercised.
+- **Config changes agreed in [[features]]**, not yet planned:
+  - **`universes` block, and `universe` per feature** — named stream and pair sets built from
+    self-contained rules (references, explicit pairs, `*`) with filters on symbol, timeframe,
+    provider and kind. See [features § Universes](features.md#universes); example config in
+    [features § Solution — Universes](features.md#universes-1).
+  - **Universe resolution is config's** — a pure function of rules over stream descriptors. See
+    [features § Feature layer](features.md#feature-layer).
+  - **New subscription rule:** each `(symbol, derived timeframe, provider)` is derived at most once,
+    so a stream named in a rule never matches two derived streams. See
+    [features § Universes](features.md#universes).
+  - **Composition is never in config.** Dependencies come from each feature type's registered
+    descriptor, which validation reads without instantiating; a dependency type with no configured
+    variant is an error. Factories keep building variant IDs. See
+    [features § Feature graph](features.md#feature-graph).
 
 ## Resources
 

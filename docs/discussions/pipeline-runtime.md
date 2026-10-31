@@ -224,8 +224,8 @@ warm-up and reconnect backfills.
   annotating each leg's snapshot versus a derived stream — is moot.
 - **Scheduling is ready-driven**, with no tier barrier: a node runs once its inputs at the column are
   computed. Graph, firing rules and scheduling in [[features]] § Feature graph.
-- **`Dependencies()` names feature types; depth is each reader's `Lookback`**, so the buffer sizes
-  each result's ring to its deepest reader ([[features]] § Feature graph).
+- **Dependencies come from each feature type's descriptor**, and result rings are sized to the
+  lookback ([[features]] § Feature graph).
 - **Cross features declare a sampling clock** (every column, or a window step). Rolling legs update
   every column, so a correlation of rolling 1h returns sampled every minute uses overlapping
   windows; sampling at the window step avoids it.
