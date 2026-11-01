@@ -11,8 +11,8 @@ the same way.
 This stage moves the ring into `internal/flow/frame` as generic, concrete types — `Slot[T]`,
 `Ring[T]`, `Buffer[T]` — with the pinned `View[T]` over them. `Data` and `Latest` are written once and
 called directly, without dispatch. The data layer's `FrameBuffer` becomes a `frame.Buffer[proto.Candle]`
-plus what only the data layer knows: the stream table, sizing, staging, and the derived window
-count. Nothing outside `data_logger_v2` changes, and frames come out identical.
+plus what only the data layer knows: the stream table, sizing and staging. The derived window count
+is dropped. Nothing outside `data_logger_v2` changes, and frames come out identical.
 
 ```
 consumer ─▶ frame.View[T]{header, *Buffer[T]} ─▶ Ring[T] per entry ─▶ Slot[T]
@@ -43,9 +43,13 @@ for review; the step is committed once approved, then the next starts.
   records the first column.
 - **An empty ring reads as not started** — zero value, `Gap`, −1, no history. Data rings are never
   empty; feature buffers rely on it from stage 3.
-- **Owners write; consumers only read.** `Put`, `Start` and raw slot access (`At`, `Index`, `First`,
-  `Len`, `Bars`, `Period`) are exported for the layer that owns a buffer. A `View` exposes neither
-  its buffer nor its rings, so a consumer holding only views cannot write.
+- **Owners write; consumers only read.** `Put`, `Start` and raw slot access (`At`, `First`, `Len`,
+  `Bars`, `Period`) are exported for the layer that owns a buffer. A `View` exposes neither its
+  buffer nor its rings, so a consumer holding only views cannot write.
+- **`At(col)` returns the slot holding `col`, or nil** — on an empty ring, below the first column,
+  or when the slot holds another column (never written, overwritten, past the end). The ring never
+  reads below its own first column, so an owner's startup fill is never raced. `Latest`, `Data` and
+  `Put`'s carry go through it; only `Put`'s own write addresses the slot directly.
 - **`View[T]` embeds an unexported `header`** — column, grid stride, status, completeness — whose
   methods `Col`, `Boundary`, `Status` and `Complete` are promoted. Outside `frame` the field cannot
   be named, so a view cannot be re-pinned to another column. There is no exported header type.
@@ -56,10 +60,17 @@ for review; the step is committed once approved, then the next starts.
 - **`State` replaces `LegState`, and `Status` moves too.** `frame.State` keeps `Fresh`, `Gap`, `Ended`
   (`Pending` arrives with live mode); `frame.Status` keeps `Current` (`Late`, `Backfill` later). `data`
   drops both types without aliases.
-- **The derived window count stays in the data layer**, in an array beside each derived ring indexed
-  like its slots (`Ring.Index`). Only tests read it, through `count(col, s)`; it is not part of the
-  read contract.
-- **`Next` returns `*frame.View[proto.Candle]`**, valid until the next `Next` or `Close`, as today.
+- **The derived window count is dropped.** Nothing outside tests read it (`View.Count`), and keeping
+  it in an array beside each derived ring cost ~7 ns per derivation at 1000 streams — the second
+  cache line on every derived write. The aggregator keeps its own count of `Fresh` bars for the
+  window; nothing stores it per slot. Revisited if a consumer needs it, by counting the source's
+  bars.
+- **`Next` returns a `frame.View[proto.Candle]` by value**, valid until the next `Next` or `Close`, and
+  `ErrDone` once the run has ended (was `nil, nil`). Views are read-only projections, and a pointer
+  to the pipeline's own copy would let a consumer overwrite it.
+- **Only a buffer's owner holds it.** `frame` exports the ring write path because owners live in other
+  packages, so possession is the guard: the data layer keeps its buffer in unexported fields and hands
+  out views only.
 
 ## Step 1 — the `flow/frame` package
 
@@ -109,8 +120,7 @@ type Ring[T any] struct {
 func (r *Ring[T]) Start(col int64)
 func (r *Ring[T]) Put(col int64, v T, s State)  // Gap / Ended carry the previous update's Fresh value
 
-func (r *Ring[T]) At(col int64) *Slot[T]        // the slot that holds col, or would
-func (r *Ring[T]) Index(col int64) int          // At's index, for owners keeping data beside the ring
+func (r *Ring[T]) At(col int64) *Slot[T]        // the slot holding col, or nil
 func (r *Ring[T]) First() int64
 func (r *Ring[T]) Len() int64
 func (r *Ring[T]) Bars() int64
@@ -160,6 +170,8 @@ func (v View[T]) Latest(i int) (T, State, int) { return v.buf.rings[i].Latest(v.
 
 ### Tests — new `internal/flow/frame/frame_test.go`
 
+- **`TestRingAt`** — a held column returns its slot; below the first column, overwritten, never
+  written and an empty ring return nil.
 - **`TestRingPut`** — `Fresh` writes; `Gap` and `Ended` carry the last `Fresh` value and column from
   the previous update, or zero and −1 without one; `Ended` records the end; rewriting a column
   replaces its slot.
@@ -183,16 +195,13 @@ func (v View[T]) Latest(i int) (T, State, int) { return v.buf.rings[i].Latest(v.
 
 **`internal/engine/data/buffer.go`**
 
-- `LegState`, `slot` and `ring` are removed. `FrameBuffer` holds the stream table, a
-  `*frame.Buffer[proto.Candle]`, and `counts [][]uint16` — one array per derived stream, indexed like
-  its ring, nil for direct streams.
+- `LegState`, `slot` and `ring` are removed. `FrameBuffer` holds the stream table and a
+  `*frame.Buffer[proto.Candle]`.
 - `newFrameBuffer` keeps its sizing and the 365-day cap, and builds one `frame.Shape` per stream —
   `Slots` as today, `Period`, `Window`, `Bars` — for `frame.NewBuffer`.
 - `ring(s) *frame.Ring[proto.Candle]` returns a stream's ring; `start` calls its `Start`; `put` calls
-  its `Put` and, for a derived stream, stores `count` at `Index(col)`.
+  its `Put` and loses its `count` parameter.
 - `view(col, complete)` returns `frame.NewView(col, b.streams.Stride, frame.Current, complete, b.buf)`.
-- `count(col, s)` — today's `View.Count`: a derived stream's stored count at its latest update; 1
-  for a direct stream once it has a `Fresh` candle; 0 before.
 
 **`internal/engine/data/view.go`** — deleted.
 
@@ -202,21 +211,21 @@ func (v View[T]) Latest(i int) (T, State, int) { return v.buf.rings[i].Latest(v.
 **`internal/engine/data/align.go`** — the ring's `Len` and `Bars` size the aligner; states are
 `frame.*`.
 
-**`internal/engine/data/aggregate.go`** — the source ring through `ring(s)`: `At`, `First`, and the
-slot's `Col`, `Val`, `State`. The update reads the source slot at `col` directly — `At(col)`, held
-when its `Col` is `col` — which is what `latest` returned at a source update column. States are
-`frame.*`.
+**`internal/engine/data/aggregate.go`** — the source ring through `ring(s)`. The update reads the
+source's slot at `col` with `At`; nil means the source has no update there — not started, or ended
+before `col` — and nothing is written. The leaving bar and the window scan read through `At` too.
+The carried `count` and its writes go. States are `frame.*`.
 
 **`internal/engine/data/readiness.go`** — the lead from each direct ring's `Len`, `Bars` and
 `Period`; `complete` calls `ring(s).Latest(col)`; `step`, `release` and `run` carry
 `frame.View[proto.Candle]`.
 
-**`internal/engine/data/data.go`** — `views <-chan frame.View[proto.Candle]`, `now
-frame.View[proto.Candle]`; `Next` returns `*frame.View[proto.Candle]`; `v.col` becomes `v.Col()` in
-`Next` and `Close`.
+**`internal/engine/data/data.go`** — `views <-chan frame.View[proto.Candle]`; `Next` returns
+`(frame.View[proto.Candle], error)`, with `ErrDone` at the end of the run, so the `now` field goes;
+`v.col` becomes `v.Col()` in `Next` and `Close`.
 
-**`internal/engine/data_logger_v2.go`** — `view.Leg(s)` → `view.Latest(s)`, `data.Fresh` →
-`frame.Fresh`, `view.Candles(s, lookback, history)` → `view.Data(s, lookback, history)`; imports
+**`internal/engine/data_logger_v2.go`** — ends its loop on `data.ErrDone`; `view.Leg(s)` →
+`view.Latest(s)`, `data.Fresh` → `frame.Fresh`, `view.Candles(s, lookback, history)` → `view.Data(s, lookback, history)`; imports
 `internal/flow/frame`.
 
 ### Tests
@@ -225,14 +234,18 @@ Mechanical, no behaviour change:
 
 - `LegState` → `frame.State`; `Fresh`, `Gap`, `Ended`, `Current` → `frame.*`; `View` →
   `frame.View[proto.Candle]`; `.col` on a view → `.Col()`.
-- `.Leg(s)` → `.Latest(s)`, `.Candles(s, …)` → `.Data(s, …)`, a view's `.Count(s)` →
-  `f.buf.count(col, s)`.
+- `.Leg(s)` → `.Latest(s)`, `.Candles(s, …)` → `.Data(s, …)`.
 - Direct slot access — `buf.rings[s]`, `.at(col)`, `.first.Load()`, slot fields `col`, `fresh`, `c`,
-  `state`, `count` — → `buf.ring(s).At(col)`, `.First()`, `Col`, `ValCol`, `Val`, `State`,
-  `buf.count(col, s)`.
-- `view_test.go` and `buffer_test.go` keep their tests: they exercise the same reads and writes
-  through the data layer's fixtures, now over `frame`. `TestViewAllocations` reads through
-  `frame.View`.
+  `state` — → `buf.ring(s).At(col)`, `.First()`, `Col`, `ValCol`, `Val`, `State`.
+- The count goes: `put` calls drop their `count` argument; `TestViewCount`, the derived-count `TestPut`
+  case, the model's and the aggregation tests' count expectations are removed; the reference test
+  compares candles and states only. "Ended records the end column" checks a read past the end, since
+  `end` is private to `frame`.
+- `view_test.go` is deleted: its read cases are `frame` behaviour now, and the ones `frame_test.go`
+  lacked — a gap longer than the ring, the age reset after a gap, `Ended` after a gap or before any
+  value, a view pinned before the end, history after the end and across the slot index wrap, a ring
+  filled from its first column — move there. `TestViewBoundary`, which checks the data layer's
+  stride and a 1d stream's UTC-midnight column, moves to `buffer_test.go`.
 
 ### Documentation
 

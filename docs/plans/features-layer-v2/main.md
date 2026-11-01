@@ -48,8 +48,8 @@ From [features.md](../../discussions/features.md):
 
 - **Generic rings in `flow/frame`.** `Slot[T]`, `Ring[T]` and `Buffer[T]` are concrete generic
   types and `View[T]` pins a buffer at a frame: reads are written once and called directly. Each
-  layer sizes and writes its own buffers; the data layer keeps its staging and the derived window
-  count. `View[T]` embeds an unexported header, so a view cannot be re-pinned; views are made with
+  layer sizes and writes its own buffers; the data layer keeps its staging, and the derived window
+  count is dropped. `View[T]` embeds an unexported header, so a view cannot be re-pinned; views are made with
   `NewView` and `Pin`.
 - **Feature slots carry state.** A node writes at every due column of its coordinate — `Fresh`, or
   `Gap` carrying the last `Fresh` value — and `Ended` once its stream ends; a column mismatch means
@@ -58,8 +58,10 @@ From [features.md](../../discussions/features.md):
 - **One typed buffer per feature variant ID**, one ring per stream (per pair for pair features),
   empty where the variant does not run.
 - **Consumers read only the feature layer's view.** `Step` returns a `features.View` pinned at the
-  data view's frame; `ViewOf[T](fv, id)` narrows it to a `frame.View[T]`, type-checked; nodes pin
-  their inputs with `frame.Pin`.
+  data view's frame; `ViewOf[T](fv, id)` narrows it to a `frame.View[T]`, type-checked.
+- **Buffers stay with their owners.** Holding a `frame.Buffer` is holding write access to its rings,
+  so only the data layer and the feature engine hold buffers. Nodes never hold one, not even to pin
+  an input: the engine pins their inputs and hands them views.
 - **`data_logger_v2` only.** Nothing already in place changes: `data_logger`, `FeatureChain`,
   `proto.Feature`, `Snapshot`, `SortedWindow`, the existing feature implementations, `reg.Features`
   and the exporter contract stay as they are, as `data_logger` stayed beside `data_logger_v2`.
@@ -77,7 +79,7 @@ From [features.md](../../discussions/features.md):
 
 Tiered. Stage docs live beside this one, produced iteratively:
 
-- `stage-1-frame.md` — *planned.*
+- `stage-1-frame.md` — *implemented.*
 - `stage-2-universes.md` — *to plan.*
 - `stage-3-contract-store.md` — *to plan.*
 - `stage-4-ported-features.md` — *to plan.*
@@ -102,13 +104,13 @@ data_logger_v2:   features.New(instances) ─▶ loop: data.Next ─▶ pacer �
                                                        └── flow/frame View ────┘ data rings + result rings
 ```
 
-### Stage 1 — `flow/frame`
+### Stage 1 — `flow/frame` ✅ implemented
 
 - **Goal:** generic rings, buffers and pinned views shared by the data buffer and the feature store;
   the data layer runs on them with behaviour unchanged.
 - **Touches:** new `internal/flow/frame` — `Slot[T]`, `Ring[T]`, `Buffer[T]`, `View[T]`, `NewView`,
   `Pin`, `Status`, `State`; `internal/engine/data` (`FrameBuffer` on `frame.Buffer[proto.Candle]`,
-  its count beside the derived rings; `view.go` deleted; `Next` returns `frame.View[proto.Candle]`);
+  the derived window count dropped; `view.go` deleted; `Next` returns `frame.View[proto.Candle]`);
   `internal/engine/data_logger_v2.go`; tests; `docs/Architecture.md`.
 - **Boundary:** the data layer's sizing, staging and gate stay in `internal/engine/data`. No feature
   code yet.
@@ -250,7 +252,7 @@ High-level only.
 ## Open items to resolve within stages
 
 - The contract's home: `internal/protocol` cannot import `flow/frame`, which imports it (stage 3).
-- What `Compute` receives — the data view, with inputs pinned to it — and how a node writes `Gap`
+- What `Compute` receives — its inputs' views, pinned by the engine, never buffers — and how a node writes `Gap`
   for a column it skips (stage 3).
 - The new registry's shape and name beside `reg.Features` (stage 3).
 - The ported features' package (stage 4).

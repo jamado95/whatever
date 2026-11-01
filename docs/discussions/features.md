@@ -150,11 +150,11 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   schedules; `Step(view)` runs one frame.
 - **Universe resolution belongs to config** — a pure function of rules over stream descriptors,
   independent of the feature engine.
-- **A shared `View` in `internal/flow/frame`.** One struct pinned at a column over both the data
-  buffer and the feature store: a read-only snapshot for external consumers. The package holds the
-  generic ring (`{col, value}` slots, reads stepped by `Period × Window`) and generic read functions;
-  candle accessors wrap them. Writes stay inside each layer. Features hold the concrete `View`, so
-  reads are direct calls, without dynamic dispatch.
+- **Views in `internal/flow/frame`.** Generic, concrete rings (`frame.Ring[T]`, one per entry, reads
+  stepped by `Period × Window`) in a `frame.Buffer[T]`, read through a `frame.View[T]` pinned at a
+  frame: a read-only snapshot for consumers, with direct calls. Each layer sizes and writes its own
+  buffers. The frame header is unexported, so a view cannot be re-pinned; views are made with
+  `NewView` and `Pin`.
 
 ### Scheduling and firing
 
@@ -187,11 +187,15 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
 
 - **The feature layer owns the store**; the data layer never sees it. Reverses the feature entries
   sketched in [[data-layer-v2]] § FrameBuffer (`View.Feature`, `FeatureWriter`).
+- **Only the feature engine holds feature buffers.** Holding a `frame.Buffer` is holding write access
+  to its rings, so nodes and consumers get views, never buffers or rings: nodes cannot pin their
+  inputs themselves, and the engine hands them their inputs' views.
 - **One ring per result, each result stored once.** A result is a feature instance at its
   coordinate, keyed `(feature ID, stream)` or `(feature ID, pair)`. A pair result is one ring,
   referenced from both streams.
-- **Slots are `{col, value}`.** A column the feature skipped leaves its slot holding an older column
-  (or −1), so a reader checking `col` sees it absent — no flag, no `nil`, no allocation.
+- **Slots carry their state:** `{Col, ValCol, Val, State}`, as candle slots do. A column a feature
+  skips is a `Gap` slot carrying the last `Fresh` value, so absence is a state rather than a column
+  mismatch.
 - **A value is a float, or the feature's own struct** for multi-output features (MACD). Each ring is
   typed by its feature's value type, so writes never allocate.
 - **Sized to the lookback.** A stream's result rings hold `lookback × Window` slots at its `Period`,
@@ -252,7 +256,7 @@ implementation vehicle.
 | Registry and config | Type → factory and descriptor; variants decoded strictly; `universes` block, `universe` per feature; universe resolution | Config parse, composition root | `internal/registry`, `internal/config` |
 | Expansion | Variants × dependency variants × coordinates; validation; composed IDs | Composition root | `internal/engine/features` (pure function) |
 | Feature engine | Bind instances, allocate the store, due-pattern schedules; `Step(view)` | Construction, then each frame | `internal/engine/features` |
-| Frame primitives | Generic ring, shared `View`, read functions | — | `internal/flow/frame` |
+| Frame primitives | Generic rings and buffers, pinned `View[T]` | — | `internal/flow/frame` |
 | Consumers | Exporter and strategies read through the `View` | After `Step` | — |
 
 Leaving the data path: `Snapshot`, `SortedWindow`, `FeatureChain`, `Update`, and the
@@ -304,7 +308,7 @@ nodes) and every other column (5m nodes). Derived streams take their source's pe
 ### Feature buffer
 
 ```
-results   r → ring of {col, value}          one per (feature ID, stream) or (feature ID, pair)
+results   r → ring of {col, valCol, val, state}   one per (feature ID, stream) or (feature ID, pair)
 streams   A → { rsi_14: r1, zscore_50-rsi_14: r2, corr_100-returns_1 (A,B): r7, (A,C): r8 }
           B → { rsi_14: r3, zscore_50-rsi_14: r4, corr_100-returns_1 (A,B): r7 }   ← r7 stored once
 ```
@@ -380,7 +384,10 @@ bound up with the strategy input contract ([[strategy-layer]]).
 
 ## WIP
 
-- Feature graph agreed in discussion (Decisions § Feature graph onwards); not planned.
+- Feature graph agreed in discussion (Decisions § Feature graph onwards); planned in
+  `docs/plans/features-layer-v2/main.md`.
+- `internal/flow/frame` implemented — generic rings, buffers and pinned views — with the data layer
+  running on it: `docs/plans/features-layer-v2/stage-1-frame.md`.
 - Registered and working: `sma`, `ema`, `rsi`, `vwap`, `engulfing_candle`.
 - `swing_highlow` is broken behind a `wip` build tag. It duplicates swing-detection logic that also
   exists (also broken) inside `buy_the_dip` — see [[strategy-layer]]. Consolidating swing detection

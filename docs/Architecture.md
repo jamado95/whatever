@@ -15,10 +15,11 @@ Core Architecture
 - internal/domains: domain logic (execution, market, monitor, features, provider, risk, strategy)
 - internal/engine: orchestration (backtesting, logging, full runtime)
   - internal/engine/data: data layer v2 module — `DataPipeline` is the data layer's pipeline:
-    stream table, FrameBuffer, per-stream lanes (provider, normalise, align), readiness joined with
-    pipe.FanIn, and rolling aggregation; API `New` (providers initialised by the engine), `Start`,
-    `Next`, `Close`, as built per `docs/plans/data-layer-v2`
-- internal/flow: data-flow primitives — pipe (generic combinators, fanout), align (cross-stream synchronizers), timing (tickers)
+    stream table, FrameBuffer (a `frame.Buffer[proto.Candle]`), per-stream lanes (provider, normalise,
+    align), readiness joined with pipe.FanIn, and rolling aggregation; API `New` (providers
+    initialised by the engine), `Start`, `Next` (frames as `frame.View`s), `Close`, as built per
+    `docs/plans/data-layer-v2`
+- internal/flow: data-flow primitives — pipe (generic combinators, fanout), align (cross-stream synchronizers), timing (tickers), frame (generic rings and buffers, read-only views pinned at a frame)
 - internal/protocol: domain interfaces
 - internal/registry: registers all internal component factories
 

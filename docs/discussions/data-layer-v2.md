@@ -207,11 +207,14 @@ construction, one provider stream.
 ### Aggregation
 
 - **Rolling windows**, derived candles stored in the `FrameBuffer`.
-- **Emitted from the first base candle**, carrying the count of base candles in the window (below `W`
-  during warm-up).
+- **Emitted from the first base candle**; during warm-up the window holds fewer than `W` base
+  candles.
 - **Derived legs take their source's state** at its update columns. Source `Fresh`: the window's
-  candle, count the `Fresh` bars in it. Source `Gap` or `Ended`: that state, carrying the latest
-  `Fresh` derived candle and its count — the same carry a direct leg makes.
+  candle. Source `Gap` or `Ended`: that state, carrying the latest `Fresh` derived candle — the same
+  carry a direct leg makes.
+- **The window's base-candle count is not stored.** Nothing read it, and storing it beside the rings
+  slowed aggregation by ~7 ns per derivation at 1000 streams; it is countable from the source's bars
+  if a consumer needs it (features-layer-v2 stage 1).
 - **The window's candle is built from its `Fresh` bars:** `OpenTs` / `Open` from the oldest,
   `CloseTs` / `Close` from the bar at the column, `High` / `Low` the extremes, `Volume` the sum. At a
   UTC boundary with a full window it is the closed bar.
@@ -288,9 +291,10 @@ construction, one provider stream.
   the `Late` frame applies it and triggers recompute; frames after see revised data with corrected
   history. No frame ever mixes old and revised values.
 - **A frame is its `View`.** The View pinned at the released column carries the frame's `Status()`
-  and `Complete()`; there is no separate event type. `Next(ctx)` returns `(*View, error)`: the frame,
-  valid until the next `Next` or `Close`; `nil, nil` at the end of the run; `ErrNotStarted` before
-  `Start`, `ErrClosed` after `Close`, `ctx.Err()` once `ctx` is done.
+  and `Complete()`; there is no separate event type. `Next(ctx)` returns `(frame.View[proto.Candle],
+  error)`: a copy of the frame, valid until the next `Next` or `Close`; `ErrDone` at the end of the
+  run; `ErrNotStarted` before `Start`, `ErrClosed` after `Close`, `ctx.Err()` once `ctx` is done. A
+  copy, so a consumer cannot overwrite the pipeline's own state.
 - **View lifetime.** The next `Next` consumes the View's column; `Close` consumes the frames it
   discards. Either moves the gate past the View, so ring capacity lets align wrap onto its oldest
   bars. Safe because `Close`, like `Next`, runs on the engine goroutine once it is done with the
@@ -335,6 +339,13 @@ construction, one provider stream.
 - **Owned by the data layer**, which exposes write access for features, strategies and execution.
 - **Capability passing:** components never receive the buffer. Each phase gets a read-only view plus
   only its own section's writer.
+- **Only the data layer holds its buffer.** `frame` exports the ring write path, since owners live
+  in other packages, so holding a `frame.Buffer` is holding write access: nothing above the data
+  layer may hold its buffer or a ring. The guard is possession — the `FrameBuffer`'s buffer and its
+  methods are unexported, and `DataPipeline` exposes no buffer.
+- **Rings, slots and the `View` live in `internal/flow/frame`** (features-layer-v2 stage 1): the
+  `FrameBuffer` is a `frame.Buffer[proto.Candle]` plus the data layer's sizing and staging; reads are
+  `View.Latest` and `View.Data`; leg states and frame statuses are `frame.State` and `frame.Status`.
 - **One ring per stream, one slot per update:** `slot = (col / Period) % size`. Each ring is sized to
   its own stream's reads, so a coarse stream costs its own bars and one deep read no longer sets the
   depth of every stream. Features write an entry for each data view entry (iteration 4,
@@ -363,8 +374,7 @@ construction, one provider stream.
   reads `c, c−60, …`; a direct 1h at 10:30 reads `10:00, 9:00, …`. Newest first; `Gap` and `Ended`
   slots are skipped; a read covers at most the stream's kept bars. Feature history takes its
   stream's step, so a recursive feature on a rolling stream reads its previous same-phase value.
-- **`Leg` of a stream not yet started** is a zero candle, `Gap`, age −1; `Count` is the source bars
-  in the latest window — 1 for a started direct stream.
+- **`Latest` of a stream not yet started** is a zero candle, `Gap`, age −1.
 - **One write path, `put`,** for both writers. Ownership is a convention: a stream's align stage
   writes its direct slots until it sends their evaluate, the engine goroutine only released columns;
   a violation shows up as a data race under `-race`. Rewriting a column replaces its slot.
@@ -488,7 +498,7 @@ for next := head + 1; decided(next) && next <= reach; next++ {
 ### Events
 
 ```go
-package data // internal/engine/data
+package frame // internal/flow/frame
 
 type Status uint8
 
@@ -498,6 +508,8 @@ const (
     Backfill // iteration 3
 )
 
+package data // internal/engine/data
+
 // A frame is its View (§ FrameBuffer): Status(), Complete(), Col() — the absolute column
 // (boundary ms / stride); Current: new head; Late: revised column.
 
@@ -505,7 +517,7 @@ const (
 // the buffer.
 type Leg struct {
     Stream int // index into the layer's stream table
-    State  LegState
+    State  frame.State
     Data   proto.MarketData
 }
 
@@ -513,7 +525,7 @@ type Leg struct {
 func New(providers map[proto.Subscription]proto.DataProvider, lookback int,
     log *logger.Logger) (*DataPipeline, error) // providers initialised for their key
 func (dp *DataPipeline) Start() error
-func (dp *DataPipeline) Next(ctx context.Context) (*View, error) // nil, nil at the end of the run
+func (dp *DataPipeline) Next(ctx context.Context) (frame.View[proto.Candle], error) // ErrDone at the end
 func (dp *DataPipeline) Close()
 ```
 
@@ -524,8 +536,8 @@ column" is checked rather than assumed by consumers.
 // align → readiness, internal
 type evaluate struct {
     stream int
-    col    int64    // the column resolved; Ended: from col on, −1 for a lane without a candle
-    state  LegState // Fresh, Gap, Pending or Ended
+    col    int64       // the column resolved; Ended: from col on, −1 for a lane without a candle
+    state  frame.State // Fresh, Gap, Pending or Ended
 }
 ```
 
@@ -535,51 +547,46 @@ the columns before `f`.
 ### FrameBuffer
 
 ```go
-// One ring per stream, one slot per update (stage 2).
+// internal/flow/frame (features-layer-v2 stage 1): one ring per entry, one slot per update.
+type Slot[T any] struct {
+    Col    int64 // column held; -1 = empty
+    ValCol int64 // column Val was written at: Col when Fresh, the carried value's when not; -1 = none
+    Val    T     // Fresh: its value; Gap / Ended: the last Fresh value
+    State  State // Fresh | Gap | Ended; Pending in iteration 2
+}
+
+type Ring[T any] struct {
+    slots                []Slot[T]
+    period, window, bars int64        // bars kept for reads; the remaining slots are headroom
+    first, end           atomic.Int64 // reads never go below first; end is MaxInt64 while open
+}
+
+type Buffer[T any] struct{ rings []Ring[T] }
+
+// Consumers receive Views, never a buffer; the frame header is unexported, so a view cannot be
+// re-pinned.
+type View[T any] struct { // pinned: sees only columns ≤ col; also the frame released there
+    header // col, stride, status, complete: Col(), Boundary(), Status(), Complete()
+    buf    *Buffer[T]
+}
+
+func (v View[T]) Latest(i int) (T, State, int) // carried: last Fresh value, its age
+func (v View[T]) Data(i, n int, dst []T) []T   // newest first
+
+// internal/engine/data: the data layer's buffer, its writes and its staging.
 type FrameBuffer struct {
     streams *Streams
-    rings   []ring
+    buf     *frame.Buffer[proto.Candle]
 }
 
-type ring struct {
-    slots []slot
-    bars  int64        // bars kept for reads; the remaining slots are headroom
-    first atomic.Int64 // first column; reads never go below it
-    end   atomic.Int64 // Ended column; MaxInt64 while open
-}
-
-type slot struct {
-    col   int64        // column held; -1 = empty
-    fresh int64        // newest Fresh column at or before col; -1 = none
-    c     proto.Candle // Fresh: its candle; Gap / Ended: the last Fresh candle
-    state LegState     // Fresh | Gap | Ended; Pending in iteration 2
-    count uint16       // derived: base candles in the window
-}
-
-func (b *FrameBuffer) put(s int, col int64, c proto.Candle, state LegState, count uint16)
-
-// Components receive a View plus their own writer, never the buffer.
-type View struct { // pinned: sees only columns ≤ col; also the frame released there
-    buf      *FrameBuffer
-    col      int64
-    complete bool
-    status   Status
-}
-
-func (v View) Col() int64
-func (v View) Boundary() int64 // col × Stride: Unix ms, UTC
-func (v View) Complete() bool
-func (v View) Status() Status
-func (v View) Leg(stream int) (c proto.Candle, s LegState, age int) // carried: last Fresh candle, its age
-func (v View) Count(stream int) int
-func (v View) Candles(stream, n int, dst []proto.Candle) []proto.Candle // newest first
+func (b *FrameBuffer) put(s int, col int64, c proto.Candle, state frame.State)
 
 // Later: revisions (iteration 2), records (strategy step loop).
-func (v View) Revised() []int // streams whose legs changed at Col; empty if never revised
+func Revised(v frame.View[proto.Candle]) []int // streams whose legs changed at Col; empty if never revised
 
 type Section[T any] struct{ id int }                   // Signals, Orders, Fills
 type RecordWriter[T any] interface{ Append(recs ...T) } // bound to the current column and the owner's ID
-func Records[T any](v View, s Section[T]) []T
+func Records[T any](v frame.View[proto.Candle], s Section[T]) []T
 ```
 
 - **Pinned views** stop look-ahead: a phase at column `c` cannot read `c+1`.
@@ -659,6 +666,8 @@ func Records[T any](v View, s Section[T]) []T
   alongside `Pending` and `Late`.
 - Readiness's event channel sized from the rings, the largest `spare·Period` over direct streams,
   instead of `defaultHeadroom` — `docs/plans/readiness-views-capacity.md`.
+- The `View`, rings and slots moved to `internal/flow/frame`, and the derived window count was dropped
+  — `docs/plans/features-layer-v2/stage-1-frame.md`.
 
 ## Resources
 

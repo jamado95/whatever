@@ -162,7 +162,7 @@ Stage-level detail in [[data-layer-v2]].
 
 ```go
 for {
-    f, err := data.Next(ctx)          // pinned View, derived legs aggregated; nil, nil at the end
+    f, err := data.Next(ctx)          // pinned View, derived legs aggregated; ErrDone at the end
     fd := features.Step(f)            // ready-driven over the frame's active feature graph
     sigs := strategies.Step(f, fd)    // parallel over woken strategies; merged in ID order
     orders := portfolio.Step(f, sigs) // serial: one ledger, netting, limits
