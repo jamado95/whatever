@@ -65,6 +65,7 @@ func wire(cfg *config.Config, c *components, log *logger.Logger) (reg.Runnable, 
 		depsOK = false // already reported by validate()
 	}
 	engineOpts["_subscriptions"] = cfg.Subscriptions
+	engineOpts["_streams"] = c.streams
 	engineOpts["_providers"] = subProviders
 
 	engineStrategies := make([]proto.Strategy, 0, len(cfg.Engine.Strategies))

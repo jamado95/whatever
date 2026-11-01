@@ -301,7 +301,7 @@ func BenchmarkReadiness(b *testing.B) {
 			for i := range subs {
 				subs[i] = sub(fmt.Sprintf("S%04d", i), proto.Timeframe1m, "bench")
 			}
-			buf, err := newFrameBuffer(NewStreams(subs), 1, defaultHeadroom)
+			buf, err := newFrameBuffer(proto.NewStreams(subs), 1, defaultHeadroom)
 			if err != nil {
 				b.Fatal(err)
 			}

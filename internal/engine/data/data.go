@@ -1,3 +1,6 @@
+// Package data is the data layer v2 module: it turns the stream table and provider
+// instances into in-order frames and owns the FrameBuffer every other layer reads
+// and writes through. See docs/discussions/data-layer-v2.md.
 package data
 
 import (
@@ -29,7 +32,7 @@ frame at a time and Close stops it. Next and Close belong to the engine goroutin
 concurrently.
 */
 type DataPipeline struct {
-	streams *Streams
+	streams *proto.Streams
 	buf     *FrameBuffer
 	gate    *gate
 	lanes   []*lane // per direct stream, in stream-table order
@@ -45,26 +48,33 @@ type DataPipeline struct {
 }
 
 /*
-New builds the data layer over provider instances keyed by their direct subscription, each already
-initialised for it, and instantiates its stages. lookback is the longest read in bars, the same for
-every stream. It performs no I/O and starts nothing; Start runs the layer.
+New builds the data layer over the stream table and provider instances keyed by their direct
+subscription, each already initialised for it, and instantiates its stages. Every direct stream
+needs its own provider, and every provider a direct stream of the table. lookback is the longest
+read in bars, the same for every stream. It performs no I/O and starts nothing; Start runs the layer.
 */
-func New(providers map[proto.Subscription]proto.DataProvider, lookback int, log *logger.Logger) (*DataPipeline, error) {
-	return newDataPipeline(providers, lookback, defaultHeadroom, log)
+func New(
+	streams *proto.Streams,
+	providers map[proto.Subscription]proto.DataProvider,
+	lookback int,
+	log *logger.Logger,
+) (*DataPipeline, error) {
+	return newDataPipeline(streams, providers, lookback, defaultHeadroom, log)
 }
 
 // newDataPipeline is New with the rings' headroom in columns.
 func newDataPipeline(
+	streams *proto.Streams,
 	providers map[proto.Subscription]proto.DataProvider,
 	lookback int,
 	headroom int64,
 	log *logger.Logger,
 ) (*DataPipeline, error) {
-	subs := make([]proto.Subscription, 0, len(providers))
 	for sub := range providers {
-		subs = append(subs, sub)
+		if i, ok := streams.Index(sub.ID()); !ok || i >= streams.Directs {
+			return nil, fmt.Errorf("data: subscription %q is not a direct stream of the table", sub.ID())
+		}
 	}
-	streams := NewStreams(subs)
 
 	buf, err := newFrameBuffer(streams, lookback, headroom)
 	if err != nil {
@@ -104,7 +114,7 @@ func newDataPipeline(
 	}, nil
 }
 
-func (dp *DataPipeline) Streams() *Streams { return dp.streams }
+func (dp *DataPipeline) Streams() *proto.Streams { return dp.streams }
 
 /*
 Start runs each lane under the layer's run context — its provider, then its stages — and joins their

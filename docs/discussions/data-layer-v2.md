@@ -99,7 +99,7 @@ construction, one provider stream.
   stream; deciding when a frame goes out, and whether it is complete, needs every stream due at the
   column.
 - **The data layer does not use `SynchronizerV2`** and never imports `align`. Carried over as ideas,
-  not code: ceilDiv placement (`Streams.column`), readiness against the streams due at a column, and
+  not code: ceilDiv placement (`proto.Streams.Column`), readiness against the streams due at a column, and
   the apply → evaluate → emit loop, rewritten as align → evaluate → release.
 - **Stage convention:** a stage is a `pipe.Stage[In, Out]` — it starts its own goroutine, owns its
   output and closes it once its input closes, and never drops a value silently. Goroutine boundaries
@@ -679,10 +679,9 @@ func Records[T any](v frame.View[proto.Candle], s Section[T]) []T
   instead of `defaultHeadroom` — `docs/plans/readiness-views-capacity.md`.
 - The `View`, rings and slots moved to `internal/flow/frame`, and the derived window count was dropped
   — `docs/plans/features-layer-v2/stage-1-frame.md`.
-- The stream table moves to `internal/protocol`, built by the composition root and injected into
-  `data.New` (§ Subscriptions and the grid) — planned in
-  `docs/plans/features-layer-v2/stage-2-universes.md` step 1. Until it lands, `data.New` builds it
-  with `data.NewStreams`.
+- The stream table moved to `internal/protocol` (`proto.NewStreams`), built by the composition root
+  and injected into `data.New` (§ Subscriptions and the grid) —
+  `docs/plans/features-layer-v2/stage-2-universes.md` step 1.
 
 ## Resources
 

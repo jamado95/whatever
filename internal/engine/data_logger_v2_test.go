@@ -213,12 +213,15 @@ func newTestDataLoggerV2(t *testing.T, cfg DataLoggerOptions, exp proto.Exporter
 		t.Fatalf("NewFeatureChain: %v", err)
 	}
 	m := make(map[proto.Subscription]proto.DataProvider, len(provs))
+	subs := make([]proto.Subscription, 0, len(provs))
 	for sub, p := range provs {
 		m[sub] = p
+		subs = append(subs, sub)
 	}
 	out := &lockedBuffer{}
 	return &DataLoggerV2{
 		id:        "test",
+		streams:   proto.NewStreams(subs),
 		providers: m,
 		chain:     chain,
 		exporter:  exp,
@@ -254,8 +257,9 @@ var (
 	sub1d = proto.Subscription{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1d, Provider: "p1d"}
 )
 
-// TestDataLoggerV2Factory covers construction through the registry: derivations are accepted, bad
-// options and duplicate features are errors, and no provider is initialised.
+// TestDataLoggerV2Factory covers construction through the registry: derivations are accepted, a
+// missing stream table, bad options and duplicate features are errors, and no provider is
+// initialised.
 func TestDataLoggerV2Factory(t *testing.T) {
 	sma, err := reg.Features.Create(feat.SMAID, map[string]any{"period": 3})
 	if err != nil {
@@ -264,6 +268,7 @@ func TestDataLoggerV2Factory(t *testing.T) {
 	p := &barProvider{}
 	opts := func(features []proto.Feature, options map[string]any) map[string]any {
 		o := map[string]any{
+			"_streams":   proto.NewStreams([]proto.Subscription{sub5mDerive1h}),
 			"_providers": map[proto.Subscription]proto.DataProvider{sub5mDerive1h: p},
 			"_features":  features,
 		}
@@ -276,7 +281,10 @@ func TestDataLoggerV2Factory(t *testing.T) {
 	if _, err := reg.Engines.Create(DataLoggerV2ID, opts([]proto.Feature{sma}, nil)); err != nil {
 		t.Fatalf("derived subscription: %v", err)
 	}
+	noStreams := opts(nil, nil)
+	delete(noStreams, "_streams")
 	for name, o := range map[string]map[string]any{
+		"no stream table":    noStreams,
 		"negative limit":     opts(nil, map[string]any{"limit": float64(-1)}),
 		"invalid ticker":     opts(nil, map[string]any{"ticker": map[string]any{"type": "fixedinterval"}}),
 		"duplicate features": opts([]proto.Feature{sma, sma}, nil),

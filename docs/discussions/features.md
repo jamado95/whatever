@@ -395,8 +395,8 @@ bound up with the strategy input contract ([[strategy-layer]]).
   `docs/plans/features-layer-v2/main.md`.
 - `internal/flow/frame` implemented — generic rings, buffers and pinned views — with the data layer
   running on it: `docs/plans/features-layer-v2/stage-1-frame.md`.
-- Planned: the stream table in `internal/protocol`, and universes in config —
-  `docs/plans/features-layer-v2/stage-2-universes.md`.
+- The stream table in `internal/protocol`, built by the composition root, implemented; universes in
+  config planned — `docs/plans/features-layer-v2/stage-2-universes.md`.
 - Registered and working: `sma`, `ema`, `rsi`, `vwap`, `engulfing_candle`.
 - `swing_highlow` is broken behind a `wip` build tag. It duplicates swing-detection logic that also
   exists (also broken) inside `buy_the_dip` — see [[strategy-layer]]. Consolidating swing detection

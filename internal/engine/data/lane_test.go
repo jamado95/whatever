@@ -5,7 +5,9 @@ import (
 	"slices"
 	"testing"
 	"time"
+
 	"whatever/internal/flow/frame"
+	proto "whatever/internal/protocol"
 )
 
 /*
@@ -16,7 +18,7 @@ cancelled.
 */
 func TestLane(t *testing.T) {
 	const d = day0
-	st := NewStreams(testSubs())
+	st := proto.NewStreams(testSubs())
 	s1h, s5m, s1d := mustIndex(t, st, idBTC1h), mustIndex(t, st, idBTC5m), mustIndex(t, st, idETH1d)
 	fs, provs := fakes(st)
 
@@ -41,7 +43,7 @@ func TestLane(t *testing.T) {
 	}
 	want[s5m] = append(want[s5m], evals(s5m, frame.Ended, d+289)...)
 
-	dp, err := newDataPipeline(provs, 20, 600, quiet())
+	dp, err := newDataPipeline(st, provs, 20, 600, quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,14 +83,14 @@ their end.
 */
 func TestLaneIndependent(t *testing.T) {
 	const d = day0
-	st := NewStreams(testSubs())
+	st := proto.NewStreams(testSubs())
 	s1h, s5m, s1d := mustIndex(t, st, idBTC1h), mustIndex(t, st, idBTC5m), mustIndex(t, st, idETH1d)
 	fs, provs := fakes(st)
 	fs[s1h].candles = bars(st, s1h, span(d+12, d+12*1000, 12)...)
 	fs[s5m].candles = bars(st, s5m, span(d+1, d+288, 1)...)
 	fs[s1d].candles = bars(st, s1d, d+288)
 
-	dp, err := newDataPipeline(provs, 20, 1200, quiet()) // the read lanes' rings never make align wait
+	dp, err := newDataPipeline(st, provs, 20, 1200, quiet()) // the read lanes' rings never make align wait
 	if err != nil {
 		t.Fatal(err)
 	}

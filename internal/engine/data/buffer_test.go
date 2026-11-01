@@ -23,7 +23,7 @@ const (
 // fixture is a stream table and its buffer.
 type fixture struct {
 	t   *testing.T
-	st  *Streams
+	st  *proto.Streams
 	buf *FrameBuffer
 }
 
@@ -35,7 +35,7 @@ func newFixture(t *testing.T) fixture {
 
 func newFixtureWith(t *testing.T, subs []proto.Subscription, lookback int, headroom int64) fixture {
 	t.Helper()
-	st := NewStreams(subs)
+	st := proto.NewStreams(subs)
 	buf, err := newFrameBuffer(st, lookback, headroom)
 	if err != nil {
 		t.Fatalf("newFrameBuffer: %v", err)
@@ -139,7 +139,7 @@ func TestNewFrameBuffer(t *testing.T) {
 	})
 
 	t.Run("365 days of bars pass, one more fails naming the stream", func(t *testing.T) {
-		st := NewStreams(testSubs())
+		st := proto.NewStreams(testSubs())
 		if _, err := newFrameBuffer(st, 365, 4); err != nil {
 			t.Fatalf("365 days: %v", err)
 		}
@@ -150,7 +150,7 @@ func TestNewFrameBuffer(t *testing.T) {
 	})
 
 	t.Run("a derived stream over the cap is named, not its source", func(t *testing.T) {
-		st := NewStreams([]proto.Subscription{sub("BTCUSDT", proto.Timeframe5m, "btc_5m", proto.Timeframe1d)})
+		st := proto.NewStreams([]proto.Subscription{sub("BTCUSDT", proto.Timeframe5m, "btc_5m", proto.Timeframe1d)})
 		if _, err := newFrameBuffer(st, 365, 4); err != nil {
 			t.Fatalf("365 days: %v", err)
 		}
@@ -161,7 +161,7 @@ func TestNewFrameBuffer(t *testing.T) {
 	})
 
 	t.Run("negative lookback or headroom fails", func(t *testing.T) {
-		st := NewStreams(testSubs())
+		st := proto.NewStreams(testSubs())
 		if _, err := newFrameBuffer(st, -1, 4); err == nil {
 			t.Error("lookback -1: no error")
 		}

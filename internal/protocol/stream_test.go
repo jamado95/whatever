@@ -1,22 +1,24 @@
-package data
+package proto
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
-
-	proto "whatever/internal/protocol"
 )
 
-func sub(symbol string, tf proto.Timeframe, provider string, derive ...proto.Timeframe) proto.Subscription {
-	return proto.Subscription{Symbol: symbol, Timeframe: tf, Provider: provider,
-		Derive: proto.NewTimeframeDerivationSet(derive...)}
+// day0 is the 5m column of 2024-01-01 00:00 UTC.
+const day0 = 5680224
+
+func sub(symbol string, tf Timeframe, provider string, derive ...Timeframe) Subscription {
+	return Subscription{Symbol: symbol, Timeframe: tf, Provider: provider,
+		Derive: NewTimeframeDerivationSet(derive...)}
 }
 
-func testSubs() []proto.Subscription {
-	return []proto.Subscription{
-		sub("ETHUSDT", proto.Timeframe1d, "eth_1d"),
-		sub("BTCUSDT", proto.Timeframe1h, "btc_1h", proto.Timeframe1d),
-		sub("BTCUSDT", proto.Timeframe5m, "btc_5m", proto.Timeframe1h),
+func testSubs() []Subscription {
+	return []Subscription{
+		sub("ETHUSDT", Timeframe1d, "eth_1d"),
+		sub("BTCUSDT", Timeframe1h, "btc_1h", Timeframe1d),
+		sub("BTCUSDT", Timeframe5m, "btc_5m", Timeframe1h),
 	}
 }
 
@@ -31,7 +33,7 @@ func mustIndex(t *testing.T, st *Streams, id string) int {
 
 func TestStreamsGridIsFinestDirect(t *testing.T) {
 	st := NewStreams(testSubs())
-	if want := proto.Timeframe5m; st.Stride != want.TimeframeMs() {
+	if want := Timeframe5m; st.Stride != want.TimeframeMs() {
 		t.Fatalf("Stride = %d, want %d (5m)", st.Stride, want.TimeframeMs())
 	}
 }
@@ -40,17 +42,17 @@ func TestStreamsEntries(t *testing.T) {
 	st := NewStreams(testSubs())
 	cases := []struct {
 		id     string
-		kind   Kind
+		kind   StreamKind
 		period int64
 		window int64
 		source string // ID of the source stream; "" for direct
 	}{
-		{id: "BTCUSDT:5m:btc_5m", kind: Direct, period: 1, window: 1},
-		{id: "BTCUSDT:1h:btc_1h", kind: Direct, period: 12, window: 1},
-		{id: "ETHUSDT:1d:eth_1d", kind: Direct, period: 288, window: 1},
-		{id: "BTCUSDT:1h:derived_BTCUSDT:5m:btc_5m", kind: Derived, period: 1, window: 12,
+		{id: "BTCUSDT:5m:btc_5m", kind: StreamDirect, period: 1, window: 1},
+		{id: "BTCUSDT:1h:btc_1h", kind: StreamDirect, period: 12, window: 1},
+		{id: "ETHUSDT:1d:eth_1d", kind: StreamDirect, period: 288, window: 1},
+		{id: "BTCUSDT:1h:derived_BTCUSDT:5m:btc_5m", kind: StreamDerived, period: 1, window: 12,
 			source: "BTCUSDT:5m:btc_5m"},
-		{id: "BTCUSDT:1d:derived_BTCUSDT:1h:btc_1h", kind: Derived, period: 12, window: 24,
+		{id: "BTCUSDT:1d:derived_BTCUSDT:1h:btc_1h", kind: StreamDerived, period: 12, window: 24,
 			source: "BTCUSDT:1h:btc_1h"},
 	}
 	if len(st.All) != len(cases) {
@@ -62,7 +64,7 @@ func TestStreamsEntries(t *testing.T) {
 			t.Errorf("%s: Sub.ID() = %q", c.id, s.Sub.ID())
 		}
 		if s.Kind != c.kind || s.Period != c.period || s.Window != c.window {
-			t.Errorf("%s: kind/period/window = %d/%d/%d, want %d/%d/%d",
+			t.Errorf("%s: kind/period/window = %s/%d/%d, want %s/%d/%d",
 				c.id, s.Kind, s.Period, s.Window, c.kind, c.period, c.window)
 		}
 		wantSource := -1
@@ -72,7 +74,7 @@ func TestStreamsEntries(t *testing.T) {
 		if s.Source != wantSource {
 			t.Errorf("%s: Source = %d, want %d", c.id, s.Source, wantSource)
 		}
-		if s.Kind == Derived && s.Sub.Derive != 0 {
+		if s.Kind == StreamDerived && s.Sub.Derive != 0 {
 			t.Errorf("%s: derived stream carries derivations %v", c.id, s.Sub.Derive.List())
 		}
 	}
@@ -129,9 +131,40 @@ func TestStreamsColumn(t *testing.T) {
 		{"boundary + 1 ms", b + 1, day0 + 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := st.column(tc.ts); got != tc.want {
-				t.Fatalf("column(%d) = %d, want %d", tc.ts, got, tc.want)
+			if got := st.Column(tc.ts); got != tc.want {
+				t.Fatalf("Column(%d) = %d, want %d", tc.ts, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestStreamsProvider covers the instance feeding a stream: a direct stream's own, a derived
+// stream's source's.
+func TestStreamsProvider(t *testing.T) {
+	st := NewStreams(testSubs())
+	for id, want := range map[string]string{
+		"BTCUSDT:5m:btc_5m":                    "btc_5m",
+		"ETHUSDT:1d:eth_1d":                    "eth_1d",
+		"BTCUSDT:1h:derived_BTCUSDT:5m:btc_5m": "btc_5m",
+		"BTCUSDT:1d:derived_BTCUSDT:1h:btc_1h": "btc_1h",
+	} {
+		if got := st.Provider(mustIndex(t, st, id)); got != want {
+			t.Errorf("Provider(%s) = %q, want %q", id, got, want)
+		}
+	}
+}
+
+func TestStreamKindUnmarshal(t *testing.T) {
+	for in, want := range map[string]StreamKind{`"direct"`: StreamDirect, `"derived"`: StreamDerived} {
+		var k StreamKind
+		if err := json.Unmarshal([]byte(in), &k); err != nil || k != want {
+			t.Errorf("Unmarshal(%s) = %q, %v; want %q", in, k, err, want)
+		}
+	}
+	for _, in := range []string{`"rolling"`, `""`, `1`} {
+		var k StreamKind
+		if err := json.Unmarshal([]byte(in), &k); err == nil {
+			t.Errorf("Unmarshal(%s) = %q, want an error", in, k)
+		}
 	}
 }

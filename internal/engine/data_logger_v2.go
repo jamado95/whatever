@@ -28,6 +28,11 @@ func init() {
 		log := logger.NewLogger(logger.DefaultLoggerConfig()).
 			With("engine", id)
 
+		streams, err := config.Dep[*proto.Streams](opts, "_streams")
+		if err != nil {
+			return nil, err
+		}
+
 		providers, err := config.Dep[map[proto.Subscription]proto.DataProvider](opts, "_providers")
 		if err != nil {
 			return nil, err
@@ -56,6 +61,7 @@ func init() {
 
 		return &DataLoggerV2{
 			id:        id,
+			streams:   streams,
 			providers: providers,
 			chain:     chain,
 			exporter:  exporter,
@@ -75,6 +81,7 @@ or Close is called; the data layer is then closed, then the exporter.
 */
 type DataLoggerV2 struct {
 	id        string
+	streams   *proto.Streams
 	providers map[proto.Subscription]proto.DataProvider
 	chain     *feat.FeatureChain
 	exporter  proto.Exporter // nil: frames are logged only
@@ -121,7 +128,7 @@ func (e *DataLoggerV2) Run(ctx context.Context) error {
 		}
 	}
 
-	dp, err := data.New(e.providers, e.chain.Lookback(), e.logger)
+	dp, err := data.New(e.streams, e.providers, e.chain.Lookback(), e.logger)
 	if err != nil {
 		return err
 	}

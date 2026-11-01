@@ -24,7 +24,7 @@ func quiet() *logger.Logger {
 bar is a valid Binance-style candle of stream s closing at col: CloseTs is the boundary − 1 ms and
 the span is the timeframe − 1 ms. Prices are distinct per column.
 */
-func bar(st *Streams, s int, col int64) proto.Candle {
+func bar(st *proto.Streams, s int, col int64) proto.Candle {
 	closeTs := col*st.Stride - 1
 	p := float64(col)
 	return proto.Candle{
@@ -34,7 +34,7 @@ func bar(st *Streams, s int, col int64) proto.Candle {
 }
 
 // bars returns stream s's bars at cols.
-func bars(st *Streams, s int, cols ...int64) []proto.Candle {
+func bars(st *proto.Streams, s int, cols ...int64) []proto.Candle {
 	out := make([]proto.Candle, len(cols))
 	for i, col := range cols {
 		out[i] = bar(st, s, col)
@@ -63,7 +63,7 @@ column, an identical duplicate, and a column not beyond the last accepted one. R
 reason, and a dropped candle moves nothing.
 */
 func TestNormaliseAccept(t *testing.T) {
-	st := NewStreams(testSubs())
+	st := proto.NewStreams(testSubs())
 	s5m, s1h := mustIndex(t, st, idBTC5m), mustIndex(t, st, idBTC1h)
 	const col = day0 + 7
 
@@ -167,7 +167,7 @@ TestNormaliseRun covers the stage: accepted candles in input order, then a close
 marker; drop counters; and logging, which warns once per rule and summarises when the input ends.
 */
 func TestNormaliseRun(t *testing.T) {
-	st := NewStreams(testSubs())
+	st := proto.NewStreams(testSubs())
 	s5m, s1h := mustIndex(t, st, idBTC5m), mustIndex(t, st, idBTC1h)
 	item := func(s int, col int64) laneItem { return laneItem{col: col, c: bar(st, s, col)} }
 

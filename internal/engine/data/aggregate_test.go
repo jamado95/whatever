@@ -96,7 +96,7 @@ expect computes derived stream d's leg at col by brute force over its source's s
 latest update at or before col decides the state; the candle aggregates the Fresh bars in the window
 ending at the source's latest Fresh bar, which Gap and Ended carry.
 */
-func expect(st *Streams, d int, l staged, c func(int64) proto.Candle, col int64) leg {
+func expect(st *proto.Streams, d int, l staged, c func(int64) proto.Candle, col int64) leg {
 	ds := st.All[d]
 	p := ds.Period
 	a := col - col%p
@@ -324,7 +324,7 @@ func BenchmarkAggregate(b *testing.B) {
 			for i := range subs {
 				subs[i] = sub(fmt.Sprintf("S%04d", i), proto.Timeframe1m, "bench", proto.Timeframe1h)
 			}
-			buf, err := newFrameBuffer(NewStreams(subs), 1, defaultHeadroom)
+			buf, err := newFrameBuffer(proto.NewStreams(subs), 1, defaultHeadroom)
 			if err != nil {
 				b.Fatal(err)
 			}

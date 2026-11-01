@@ -20,7 +20,7 @@ writes released columns and reads through pinned Views. Nothing is locked: the e
 sends publish the align stages' slots, and ring capacity keeps their writes off the slots views read.
 */
 type FrameBuffer struct {
-	streams *Streams
+	streams *proto.Streams
 	buf     *frame.Buffer[proto.Candle]
 }
 
@@ -32,7 +32,7 @@ derived from it; a derived stream keeps max(lookback, 1) bars of Window slots ea
 ceil(headroom / Period) slots plus one spare. A stream whose kept bars span more than 365 days is an
 error.
 */
-func newFrameBuffer(streams *Streams, lookback int, headroom int64) (*FrameBuffer, error) {
+func newFrameBuffer(streams *proto.Streams, lookback int, headroom int64) (*FrameBuffer, error) {
 	if lookback < 0 || headroom < 0 {
 		return nil, fmt.Errorf("frame buffer: lookback %d and headroom %d must not be negative",
 			lookback, headroom)

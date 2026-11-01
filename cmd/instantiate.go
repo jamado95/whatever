@@ -11,6 +11,7 @@ import (
 
 // components holds every instantiated component, keyed the way wiring resolves them.
 type components struct {
+	streams        *proto.Streams                // the stream table, built once from the subscriptions
 	providers      map[string]proto.DataProvider // by config name
 	strategies     map[string]proto.Strategy     // by type
 	features       []proto.Feature
@@ -25,6 +26,7 @@ type components struct {
 func instantiate(cfg *config.Config, log *logger.Logger) (*components, []error) {
 	var errs []error
 	c := &components{
+		streams:    proto.NewStreams(cfg.Subscriptions),
 		providers:  make(map[string]proto.DataProvider),
 		strategies: make(map[string]proto.Strategy),
 		features:   make([]proto.Feature, 0),

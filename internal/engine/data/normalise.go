@@ -46,7 +46,7 @@ const laneBuffer = 100
 
 // normaliser is the normalise stage of one direct stream's lane; only its goroutine touches its state.
 type normaliser struct {
-	streams *Streams
+	streams *proto.Streams
 	stream  int
 	tfMs    int64
 	last    proto.Candle // last accepted candle
@@ -55,7 +55,7 @@ type normaliser struct {
 	log     *logger.Logger
 }
 
-func newNormaliser(streams *Streams, stream int, log *logger.Logger) *normaliser {
+func newNormaliser(streams *proto.Streams, stream int, log *logger.Logger) *normaliser {
 	s := streams.All[stream]
 	return &normaliser{
 		streams: streams,
@@ -105,7 +105,7 @@ func (n *normaliser) accept(c proto.Candle) (int64, drop) {
 		return 0, invalid
 	}
 
-	col := n.streams.column(c.CloseTs)
+	col := n.streams.Column(c.CloseTs)
 	switch {
 	case col%n.streams.All[n.stream].Period != 0: // due
 		return col, offDue

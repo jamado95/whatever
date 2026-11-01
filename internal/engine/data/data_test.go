@@ -97,9 +97,31 @@ func (p *fakeProvider) Close() {
 	})
 }
 
+func sub(symbol string, tf proto.Timeframe, provider string, derive ...proto.Timeframe) proto.Subscription {
+	return proto.Subscription{Symbol: symbol, Timeframe: tf, Provider: provider,
+		Derive: proto.NewTimeframeDerivationSet(derive...)}
+}
+
+func testSubs() []proto.Subscription {
+	return []proto.Subscription{
+		sub("ETHUSDT", proto.Timeframe1d, "eth_1d"),
+		sub("BTCUSDT", proto.Timeframe1h, "btc_1h", proto.Timeframe1d),
+		sub("BTCUSDT", proto.Timeframe5m, "btc_5m", proto.Timeframe1h),
+	}
+}
+
+func mustIndex(t *testing.T, st *proto.Streams, id string) int {
+	t.Helper()
+	i, ok := st.Index(id)
+	if !ok {
+		t.Fatalf("Index(%q) not found", id)
+	}
+	return i
+}
+
 // fakes returns one fake provider per direct stream of st, initialised for its subscription, by
 // stream index and keyed by subscription.
-func fakes(st *Streams) ([]*fakeProvider, map[proto.Subscription]proto.DataProvider) {
+func fakes(st *proto.Streams) ([]*fakeProvider, map[proto.Subscription]proto.DataProvider) {
 	fs := make([]*fakeProvider, st.Directs)
 	m := make(map[proto.Subscription]proto.DataProvider, st.Directs)
 	for s := range fs {
@@ -111,12 +133,12 @@ func fakes(st *Streams) ([]*fakeProvider, map[proto.Subscription]proto.DataProvi
 }
 
 // startDataPipeline builds a layer over testSubs with fake providers fed by feed, and starts it.
-func startDataPipeline(t *testing.T, headroom int64, log *logger.Logger, feed func(*Streams, []*fakeProvider)) (*DataPipeline, []*fakeProvider) {
+func startDataPipeline(t *testing.T, headroom int64, log *logger.Logger, feed func(*proto.Streams, []*fakeProvider)) (*DataPipeline, []*fakeProvider) {
 	t.Helper()
-	st := NewStreams(testSubs())
+	st := proto.NewStreams(testSubs())
 	fs, provs := fakes(st)
 	feed(st, fs)
-	dp, err := newDataPipeline(provs, 20, headroom, log)
+	dp, err := newDataPipeline(st, provs, 20, headroom, log)
 	if err != nil {
 		t.Fatalf("newDataPipeline: %v", err)
 	}
@@ -204,18 +226,18 @@ func model(buf *FrameBuffer, accepted map[int][]int64) []frame.View[proto.Candle
 }
 
 /*
-TestNew covers construction from the provider map: a nil provider, one provider instance for two
-subscriptions and the 365-day cap are errors; the stream table comes from the keys, derived streams
-included; nothing runs.
+TestNew covers construction from the stream table and the provider map: a nil provider, one provider
+instance for two subscriptions, a provider outside the table's direct streams and the 365-day cap are
+errors; the table is used as given; nothing runs.
 */
 func TestNew(t *testing.T) {
-	st := NewStreams(testSubs())
+	st := proto.NewStreams(testSubs())
 	s5m := mustIndex(t, st, idBTC5m)
 
 	t.Run("a nil provider", func(t *testing.T) {
 		_, provs := fakes(st)
 		provs[st.All[s5m].Sub] = nil
-		if _, err := New(provs, 20, quiet()); err == nil || !strings.Contains(err.Error(), idBTC5m) {
+		if _, err := New(st, provs, 20, quiet()); err == nil || !strings.Contains(err.Error(), idBTC5m) {
 			t.Fatalf("err = %v, want one naming %s", err, idBTC5m)
 		}
 	})
@@ -223,28 +245,37 @@ func TestNew(t *testing.T) {
 	t.Run("one provider instance for two subscriptions", func(t *testing.T) {
 		fs, provs := fakes(st)
 		provs[st.All[s5m].Sub] = fs[mustIndex(t, st, idBTC1h)]
-		if _, err := New(provs, 20, quiet()); err == nil || !strings.Contains(err.Error(), idBTC5m) {
+		if _, err := New(st, provs, 20, quiet()); err == nil || !strings.Contains(err.Error(), idBTC5m) {
 			t.Fatalf("err = %v, want one naming %s", err, idBTC5m)
+		}
+	})
+
+	t.Run("a provider outside the table's direct streams", func(t *testing.T) {
+		derived := st.All[mustIndex(t, st, "BTCUSDT:1h:derived_BTCUSDT:5m:btc_5m")].Sub
+		for _, s := range []proto.Subscription{sub("SOLUSDT", proto.Timeframe1h, "sol_1h"), derived} {
+			_, provs := fakes(st)
+			provs[s] = &fakeProvider{}
+			if _, err := New(st, provs, 20, quiet()); err == nil || !strings.Contains(err.Error(), s.ID()) {
+				t.Errorf("err = %v, want one naming %s", err, s.ID())
+			}
 		}
 	})
 
 	t.Run("the 365-day cap", func(t *testing.T) {
 		_, provs := fakes(st)
-		if _, err := New(provs, 400, quiet()); err == nil || !strings.Contains(err.Error(), "365-day") {
+		if _, err := New(st, provs, 400, quiet()); err == nil || !strings.Contains(err.Error(), "365-day") {
 			t.Fatalf("err = %v, want the 365-day cap", err)
 		}
 	})
 
 	t.Run("built, not run", func(t *testing.T) {
 		fs, provs := fakes(st)
-		dp, err := New(provs, 20, quiet())
+		dp, err := New(st, provs, 20, quiet())
 		if err != nil {
 			t.Fatal(err)
 		}
-		for i, s := range st.All {
-			if j, ok := dp.Streams().Index(s.Sub.ID()); !ok || j != i {
-				t.Errorf("stream %s at %d, %v; want %d", s.Sub.ID(), j, ok, i)
-			}
+		if dp.Streams() != st {
+			t.Error("Streams() is not the table New was given")
 		}
 		for s, f := range fs {
 			if f.starts.Load()+f.closes.Load() != 0 {
@@ -266,7 +297,7 @@ func TestDataPipelineRun(t *testing.T) {
 	const d = day0
 	var s5m, s1h, s1d int
 	var fiveMin []int64
-	dp, _ := startDataPipeline(t, 4, quiet(), func(st *Streams, fs []*fakeProvider) {
+	dp, _ := startDataPipeline(t, 4, quiet(), func(st *proto.Streams, fs []*fakeProvider) {
 		s5m, s1h, s1d = mustIndex(t, st, idBTC5m), mustIndex(t, st, idBTC1h), mustIndex(t, st, idETH1d)
 		fiveMin = slices.DeleteFunc(span(d+1, d+288, 1), func(c int64) bool { return c == d+50 })
 		fs[s5m].candles = bars(st, s5m, fiveMin...)
@@ -309,7 +340,7 @@ func TestDataPipelineRun(t *testing.T) {
 // TestDataPipelineCancel covers a cancelled context: Next returns its error, and Close still
 // returns.
 func TestDataPipelineCancel(t *testing.T) {
-	dp, _ := startDataPipeline(t, 4, quiet(), func(st *Streams, fs []*fakeProvider) {
+	dp, _ := startDataPipeline(t, 4, quiet(), func(st *proto.Streams, fs []*fakeProvider) {
 		s := mustIndex(t, st, idBTC5m)
 		fs[s].candles = bars(st, s, span(day0, day0+1000, 1)...)
 	})
@@ -332,7 +363,7 @@ func TestDataPipelineClose(t *testing.T) {
 	const d = day0
 	for _, headroom := range []int64{4, 600} {
 		t.Run(strconv.FormatInt(headroom, 10), func(t *testing.T) {
-			dp, fs := startDataPipeline(t, headroom, quiet(), func(st *Streams, fs []*fakeProvider) {
+			dp, fs := startDataPipeline(t, headroom, quiet(), func(st *proto.Streams, fs []*fakeProvider) {
 				for s, cols := range map[string][]int64{
 					idBTC5m: span(d, d+2000, 1), idBTC1h: span(d, d+2000, 12), idETH1d: span(d, d+2000, 288),
 				} {
@@ -372,7 +403,7 @@ func TestDataPipelineClose(t *testing.T) {
 	}
 
 	t.Run("after the run ends", func(t *testing.T) {
-		dp, fs := startDataPipeline(t, 4, quiet(), func(st *Streams, fs []*fakeProvider) {
+		dp, fs := startDataPipeline(t, 4, quiet(), func(st *proto.Streams, fs []*fakeProvider) {
 			for s := range fs {
 				fs[s].candles = bars(st, s, span(d+288, d+576, st.All[s].Period)...)
 			}
@@ -395,11 +426,11 @@ already running included, even one whose align stage waits on ring capacity — 
 Close; a layer starts once, and not after Close.
 */
 func TestDataPipelineStart(t *testing.T) {
-	st := NewStreams(testSubs())
+	st := proto.NewStreams(testSubs())
 	build := func(t *testing.T, fail func([]*fakeProvider)) (*DataPipeline, []*fakeProvider) {
 		fs, provs := fakes(st)
 		fail(fs)
-		dp, err := New(provs, 20, quiet())
+		dp, err := New(st, provs, 20, quiet())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -483,7 +514,7 @@ func TestDataPipelineProviderErrors(t *testing.T) {
 	const n = 25
 	var out lockedBuffer
 	dp, _ := startDataPipeline(t, 4, logger.NewLogger(logger.LoggerConfig{Level: "debug", Output: &out}),
-		func(st *Streams, fs []*fakeProvider) {
+		func(st *proto.Streams, fs []*fakeProvider) {
 			s := mustIndex(t, st, idBTC5m)
 			fs[s].candles = bars(st, s, span(day0, day0+100, 1)...)
 			for range n {
@@ -507,7 +538,7 @@ ahead — meaningful under -race.
 */
 func TestDataPipelineSkew(t *testing.T) {
 	const d = day0
-	st := NewStreams(testSubs())
+	st := proto.NewStreams(testSubs())
 	cols := map[int][]int64{
 		mustIndex(t, st, idBTC5m): span(d+1, d+2880, 1),
 		mustIndex(t, st, idBTC1h): span(d+12, d+2880, 12),
@@ -515,7 +546,7 @@ func TestDataPipelineSkew(t *testing.T) {
 	}
 
 	for _, slow := range [][]string{{idBTC5m}, {idBTC1h, idETH1d}} {
-		dp, _ := startDataPipeline(t, 4, quiet(), func(st *Streams, fs []*fakeProvider) {
+		dp, _ := startDataPipeline(t, 4, quiet(), func(st *proto.Streams, fs []*fakeProvider) {
 			for s, cs := range cols {
 				fs[s].candles = bars(st, s, cs...)
 				fs[s].throttle = slices.Contains(slow, st.All[s].Sub.ID())
@@ -542,7 +573,7 @@ the model's frames, and every leg, direct and derived, carries the last Fresh ca
 */
 func TestDataPipelineLongGap(t *testing.T) {
 	const d = day0
-	st := NewStreams(testSubs())
+	st := proto.NewStreams(testSubs())
 	s5m, s1h, s1d := mustIndex(t, st, idBTC5m), mustIndex(t, st, idBTC1h), mustIndex(t, st, idETH1d)
 	cols := map[int][]int64{
 		s5m: slices.DeleteFunc(span(d, d+1440, 1), func(c int64) bool { return c >= d+100 && c < d+200 }),
@@ -551,7 +582,7 @@ func TestDataPipelineLongGap(t *testing.T) {
 	}
 
 	for _, slow := range []string{idBTC5m, idBTC1h} {
-		dp, _ := startDataPipeline(t, 4, quiet(), func(st *Streams, fs []*fakeProvider) {
+		dp, _ := startDataPipeline(t, 4, quiet(), func(st *proto.Streams, fs []*fakeProvider) {
 			for s, cs := range cols {
 				fs[s].candles = bars(st, s, cs...)
 				fs[s].throttle = st.All[s].Sub.ID() == slow
@@ -560,7 +591,7 @@ func TestDataPipelineLongGap(t *testing.T) {
 		got := nextAll(t, dp, func(v frame.View[proto.Candle]) {
 			for s, stream := range st.All {
 				src := s
-				if stream.Kind == Derived {
+				if stream.Kind == proto.StreamDerived {
 					src = stream.Source
 				}
 				want := expect(st, s, staged{fresh: cols[src], ended: true},
@@ -647,7 +678,7 @@ func TestDataPipelineReference(t *testing.T) {
 		provs[subs[i]] = p
 	}
 
-	dp, err := New(provs, 1, quiet())
+	dp, err := New(proto.NewStreams(subs), provs, 1, quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
