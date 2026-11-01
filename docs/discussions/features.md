@@ -148,7 +148,11 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   into instances with composed IDs; the composition root calls it and injects the instances, keeping
   today's dependency injection. The feature engine binds them, allocates the store and builds the
   schedules; `Step(view)` runs one frame.
-- **Universe resolution belongs to config** — a pure function of rules over stream descriptors,
+- **One stream table for every layer.** The stream table is its own protocol domain
+  (`proto.Streams`), built once by the composition root and injected into the data layer and the
+  feature layer: a stream's index in it is its index in the data rings, the feature buffers and
+  resolved universes ([[data-layer-v2]] § Subscriptions and the grid).
+- **Universe resolution belongs to config** — a pure function of rules over the stream table,
   independent of the feature engine.
 - **Views in `internal/flow/frame`.** Generic, concrete rings (`frame.Ring[T]`, one per entry, reads
   stepped by `Period × Window`) in a `frame.Buffer[T]`, read through a `frame.View[T]` pinned at a
@@ -225,13 +229,15 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   - `references` — each reference paired with every stream passing the filters;
   - `pairs` — a list of explicit pairs, or `"*"` for every pair of streams passing the filters.
 
-  Named streams are taken as named; filters choose their partners.
-- **Filters:** symbol (with globs, `*USDT`), timeframe, provider, kind (direct / derived). A list is
-  OR, fields are AND.
-- **Derived streams match by their own timeframe** and their source's provider. A named stream
-  matches the direct and the derived stream of that symbol, timeframe and provider; `kind` picks
-  one, and without it both match. No derived ID is ever needed. Config rejects deriving the same
-  `(symbol, timeframe, provider)` twice, so a name never matches two derived streams.
+  Named streams are taken as named; filters, `kind` included, choose their partners. An
+  explicit-pairs rule takes no filter.
+- **Filters:** symbol and provider (instance names), both with globs (`*USDT`, `btc_*`); timeframe;
+  kind (direct / derived). A list is OR, fields are AND, an absent field does not constrain.
+- **A named stream is its stream ID** — a direct stream's subscription ID (`BTCUSDT:1h:binance`), a
+  derived stream's `symbol:timeframe:derived_<source ID>` (`BTCUSDT:1h:derived_BTCUSDT:5m:binance`)
+  — so a name matches at most one stream, and one that matches none is an error. Filters match a
+  derived stream by its own timeframe and its source's provider. Stream IDs are unique by
+  construction, so no rule on derivations is needed.
 - **No rules over both ends of a pair.** Same-timeframe pairs come from one `*` rule per timeframe.
 
 ## Solution
@@ -253,6 +259,7 @@ implementation vehicle.
 | Piece | Job | When | Home |
 |---|---|---|---|
 | Feature types | Pure maths; base ID, descriptor and factory registered | — | `internal/domains/features` |
+| Stream table | One entry per direct subscription and derived window; the index space of every layer | Composition root | `internal/protocol` |
 | Registry and config | Type → factory and descriptor; variants decoded strictly; `universes` block, `universe` per feature; universe resolution | Config parse, composition root | `internal/registry`, `internal/config` |
 | Expansion | Variants × dependency variants × coordinates; validation; composed IDs | Composition root | `internal/engine/features` (pure function) |
 | Feature engine | Bind instances, allocate the store, due-pattern schedules; `Step(view)` | Construction, then each frame | `internal/engine/features` |
@@ -388,6 +395,8 @@ bound up with the strategy input contract ([[strategy-layer]]).
   `docs/plans/features-layer-v2/main.md`.
 - `internal/flow/frame` implemented — generic rings, buffers and pinned views — with the data layer
   running on it: `docs/plans/features-layer-v2/stage-1-frame.md`.
+- Planned: the stream table in `internal/protocol`, and universes in config —
+  `docs/plans/features-layer-v2/stage-2-universes.md`.
 - Registered and working: `sma`, `ema`, `rsi`, `vwap`, `engulfing_candle`.
 - `swing_highlow` is broken behind a `wip` build tag. It duplicates swing-detection logic that also
   exists (also broken) inside `buy_the_dip` — see [[strategy-layer]]. Consolidating swing detection

@@ -80,7 +80,7 @@ From [features.md](../../discussions/features.md):
 Tiered. Stage docs live beside this one, produced iteratively:
 
 - `stage-1-frame.md` — *implemented.*
-- `stage-2-universes.md` — *to plan.*
+- `stage-2-universes.md` — *planned.*
 - `stage-3-contract-store.md` — *to plan.*
 - `stage-4-ported-features.md` — *to plan.*
 - `stage-5-expansion.md` — *to plan.*
@@ -119,19 +119,23 @@ data_logger_v2:   features.New(instances) ─▶ loop: data.Next ─▶ pacer �
   benchmarks within noise; `data_logger_v2` output unchanged.
 - Plan: `stage-1-frame.md`.
 
-### Stage 2 — config: universes
+### Stage 2 — stream table and universes
 
-- **Goal:** universes are declared, validated and resolvable.
-- **Touches:** `internal/config` — the `universes` block, `universe` on feature entries, the resolver
-  (a pure function of rules over stream descriptors built from subscriptions and their
-  derivations), the rule that each `(symbol, derived timeframe, provider)` is derived at most once;
-  tests.
-- **Boundary:** nothing consumes universes yet; `data_logger` ignores them.
+- **Goal:** one stream table shared by config, the data layer and the feature layer; universes are
+  declared, validated and resolvable over it.
+- **Touches:** `internal/protocol` — the stream table, moved from `internal/engine/data`, built by the
+  composition root and injected into `data.New` (`internal/engine/data`, `data_logger_v2`, `cmd`);
+  `internal/config` — the `universes` block, `universe` on feature entries, the resolver (a pure
+  function of rules over the stream table, naming streams by their IDs), every validation error
+  collected; tests; `configs/README.md`, the config guide.
+- **Boundary:** the data layer runs on the injected table with behaviour unchanged; nothing consumes
+  universes yet; `data_logger` ignores them.
 - **Acceptance:** resolution unit-tested for stream selection, references, explicit pairs and `*`;
-  filters with symbol globs; `kind` choosing between a direct and a derived match, both without it;
-  derived streams matching their source's provider; duplicate pairs collapsing and self-pairs
-  excluded. Path-named errors for unknown universes, malformed rules and duplicate derivations;
+  filters with symbol and provider globs; `kind` as a filter; derived streams named by their ID and
+  matching their source's provider in filters; duplicate pairs collapsing and self-pairs excluded.
+  Path-named errors for unknown universes, malformed rules and unknown stream IDs;
   `--validate-only` covers them.
+- Plan: `stage-2-universes.md`.
 
 ### Stage 3 — contract, registry and store
 
@@ -229,15 +233,19 @@ High-level only.
 - [features.md](../../discussions/features.md): WIP references this plan; Solution references each
   executed stage; resolve the open items below.
 - [data-layer-v2.md](../../discussions/data-layer-v2.md): the `View` and rings in `flow/frame`
-  (stage 1); feature entries in the feature layer (stage 7).
+  (stage 1); the stream table in `internal/protocol`, built by the composition root (stage 2);
+  feature entries in the feature layer (stage 7).
 - [pipeline-runtime.md](../../discussions/pipeline-runtime.md): Features phase implemented, serial
   (stage 6).
-- [config.md](../../discussions/config.md): universes and the derivation rule implemented
+- [config.md](../../discussions/config.md): universes implemented, the derivation rule dropped
   (stage 2).
 - [README.md](../../discussions/README.md): features row status.
 - [data layer v2 main plan](../data-layer-v2/main.md): iteration 4 points to this plan.
-- `docs/Architecture.md`: `internal/flow/frame` (stage 1), `internal/engine/features` (stage 6).
+- `docs/Architecture.md`: `internal/flow/frame` (stage 1), the stream table in `internal/protocol`
+  (stage 2), `internal/engine/features` (stage 6).
 - `docs/Commands.md`: benchmark commands (stage 7).
+- `configs/README.md`: written in stage 2; pair-feature rules (stage 5); universes in use, and the
+  feature types from the new registry (stage 7).
 
 ## Out of scope
 
@@ -256,7 +264,8 @@ High-level only.
   for a column it skips (stage 3).
 - The new registry's shape and name beside `reg.Features` (stage 3).
 - The ported features' package (stage 4).
-- How the composition root builds the stream table `Expand` needs (stage 5).
+- How the composition root builds the stream table `Expand` needs — resolved in stage 2:
+  `proto.NewStreams`, injected as `_streams`.
 - Filling the exported record from results — the exporter contract is untouched (stage 7).
 - `FeatureChain.Evaluate` loses its only caller in stage 7: kept as the regression reference, or
   removed with the bridge (stage 7).

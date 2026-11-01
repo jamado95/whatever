@@ -149,16 +149,19 @@ Resolved by this work: silent ticker fallback, triplicated engine parsers, untyp
   validated today; enabling it will surface the mismatch.
 - `swing_highlow` was updated but sits behind a `//go:build wip` tag, so it is not in the default
   build and its `Validate()` (even period) is unexercised.
-- **Config changes agreed in [[features]]**, not yet planned:
+- **Config changes agreed in [[features]]**, planned in
+  `docs/plans/features-layer-v2/stage-2-universes.md`:
   - **`universes` block, and `universe` per feature** — named stream and pair sets built from
     self-contained rules (references, explicit pairs, `*`) with filters on symbol, timeframe,
     provider and kind. See [features § Universes](features.md#universes); example config in
     [features § Solution — Universes](features.md#universes-1).
-  - **Universe resolution is config's** — a pure function of rules over stream descriptors. See
+  - **Universe resolution is config's** — a pure function of rules over the stream table
+    (`proto.Streams`). `Load` checks universes' shape only; the composition root builds the table
+    once in `instantiate`, resolves universes over it through config, and injects the table as
+    `_streams`. See
     [features § Feature layer](features.md#feature-layer).
-  - **New subscription rule:** each `(symbol, derived timeframe, provider)` is derived at most once,
-    so a stream named in a rule never matches two derived streams. See
-    [features § Universes](features.md#universes).
+  - **Rules name streams by their stream IDs**, derived ones included, so a name matches at most one
+    stream and subscriptions need no new rule. See [features § Universes](features.md#universes).
   - **Composition is never in config.** Dependencies come from each feature type's registered
     descriptor, which validation reads without instantiating; a dependency type with no configured
     variant is an error. Factories keep building variant IDs. See

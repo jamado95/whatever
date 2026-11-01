@@ -87,8 +87,9 @@ construction, one provider stream.
 
 ### Module and stages
 
-- **Module `internal/engine/data`.** In: provider instances, initialised by the engine and keyed by
-  their direct subscription. Out: in-order frame events and the `FrameBuffer`.
+- **Module `internal/engine/data`.** In: the stream table (`proto.Streams`, built by the composition
+  root) and provider instances, initialised by the engine and keyed by their direct subscription.
+  Out: in-order frame events and the `FrameBuffer`.
 - **Stage order.** Per direct stream, a lane, one goroutine per stage: ingest → normalise → deadline
   (live only) → align. Then one readiness stage (ready → commit) releases columns and emits their events in
   column order. Aggregation runs when the engine dequeues an event (see Consumption).
@@ -191,11 +192,13 @@ construction, one provider stream.
 - **Config parsing validates subscriptions:** stream IDs are unique — a symbol may have several
   direct timeframes on one provider; each derived window is coarser than its source and a multiple of
   it; provider names may not start with `derived_`.
-- **The stream table is built by the data layer** (`data.NewStreams`), never by the composition
-  root: one stream per direct subscription and per derived window, direct streams first, then
-  derived, each sorted by ID. A derived stream's ID is `symbol:timeframe:derived_<source ID>`, e.g.
-  `BTCUSDT:1h:derived_BTCUSDT:1m:binance`, assigned only there. Strategy references stay direct-only
-  until the strategy layer decides otherwise.
+- **The stream table is its own protocol domain** (`proto.NewStreams`, `internal/protocol`), built
+  once by the composition root from the validated subscriptions and injected into `data.New`: one
+  stream per direct subscription and per derived window, direct streams first, then derived, each
+  sorted by ID. Config resolves universes over it and the feature layer indexes its buffers by it, so
+  every layer shares one index space. A derived stream's ID is `symbol:timeframe:derived_<source ID>`,
+  e.g. `BTCUSDT:1h:derived_BTCUSDT:1m:binance`, assigned only in `NewStreams`. Strategy references
+  stay direct-only until the strategy layer decides otherwise. See § Reversed on 2026-11-01.
 - **A frame is the state of every registered stream at one moment** — market legs plus their
   features, strategy signals and other records — on the grid. Streams are always time-aligned within
   a frame; each updates at its own period.
@@ -393,6 +396,14 @@ Superseded by § Alignment, § Deadline, § Release and § Capacity above; kept 
 | The aligner writes direct slots for columns it has not released | A stream's align stage writes its slots until it sends their evaluate | Ownership hands over at the evaluate |
 | Readiness keeps a count per column against the streams due there | Per-stream progress checked at the next column; release capped at `reach` (stage 4) | Starts and ends decide whole ranges of columns, which a count per column cannot hold |
 | Align blocks beyond `consumed + headroom`; a start report "not started before `f`" | Ring capacity from the oldest readable bar; the first candle never waits (stage 4) | A stream may fill its ring before anything is read; headroom only sizes the ring |
+
+### Reversed on 2026-11-01
+
+Superseded by § Subscriptions and the grid above; kept for context.
+
+| Was | Now | Why |
+|---|---|---|
+| The stream table is built by the data layer (`data.NewStreams`), never by the composition root | A protocol domain (`proto.NewStreams`), built once by the composition root and injected into `data.New` | Config resolves universes over it and the feature layer indexes its buffers by it; inside the data layer it is out of config's reach and rebuilt by the feature layer. Derived IDs keep one source, `NewStreams` |
 
 ## Solution
 
@@ -593,7 +604,7 @@ func Records[T any](v frame.View[proto.Candle], s Section[T]) []T
 - **Write discipline** is structural: a phase can only write the section whose writer it was handed.
   Feature workers may write disjoint cells in parallel; the phase barrier publishes them. Tests run
   with `go test -race`.
-- **Layout is built before `Start`:** the stream table from the data layer and the reads it must
+- **Layout is built before `Start`:** the stream table the composition root injects and the reads it must
   hold — in iteration 1 one `lookback` for every stream, the longest feature lookback; per-stream
   declared reads from the feature graph and strategies in iteration 4.
 - **A source keeps its largest window + 1 bars**, since aggregation reads base history from the
@@ -668,6 +679,10 @@ func Records[T any](v frame.View[proto.Candle], s Section[T]) []T
   instead of `defaultHeadroom` — `docs/plans/readiness-views-capacity.md`.
 - The `View`, rings and slots moved to `internal/flow/frame`, and the derived window count was dropped
   — `docs/plans/features-layer-v2/stage-1-frame.md`.
+- The stream table moves to `internal/protocol`, built by the composition root and injected into
+  `data.New` (§ Subscriptions and the grid) — planned in
+  `docs/plans/features-layer-v2/stage-2-universes.md` step 1. Until it lands, `data.New` builds it
+  with `data.NewStreams`.
 
 ## Resources
 
