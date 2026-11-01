@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"whatever/internal/flow/frame"
 	"whatever/internal/flow/pipe"
 	proto "whatever/internal/protocol"
 )
@@ -18,8 +19,8 @@ type segment struct {
 }
 
 // frames returns the Current frames of the segments over buf, in order.
-func frames(buf *FrameBuffer, segs ...segment) []View {
-	var vs []View
+func frames(buf *FrameBuffer, segs ...segment) []frame.View[proto.Candle] {
+	var vs []frame.View[proto.Candle]
 	for _, sg := range segs {
 		for col := sg.from; col <= sg.to; col++ {
 			vs = append(vs, buf.view(col, sg.complete))
@@ -122,7 +123,7 @@ func TestReadiness(t *testing.T) {
 			want := frames(f.buf, tt.want...)
 			for i, order := range orders(stageAll(f, tt.cols)) {
 				r := newReadiness(f.buf)
-				var got []View
+				var got []frame.View[proto.Candle]
 				for _, e := range order {
 					got = r.step(e, got)
 				}
@@ -147,7 +148,7 @@ func TestReadinessHold(t *testing.T) {
 		f.buf.start(s, d)
 	}
 	f.fresh(s5m, span(d, d+20, 1)...)
-	f.buf.put(s5m, d+21, candle(s5m, d+21), Ended, 0)
+	f.buf.put(s5m, d+21, candle(s5m, d+21), frame.Ended)
 	f.fresh(s1h, d, d+12, d+24)
 	f.fresh(s1d, d)
 
@@ -155,23 +156,23 @@ func TestReadinessHold(t *testing.T) {
 	steps := []struct {
 		name string
 		in   []evaluate
-		want []View
+		want []frame.View[proto.Candle]
 	}{
 		{"1d has not reported",
-			append(evals(s5m, Fresh, span(d, d+11, 1)...), evals(s1h, Fresh, d)...), nil},
+			append(evals(s5m, frame.Fresh, span(d, d+11, 1)...), evals(s1h, frame.Fresh, d)...), nil},
 		{"1h is not waited on between closes",
-			evals(s1d, Fresh, d), frames(f.buf, segment{d, d + 11, true})},
+			evals(s1d, frame.Fresh, d), frames(f.buf, segment{d, d + 11, true})},
 		{"decided columns wait behind 1h's next close",
-			evals(s5m, Fresh, span(d+12, d+20, 1)...), nil},
+			evals(s5m, frame.Fresh, span(d+12, d+20, 1)...), nil},
 		{"1h's close releases them at once",
-			evals(s1h, Fresh, d+12), frames(f.buf, segment{d + 12, d + 20, true})},
+			evals(s1h, frame.Fresh, d+12), frames(f.buf, segment{d + 12, d + 20, true})},
 		{"no stream due at 21…23: they wait for a bar beyond them",
-			evals(s5m, Ended, d+21), nil},
+			evals(s5m, frame.Ended, d+21), nil},
 		{"1h's next close reaches them",
-			evals(s1h, Fresh, d+24), frames(f.buf, segment{d + 21, d + 24, true})},
+			evals(s1h, frame.Fresh, d+24), frames(f.buf, segment{d + 21, d + 24, true})},
 	}
 	for _, st := range steps {
-		var got []View
+		var got []frame.View[proto.Candle]
 		for _, e := range st.in {
 			got = r.step(e, got)
 		}
@@ -194,7 +195,7 @@ func TestReadinessRun(t *testing.T) {
 	}
 	close(in)
 
-	var got []View
+	var got []frame.View[proto.Candle]
 	for v := range newReadiness(f.buf).run(in) {
 		got = append(got, v)
 	}
@@ -254,7 +255,7 @@ func TestReadinessBacklog(t *testing.T) {
 	}
 	out := newReadiness(f.buf).run(pipe.FanIn(evs...))
 
-	var got []View
+	var got []frame.View[proto.Candle]
 	next := func() {
 		v := <-out
 		g.consume(v.Col())

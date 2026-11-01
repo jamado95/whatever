@@ -100,6 +100,24 @@ func TestRingPut(t *testing.T) {
 	})
 }
 
+// TestRingAt covers slot lookup: a held column returns its slot; any other is nil.
+func TestRingAt(t *testing.T) {
+	r := newRing(4, 1, 1, 4)
+	r.Start(2)
+	fresh(r, 2, 3, 4, 5, 6) // 6 overwrites 2's slot
+	if sl := r.At(5); sl == nil || sl.Col != 5 {
+		t.Errorf("At(5) = %+v, want the slot holding 5", sl)
+	}
+	for _, col := range []int64{1, 2, 7} { // below the first column, overwritten, never written
+		if sl := r.At(col); sl != nil {
+			t.Errorf("At(%d) = %+v, want nil", col, sl)
+		}
+	}
+	if sl := newRing(0, 0, 0, 0).At(0); sl != nil {
+		t.Errorf("empty ring: At(0) = %+v, want nil", sl)
+	}
+}
+
 /*
 TestRingLatest covers what a ring reports at a column: a Fresh value, a coarse entry carried between
 its updates, gaps carrying the last Fresh value, the end, and a ring not started.
@@ -138,6 +156,49 @@ func TestRingLatest(t *testing.T) {
 		r.Put(12, 0, Gap)
 		expect(t, r, 12, latest{val(0), Gap, 12})
 		expect(t, r, 13, latest{val(0), Gap, 13})
+	})
+
+	t.Run("a gap longer than the ring carries a value no slot holds", func(t *testing.T) {
+		r := newRing(4, 1, 1, 4)
+		fresh(r, 0)
+		for col := int64(1); col <= 10; col++ {
+			r.Put(col, 0, Gap)
+		}
+		if r.At(0) != nil {
+			t.Fatal("column 0's slot not overwritten")
+		}
+		expect(t, r, 10, latest{val(0), Gap, 10})
+	})
+
+	t.Run("Fresh after a gap resets the age", func(t *testing.T) {
+		r := newRing(8, 1, 1, 8)
+		fresh(r, 0)
+		r.Put(1, 0, Gap)
+		fresh(r, 2)
+		expect(t, r, 2, latest{val(2), Fresh, 0})
+	})
+
+	t.Run("Ended straight after a gap carries the value before it", func(t *testing.T) {
+		r := newRing(8, 1, 1, 8)
+		fresh(r, 0)
+		r.Put(1, 0, Gap)
+		r.Put(2, 0, Ended)
+		expect(t, r, 2, latest{val(0), Ended, 2})
+		expect(t, r, 9, latest{val(0), Ended, 9})
+	})
+
+	t.Run("an entry ended before any value has no age", func(t *testing.T) {
+		r := newRing(8, 1, 1, 8)
+		r.Put(1, 0, Ended)
+		expect(t, r, 1, latest{0, Ended, -1})
+		expect(t, r, 6, latest{0, Ended, -1})
+	})
+
+	t.Run("pinned before an end already written", func(t *testing.T) {
+		r := newRing(8, 12, 1, 8)
+		fresh(r, 0, 12)
+		r.Put(24, 0, Ended)
+		expect(t, r, 23, latest{val(12), Fresh, 11})
 	})
 
 	t.Run("a gap before any Fresh value has no age", func(t *testing.T) {
@@ -210,6 +271,29 @@ func TestRingData(t *testing.T) {
 		fresh(r, 3)
 		r.Put(4, 0, Ended)
 		expect(t, r, 4, 8, vals(3, 1, 0))
+	})
+
+	t.Run("after the end, the history before it", func(t *testing.T) {
+		r := newRing(8, 1, 1, 8)
+		fresh(r, 0, 1, 2, 3, 4)
+		r.Put(5, 0, Ended)
+		expect(t, r, 8, 10, vals(4, 3, 2, 1, 0))
+	})
+
+	t.Run("across the slot index wrap, never past the bars", func(t *testing.T) {
+		r := newRing(6, 1, 1, 4) // slots beyond the bars, as headroom
+		for col := int64(0); col <= 9; col++ {
+			fresh(r, col)
+		}
+		// at 7: slots 1, 0, then 5, 4
+		expect(t, r, 7, 10, vals(7, 6, 5, 4))
+	})
+
+	t.Run("a ring filled from its first column reads nothing below it", func(t *testing.T) {
+		r := newRing(4, 1, 1, 4)
+		r.Start(100)
+		fresh(r, 100, 101, 102, 103) // wraps onto the slots of 96 … 99
+		expect(t, r, 98, 10, nil)
 	})
 
 	t.Run("at most the ring's bars", func(t *testing.T) {

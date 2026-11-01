@@ -12,6 +12,7 @@ import (
 	"whatever/internal/config"
 	feat "whatever/internal/domains/features"
 	"whatever/internal/engine/data"
+	"whatever/internal/flow/frame"
 	"whatever/internal/flow/timing"
 	"whatever/internal/idgen"
 	"whatever/internal/logger"
@@ -155,12 +156,12 @@ func (e *DataLoggerV2) consume(ctx context.Context, dp *data.DataPipeline, pacer
 	count := 0
 	for e.cfg.Limit == 0 || count < e.cfg.Limit {
 		view, err := dp.Next(ctx)
-		if err != nil {
-			return err
-		}
-		if view == nil {
+		if errors.Is(err, data.ErrDone) {
 			e.logger.With("count", count).Info("data logger v2 stream complete")
 			return nil
+		}
+		if err != nil {
+			return err
 		}
 		if err := pacer.Wait(ctx, view.Boundary()); err != nil {
 			return err
@@ -168,9 +169,9 @@ func (e *DataLoggerV2) consume(ctx context.Context, dp *data.DataPipeline, pacer
 
 		updated = updated[:0]
 		for s, st := range streams {
-			c, state, age := view.Leg(s)
+			c, state, age := view.Latest(s)
 			// skip non-Fresh data
-			if state != data.Fresh || age != 0 {
+			if state != frame.Fresh || age != 0 {
 				continue
 			}
 
@@ -179,7 +180,7 @@ func (e *DataLoggerV2) consume(ctx context.Context, dp *data.DataPipeline, pacer
 				continue
 			}
 
-			snap := e.chain.Evaluate(st.Sub, view.Candles(s, lookback, history))
+			snap := e.chain.Evaluate(st.Sub, view.Data(s, lookback, history))
 			if err := e.exporter.Export(proto.MarketData{Subscription: st.Sub, Candle: c}, &snap); err != nil {
 				e.logger.Error(err, "exporter error")
 			}

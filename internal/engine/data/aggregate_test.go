@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"whatever/internal/flow/frame"
 	proto "whatever/internal/protocol"
 )
 
@@ -22,7 +23,7 @@ type staged struct {
 
 // state returns the stream's slot state at col, a due column of its stream with period p; ok false
 // when it has no slot there.
-func (l staged) state(col, p int64) (LegState, bool) {
+func (l staged) state(col, p int64) (frame.State, bool) {
 	if len(l.fresh) == 0 || col < l.fresh[0] {
 		return 0, false
 	}
@@ -31,12 +32,12 @@ func (l staged) state(col, p int64) (LegState, bool) {
 	case col > last+p || (col == last+p && !l.ended):
 		return 0, false
 	case col == last+p:
-		return Ended, true
+		return frame.Ended, true
 	}
 	if _, ok := slices.BinarySearch(l.fresh, col); ok {
-		return Fresh, true
+		return frame.Fresh, true
 	}
-	return Gap, true
+	return frame.Gap, true
 }
 
 /*
@@ -55,7 +56,7 @@ func drive(f fixture, agg *aggregator, streams map[int]staged, c func(s int, col
 				if col == l.fresh[0] {
 					f.buf.start(s, col)
 				}
-				f.buf.put(s, col, c(s, col), state, 0)
+				f.buf.put(s, col, c(s, col), state)
 			}
 		}
 		agg.step(col)
@@ -81,14 +82,13 @@ func rollup(bars []proto.Candle) proto.Candle {
 // leg is a stream's leg as read through a View.
 type leg struct {
 	c     proto.Candle
-	state LegState
-	count int
+	state frame.State
 	age   int
 }
 
-func readLeg(v View, s int) leg {
-	c, state, age := v.Leg(s)
-	return leg{c: c, state: state, count: v.Count(s), age: age}
+func readLeg(v frame.View[proto.Candle], s int) leg {
+	c, state, age := v.Latest(s)
+	return leg{c: c, state: state, age: age}
 }
 
 /*
@@ -101,14 +101,14 @@ func expect(st *Streams, d int, l staged, c func(int64) proto.Candle, col int64)
 	p := ds.Period
 	a := col - col%p
 	if len(l.fresh) == 0 || a < l.fresh[0] {
-		return leg{state: Gap, age: -1}
+		return leg{state: frame.Gap, age: -1}
 	}
 
-	state := Fresh
+	state := frame.Fresh
 	if last := l.fresh[len(l.fresh)-1]; l.ended && a >= last+p {
-		a, state = last+p, Ended
+		a, state = last+p, frame.Ended
 	} else if _, ok := slices.BinarySearch(l.fresh, a); !ok {
-		state = Gap
+		state = frame.Gap
 	}
 
 	hi, _ := slices.BinarySearch(l.fresh, a+1)
@@ -118,7 +118,7 @@ func expect(st *Streams, d int, l staged, c func(int64) proto.Candle, col int64)
 	for _, fc := range l.fresh[lo:hi] {
 		bars = append(bars, c(fc))
 	}
-	return leg{c: rollup(bars), state: state, count: len(bars), age: int(col - x)}
+	return leg{c: rollup(bars), state: state, age: int(col - x)}
 }
 
 // sameLeg compares legs exactly, except volume within 1e-9 relative.
@@ -129,7 +129,7 @@ func sameLeg(a, b leg) bool {
 }
 
 /*
-TestAggregate covers the rolling legs over the shared fixture: warm-up counts and the closed bar at
+TestAggregate covers the rolling legs over the shared fixture: warm-up and the closed bar at
 each boundary, a source gap carried as Gap with the windows after it leaving it out, Open from the
 next Fresh bar when the oldest is missing, a source's end carried as Ended, a coarse source updating
 only at its period, and a source not yet started.
@@ -159,7 +159,7 @@ func TestAggregate(t *testing.T) {
 			if col == d {
 				return
 			}
-			want := leg{state: Fresh, count: int(min(col-d, 12))}
+			want := leg{state: frame.Fresh}
 			if col%12 == 0 {
 				want.c = rollup(bars(f.st, s, span(col-11, col, 1)...))
 			} else {
@@ -176,13 +176,8 @@ func TestAggregate(t *testing.T) {
 		cs := func(x int64) proto.Candle { return c(s, x) }
 		drive(f, agg, map[int]staged{s: l}, c, d+1, d+60, func(col int64) {
 			want := expect(f.st, f.idx(idRoll1h), l, cs, col)
-			switch {
-			case col == d+30:
-				want = leg{c: expect(f.st, f.idx(idRoll1h), l, cs, d+29).c, state: Gap, count: 12, age: 1}
-			case col > d+30 && col <= d+41:
-				want.count = 11
-			case col >= d+12:
-				want.count = 12
+			if col == d+30 {
+				want = leg{c: expect(f.st, f.idx(idRoll1h), l, cs, d+29).c, state: frame.Gap, age: 1}
 			}
 			wantAt(t, f, col, want)
 		})
@@ -212,8 +207,8 @@ func TestAggregate(t *testing.T) {
 			if col < d+41 {
 				return
 			}
-			wantAt(t, f, col, leg{c: last, state: Ended, count: 12, age: int(col - (d + 40))})
-			if col > d+41 && f.slot(r, col).col == col {
+			wantAt(t, f, col, leg{c: last, state: frame.Ended, age: int(col - (d + 40))})
+			if col > d+41 && f.slot(r, col) != nil {
 				t.Errorf("col d+%d: written after the end", col-d)
 			}
 		})
@@ -225,11 +220,10 @@ func TestAggregate(t *testing.T) {
 		l := staged{fresh: span(d+12, d+12*30, 12)}
 		cs := func(x int64) proto.Candle { return c(s, x) }
 		drive(f, agg, map[int]staged{s: l}, c, d+12, d+12*30, func(col int64) {
-			if written := f.slot(r, col).col == col; written != (col%12 == 0) {
+			if written := f.slot(r, col) != nil; written != (col%12 == 0) {
 				t.Errorf("col d+%d: written %v", col-d, written)
 			}
 			want := expect(f.st, r, l, cs, col)
-			want.count = int(min((col-d)/12, 24))
 			if col == d+12*24 {
 				want.c = rollup(bars(f.st, s, span(d+12, d+12*24, 12)...))
 			}
@@ -247,9 +241,9 @@ func TestAggregate(t *testing.T) {
 			if col >= d+30 {
 				return
 			}
-			wantAt(t, f, col, leg{state: Gap, age: -1})
+			wantAt(t, f, col, leg{state: frame.Gap, age: -1})
 		})
-		if first := f.buf.rings[r].first.Load(); first != d+30 {
+		if first := f.buf.ring(r).First(); first != d+30 {
 			t.Errorf("rolling 1h first column d+%d, want d+30", first-d)
 		}
 	})
@@ -310,7 +304,7 @@ func TestAggregateAllocations(t *testing.T) {
 
 	allocs := testing.AllocsPerRun(1000, func() {
 		col++
-		f.buf.put(s, col, bar(f.st, s, col), Fresh, 0)
+		f.buf.put(s, col, bar(f.st, s, col), frame.Fresh)
 		agg.step(col)
 	})
 	if allocs != 0 {
@@ -343,7 +337,7 @@ func BenchmarkAggregate(b *testing.B) {
 			b.ResetTimer()
 			for col := range int64(b.N) {
 				for s := range n {
-					buf.put(s, col, candle(s, col), Fresh, 0)
+					buf.put(s, col, candle(s, col), frame.Fresh)
 				}
 				agg.step(col)
 			}

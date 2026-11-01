@@ -63,27 +63,35 @@ func (r *Ring[T]) Put(col int64, v T, s State) {
 	if s != Fresh {
 		var zero T
 		sl.Val, sl.ValCol = zero, -1
-		if pc := col - r.period; pc >= 0 {
-			if prev := r.At(pc); prev.Col == pc {
-				sl.Val, sl.ValCol = prev.Val, prev.ValCol
-			}
+		if prev := r.At(col - r.period); prev != nil {
+			sl.Val, sl.ValCol = prev.Val, prev.ValCol
 		}
 	}
-	*r.At(col) = sl
+
+	*r.slot(col) = sl
 
 	if s == Ended {
 		r.end.Store(col)
 	}
 }
 
-// At returns the slot that holds col, or would. The ring must not be empty.
+// At returns the slot holding col, or nil: on an empty ring, below the first column, or when the slot
+// holds another column — never written, overwritten, or past the end.
 func (r *Ring[T]) At(col int64) *Slot[T] {
-	return &r.slots[r.Index(col)]
+	if len(r.slots) == 0 || col < r.first.Load() {
+		return nil
+	}
+
+	sl := r.slot(col)
+	if sl.Col != col {
+		return nil
+	}
+
+	return sl
 }
 
-// Index is At's slot index, for owners keeping per-slot data beside the ring.
-func (r *Ring[T]) Index(col int64) int {
-	return int((col / r.period) % int64(len(r.slots)))
+func (r *Ring[T]) slot(col int64) *Slot[T] {
+	return &r.slots[(col/r.period)%int64(len(r.slots))]
 }
 
 func (r *Ring[T]) First() int64 { return r.first.Load() }
@@ -95,7 +103,7 @@ func (r *Ring[T]) Bars() int64 { return r.bars }
 func (r *Ring[T]) Period() int64 { return r.period }
 
 // latest returns the slot of the latest update at or before col — the Ended slot once past the end —
-// or nil if there is none. Below the first column, or on an empty ring, no slot is read.
+// or nil if there is none.
 func (r *Ring[T]) latest(col int64) *Slot[T] {
 	if len(r.slots) == 0 {
 		return nil
@@ -105,13 +113,7 @@ func (r *Ring[T]) latest(col int64) *Slot[T] {
 	if end := r.end.Load(); a >= end {
 		a = end
 	}
-	if a < r.first.Load() {
-		return nil
-	}
-	if sl := r.At(a); sl.Col == a {
-		return sl
-	}
-	return nil
+	return r.At(a)
 }
 
 // Latest returns the value at the latest update at or before col, its state and its age in columns
@@ -130,8 +132,7 @@ func (r *Ring[T]) Latest(col int64) (v T, s State, age int) {
 /*
 Data appends up to n Fresh values to dst[:0], newest first, one bar (window slots) per step back
 from the latest update at or before col. Gap and Ended slots are skipped. The walk covers at most the
-ring's bars, stops at its first column, and stops at a slot holding another column: the ring had not
-started, or the bar was overwritten.
+ring's bars and stops where At finds no slot: below the first column, or a bar overwritten.
 */
 func (r *Ring[T]) Data(col int64, n int, dst []T) []T {
 	dst = dst[:0]
@@ -141,10 +142,9 @@ func (r *Ring[T]) Data(col int64, n int, dst []T) []T {
 	}
 
 	step := r.period * r.window
-	first := r.first.Load()
-	for i, c := int64(0), sl.Col; i < r.bars && c >= first && len(dst) < n; i, c = i+1, c-step {
+	for i, c := int64(0), sl.Col; i < r.bars && len(dst) < n; i, c = i+1, c-step {
 		s := r.At(c)
-		if s.Col != c {
+		if s == nil {
 			break
 		}
 		if s.State == Fresh {
@@ -154,7 +154,11 @@ func (r *Ring[T]) Data(col int64, n int, dst []T) []T {
 	return dst
 }
 
-// Buffer is one ring per entry: a stream in the data buffer.
+/*
+Buffer is one ring per entry: a stream in the data buffer. Its rings are written through exported
+methods, so whoever holds a Buffer can write it: only the layer that owns it may hold it, and it
+hands consumers Views, never the Buffer or its rings.
+*/
 type Buffer[T any] struct {
 	rings []Ring[T]
 }

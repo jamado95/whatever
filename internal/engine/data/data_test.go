@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"whatever/internal/domains/provider"
+	"whatever/internal/flow/frame"
 	"whatever/internal/logger"
 	proto "whatever/internal/protocol"
 	reg "whatever/internal/registry"
@@ -128,21 +129,21 @@ func startDataPipeline(t *testing.T, headroom int64, log *logger.Logger, feed fu
 
 // nextAll calls Next until the run ends, passing each frame to fn and collecting it; a stall of
 // 10 s fails.
-func nextAll(t *testing.T, dp *DataPipeline, fn func(*View)) []View {
+func nextAll(t *testing.T, dp *DataPipeline, fn func(frame.View[proto.Candle])) []frame.View[proto.Candle] {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	var got []View
+	var got []frame.View[proto.Candle]
 	for {
 		v, err := dp.Next(ctx)
+		if errors.Is(err, ErrDone) {
+			return got
+		}
 		if err != nil {
 			t.Fatalf("Next after %d frames: %v", len(got), err)
 		}
-		if v == nil {
-			return got
-		}
 		fn(v)
-		got = append(got, *v)
+		got = append(got, v)
 	}
 }
 
@@ -166,7 +167,7 @@ model computes the frames expected from each stream's accepted columns by brute 
 from the earliest first candle to the latest candle, Complete when every stream that has started and
 not ended has a candle at its latest due column.
 */
-func model(buf *FrameBuffer, accepted map[int][]int64) []View {
+func model(buf *FrameBuffer, accepted map[int][]int64) []frame.View[proto.Candle] {
 	st := buf.streams
 	first, last := int64(math.MaxInt64), int64(math.MinInt64)
 	sets := make(map[int]map[int64]bool)
@@ -181,7 +182,7 @@ func model(buf *FrameBuffer, accepted map[int][]int64) []View {
 		}
 	}
 
-	var vs []View
+	var vs []frame.View[proto.Candle]
 	for col := first; col <= last; col++ {
 		complete := true
 		for s, cs := range accepted {
@@ -283,14 +284,14 @@ func TestDataPipelineRun(t *testing.T) {
 	r1h, r1d := mustIndex(t, st, idRoll1h), mustIndex(t, st, idRoll1d)
 	sources := map[int]int{r1h: s5m, r1d: s1h}
 
-	got := nextAll(t, dp, func(v *View) {
-		if v.Status() != Current {
+	got := nextAll(t, dp, func(v frame.View[proto.Candle]) {
+		if v.Status() != frame.Current {
 			t.Errorf("col d+%d: status %d, want Current", v.Col()-d, v.Status())
 		}
 		for r, s := range sources {
 			want := expect(st, r, staged{fresh: accepted[s], ended: true},
 				func(x int64) proto.Candle { return bar(st, s, x) }, v.Col())
-			if g := readLeg(*v, r); !sameLeg(g, want) {
+			if g := readLeg(v, r); !sameLeg(g, want) {
 				t.Errorf("col d+%d, %s: %+v, want %+v", v.Col()-d, st.All[r].Sub.ID(), g, want)
 			}
 		}
@@ -299,8 +300,8 @@ func TestDataPipelineRun(t *testing.T) {
 		t.Fatalf("%d frames, want %d", len(got), len(want))
 	}
 	for range 2 {
-		if v, err := dp.Next(context.Background()); v != nil || err != nil {
-			t.Fatalf("Next after the run = %v, %v; want nil, nil", v, err)
+		if _, err := dp.Next(context.Background()); !errors.Is(err, ErrDone) {
+			t.Fatalf("Next after the run = %v; want ErrDone", err)
 		}
 	}
 }
@@ -314,8 +315,8 @@ func TestDataPipelineCancel(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if v, err := dp.Next(ctx); v != nil || !errors.Is(err, context.Canceled) {
-		t.Fatalf("Next = %v, %v; want nil, context.Canceled", v, err)
+	if _, err := dp.Next(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next = %v; want context.Canceled", err)
 	}
 	within(t, "Close", dp.Close)
 }
@@ -339,8 +340,8 @@ func TestDataPipelineClose(t *testing.T) {
 					fs[i].candles = bars(st, i, cols...)
 				}
 			})
-			if v, err := dp.Next(context.Background()); v == nil || err != nil {
-				t.Fatalf("first Next = %v, %v", v, err)
+			if _, err := dp.Next(context.Background()); err != nil {
+				t.Fatalf("first Next = %v", err)
 			}
 
 			within(t, "Close", dp.Close)
@@ -357,8 +358,8 @@ func TestDataPipelineClose(t *testing.T) {
 			default:
 				t.Error("error channels not drained")
 			}
-			if v, err := dp.Next(context.Background()); v != nil || !errors.Is(err, ErrClosed) {
-				t.Errorf("Next after Close = %v, %v; want nil, ErrClosed", v, err)
+			if _, err := dp.Next(context.Background()); !errors.Is(err, ErrClosed) {
+				t.Errorf("Next after Close = %v; want ErrClosed", err)
 			}
 
 			dp.Close()
@@ -376,7 +377,7 @@ func TestDataPipelineClose(t *testing.T) {
 				fs[s].candles = bars(st, s, span(d+288, d+576, st.All[s].Period)...)
 			}
 		})
-		if frames := nextAll(t, dp, func(*View) {}); len(frames) == 0 {
+		if frames := nextAll(t, dp, func(frame.View[proto.Candle]) {}); len(frames) == 0 {
 			t.Fatal("no frames")
 		}
 		dp.Close()
@@ -489,7 +490,7 @@ func TestDataPipelineProviderErrors(t *testing.T) {
 				fs[s].errs = append(fs[s].errs, errors.New("bad record"))
 			}
 		})
-	if frames := nextAll(t, dp, func(*View) {}); len(frames) == 0 {
+	if frames := nextAll(t, dp, func(frame.View[proto.Candle]) {}); len(frames) == 0 {
 		t.Fatal("no frames")
 	}
 	dp.Close()
@@ -521,11 +522,10 @@ func TestDataPipelineSkew(t *testing.T) {
 			}
 		})
 		dst := make([]proto.Candle, 0, 20)
-		got := nextAll(t, dp, func(v *View) {
+		got := nextAll(t, dp, func(v frame.View[proto.Candle]) {
 			for s := range st.All {
-				v.Leg(s)
-				v.Count(s)
-				dst = v.Candles(s, 20, dst)
+				v.Latest(s)
+				dst = v.Data(s, 20, dst)
 			}
 		})
 		if want := model(dp.buf, cols); !slices.Equal(got, want) {
@@ -557,7 +557,7 @@ func TestDataPipelineLongGap(t *testing.T) {
 				fs[s].throttle = st.All[s].Sub.ID() == slow
 			}
 		})
-		got := nextAll(t, dp, func(v *View) {
+		got := nextAll(t, dp, func(v frame.View[proto.Candle]) {
 			for s, stream := range st.All {
 				src := s
 				if stream.Kind == Derived {
@@ -565,7 +565,7 @@ func TestDataPipelineLongGap(t *testing.T) {
 				}
 				want := expect(st, s, staged{fresh: cols[src], ended: true},
 					func(x int64) proto.Candle { return bar(st, src, x) }, v.Col())
-				if g := readLeg(*v, s); !sameLeg(g, want) {
+				if g := readLeg(v, s); !sameLeg(g, want) {
 					t.Fatalf("slow %s, col d+%d, %s: %+v, want %+v", slow, v.Col()-d, stream.Sub.ID(), g, want)
 				}
 			}
@@ -659,30 +659,29 @@ func TestDataPipelineReference(t *testing.T) {
 	st := dp.Streams()
 	pairs := []struct {
 		direct, rolling string
-		count           int
 		seen            int
 	}{
-		{"BTCUSDT:1h:btc_1h", idRoll1h, 12, 0},
-		{"BTCUSDT:1d:btc_1d", idRoll1dOf5m, 288, 0},
+		{"BTCUSDT:1h:btc_1h", idRoll1h, 0},
+		{"BTCUSDT:1d:btc_1d", idRoll1dOf5m, 0},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	for {
 		v, err := dp.Next(ctx)
+		if errors.Is(err, ErrDone) {
+			break
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
-		if v == nil {
-			break
-		}
 		for i := range pairs {
 			p := &pairs[i]
-			dc, state, age := v.Leg(mustIndex(t, st, p.direct))
-			if state != Fresh || age != 0 {
+			dc, state, age := v.Latest(mustIndex(t, st, p.direct))
+			if state != frame.Fresh || age != 0 {
 				continue
 			}
-			want := leg{c: dc, state: Fresh, count: p.count}
-			if got := readLeg(*v, mustIndex(t, st, p.rolling)); !sameLeg(got, want) {
+			want := leg{c: dc, state: frame.Fresh}
+			if got := readLeg(v, mustIndex(t, st, p.rolling)); !sameLeg(got, want) {
 				t.Fatalf("%s: %s %+v,\nwant %+v", time.UnixMilli(v.Boundary()).UTC(), p.rolling, got, want)
 			}
 			p.seen++

@@ -1,6 +1,11 @@
 package data
 
-import "math"
+import (
+	"math"
+
+	"whatever/internal/flow/frame"
+	proto "whatever/internal/protocol"
+)
 
 /*
 readiness releases columns in order. It keeps each direct stream's progress, through: every due
@@ -36,8 +41,8 @@ func newReadiness(buf *FrameBuffer) *readiness {
 	}
 	// largest spare·Period over direct streams; direct rings hold one slot per bar
 	for i := range n {
-		rg := &buf.rings[i]
-		r.lead = max(r.lead, (int64(len(rg.slots))-rg.bars)*rg.period)
+		rg := buf.ring(i)
+		r.lead = max(r.lead, (rg.Len()-rg.Bars())*rg.Period())
 	}
 
 	return r
@@ -49,7 +54,7 @@ stream has reported; the first column is then the earliest first candle, and wit
 nothing is ever released. The scan runs only when this evaluate can change its outcome: it comes from
 the stream blocking head+1, head+1 is decided and waits on reach, or it completes the reports.
 */
-func (r *readiness) step(e evaluate, dst []View) []View {
+func (r *readiness) step(e evaluate, dst []frame.View[proto.Candle]) []frame.View[proto.Candle] {
 	// scan only if:
 	// (1) stream is at cursor, since [0, cursor[ streams are already decided for head+1
 	// (2) all streams are decided but are waiting on reach; only matters once streams have ended
@@ -59,9 +64,9 @@ func (r *readiness) step(e evaluate, dst []View) []View {
 	if r.through[e.stream] == math.MinInt64 {
 		r.unreported--
 		switch e.state {
-		case Fresh:
+		case frame.Fresh:
 			r.start = min(r.start, e.col)
-		case Ended:
+		case frame.Ended:
 			r.empty[e.stream] = true
 		}
 		if r.unreported == 0 {
@@ -69,7 +74,7 @@ func (r *readiness) step(e evaluate, dst []View) []View {
 		}
 	}
 
-	if e.state == Ended {
+	if e.state == frame.Ended {
 		r.through[e.stream] = math.MaxInt64
 	} else {
 		r.through[e.stream] = e.col
@@ -84,7 +89,7 @@ func (r *readiness) step(e evaluate, dst []View) []View {
 }
 
 // release releases head+1 while every stream due there has decided it and it is within reach.
-func (r *readiness) release(dst []View) []View {
+func (r *readiness) release(dst []frame.View[proto.Candle]) []frame.View[proto.Candle] {
 	for {
 		col := r.head + 1
 		for ; r.cursor < len(r.through); r.cursor++ {
@@ -103,12 +108,11 @@ func (r *readiness) release(dst []View) []View {
 
 // complete reports whether every direct stream that started has a Fresh or Ended leg at col.
 func (r *readiness) complete(col int64) bool {
-	v := r.buf.view(col, false)
 	for s := range r.through {
 		if r.empty[s] {
 			continue
 		}
-		if _, state, _ := v.Leg(s); state == Gap {
+		if _, state, _ := r.buf.ring(s).Latest(col); state == frame.Gap {
 			return false
 		}
 	}
@@ -120,12 +124,12 @@ run is the readiness stage, a pipe.Stage over the joined evaluates; its output c
 does. The output holds lead frames, every frame align can resolve past the engine's column once rings
 hold full history, so from then on it never blocks on the engine; at startup it may.
 */
-func (r *readiness) run(in <-chan evaluate) <-chan View {
-	out := make(chan View, r.lead)
+func (r *readiness) run(in <-chan evaluate) <-chan frame.View[proto.Candle] {
+	out := make(chan frame.View[proto.Candle], r.lead)
 
 	go func() {
 		defer close(out)
-		var vs []View
+		var vs []frame.View[proto.Candle]
 		for e := range in {
 			vs = r.step(e, vs[:0])
 			for _, v := range vs {

@@ -3,6 +3,7 @@ package data
 import (
 	"math"
 
+	"whatever/internal/flow/frame"
 	proto "whatever/internal/protocol"
 )
 
@@ -56,14 +57,12 @@ type streamAggWindow struct {
 	oldest         int64   // oldest Fresh source column in the window; −1 for none
 	vol, comp      float64 // running volume and its Neumaier compensation
 	hi, lo         deque   // lo holds negated lows, so both keep their extreme at the front
-	count          uint16  // count of the last Fresh write, carried by Gap and Ended
 }
 
 /*
 update slides the window to col, one of its source's update columns, and writes the derived slot
-there: Fresh with the window's candle and the count of Fresh bars in it; Gap and Ended carrying the
-latest Fresh derived candle and its count. A source not started at col, or ended before it, writes
-nothing.
+there: Fresh with the window's candle; Gap and Ended carrying the latest Fresh derived candle. A
+source with no slot at col — not started, or ended before it — writes nothing.
 
 The bar at col enters the window and the bar at col − W·Period leaves it. The source keeps W + 1
 bars, so the leaving bar is still readable. The window's candle takes Open and OpenTs from its oldest
@@ -71,8 +70,9 @@ Fresh bar, Close and CloseTs from the bar at col, High and Low from the deques a
 compensated running sum.
 */
 func (w *streamAggWindow) update(col int64) {
-	src := w.buf.view(col, false).latest(w.source)
-	if src == nil || src.col != col {
+	srcRing := w.buf.ring(w.source)
+	src := srcRing.At(col)
+	if src == nil {
 		return
 	}
 
@@ -82,14 +82,10 @@ func (w *streamAggWindow) update(col int64) {
 		w.started = true
 	}
 
-	srcRing := &w.buf.rings[w.source]
-	first := srcRing.first.Load()
 	out := col - w.w*w.period
-	if out >= first {
-		if sl := srcRing.at(out); sl.col == out && sl.state == Fresh {
-			w.fresh--
-			w.add(-sl.c.Volume)
-		}
+	if sl := srcRing.At(out); sl != nil && sl.State == frame.Fresh {
+		w.fresh--
+		w.add(-sl.Val.Volume)
 	}
 	w.hi.expire(out)
 	w.lo.expire(out)
@@ -97,22 +93,22 @@ func (w *streamAggWindow) update(col int64) {
 		w.vol, w.comp = 0, 0 // an empty window sums to exactly zero
 	}
 
-	if src.state != Fresh {
-		w.buf.put(w.stream, col, proto.Candle{}, src.state, w.count)
+	if src.State != frame.Fresh {
+		w.buf.put(w.stream, col, proto.Candle{}, src.State)
 		return
 	}
 
-	c := src.c
+	c := src.Val
 	w.fresh++
 	w.add(c.Volume)
 	w.hi.push(col, c.High)
 	w.lo.push(col, -c.Low)
 	if w.oldest < 0 || w.oldest <= out {
-		w.oldest = w.nextFresh(max(out+w.period, first), col)
+		w.oldest = w.nextFresh(max(out+w.period, srcRing.First()), col)
 	}
 
-	openC := srcRing.at(w.oldest).c
-	w.count = uint16(w.fresh)
+	oldest := srcRing.At(w.oldest) // Fresh, so held
+	openC := oldest.Val
 
 	w.buf.put(w.stream, col, proto.Candle{
 		OpenTs:  openC.OpenTs,
@@ -122,14 +118,14 @@ func (w *streamAggWindow) update(col int64) {
 		Low:     -w.lo.front(),
 		Close:   c.Close,
 		Volume:  w.vol + w.comp,
-	}, Fresh, w.count)
+	}, frame.Fresh)
 }
 
 // nextFresh returns the first Fresh source column in from … to; to is Fresh.
 func (w *streamAggWindow) nextFresh(from, to int64) int64 {
-	r := &w.buf.rings[w.source]
+	r := w.buf.ring(w.source)
 	for col := from; col < to; col += w.period {
-		if sl := r.at(col); sl.col == col && sl.state == Fresh {
+		if sl := r.At(col); sl != nil && sl.State == frame.Fresh {
 			return col
 		}
 	}

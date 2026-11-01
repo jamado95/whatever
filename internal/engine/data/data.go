@@ -7,6 +7,7 @@ import (
 	"math"
 	"sync"
 
+	"whatever/internal/flow/frame"
 	"whatever/internal/flow/pipe"
 	"whatever/internal/logger"
 	proto "whatever/internal/protocol"
@@ -17,6 +18,8 @@ var (
 	ErrNotStarted = errors.New("data: pipeline not started")
 	// ErrClosed is returned by Next and Start after Close.
 	ErrClosed = errors.New("data: pipeline closed")
+	// ErrDone is returned by Next once the run has ended and every frame was returned.
+	ErrDone = errors.New("data: run done")
 )
 
 /*
@@ -35,11 +38,10 @@ type DataPipeline struct {
 	log     *logger.Logger
 
 	started, closed bool
-	cancel          context.CancelFunc // the run context's; nil until Start
-	closing         *sync.WaitGroup    // the started providers, until closed
-	views           <-chan View        // nil until Start
-	errsDone        <-chan struct{}    // closed once every running provider's error channel has closed
-	now             View               // the frame Next returned last
+	cancel          context.CancelFunc              // the run context's; nil until Start
+	closing         *sync.WaitGroup                 // the started providers, until closed
+	views           <-chan frame.View[proto.Candle] // nil until Start
+	errsDone        <-chan struct{}                 // closed once every running provider's error channel has closed
 }
 
 /*
@@ -147,35 +149,36 @@ func (dp *DataPipeline) Start() error {
 }
 
 /*
-Next returns the next frame: the View pinned at the next released column, its derived legs
-aggregated. It returns nil, nil once the run has ended; ErrNotStarted before Start; ErrClosed after
-Close; ctx.Err() once ctx is done. The View is valid until the next call, which consumes its column.
+Next returns the next frame: a copy of the View pinned at the next released column, its derived legs
+aggregated. It returns ErrDone once the run has ended; ErrNotStarted before Start; ErrClosed after
+Close; ctx.Err() once ctx is done. The View reads the buffer, so it is valid until the next call,
+which consumes its column.
 */
-func (dp *DataPipeline) Next(ctx context.Context) (*View, error) {
+func (dp *DataPipeline) Next(ctx context.Context) (frame.View[proto.Candle], error) {
+	var none frame.View[proto.Candle]
 	switch {
 	case dp.closed:
-		return nil, ErrClosed
+		return none, ErrClosed
 	case !dp.started:
-		return nil, ErrNotStarted
+		return none, ErrNotStarted
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return none, err
 	}
 
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return none, ctx.Err()
 	case v, ok := <-dp.views:
 		if !ok {
-			return nil, nil
+			return none, ErrDone
 		}
 		// aggregate derived streams
-		dp.agg.step(v.col)
+		dp.agg.step(v.Col())
 		// advance gate to col
-		dp.gate.consume(v.col)
-		dp.now = v
+		dp.gate.consume(v.Col())
 
-		return &dp.now, nil
+		return v, nil
 	}
 }
 
@@ -200,7 +203,7 @@ func (dp *DataPipeline) Close() {
 
 	//discard any remaining frames
 	for v := range dp.views {
-		dp.gate.consume(v.col) // drain gate to flush any frames waiting on align
+		dp.gate.consume(v.Col()) // drain gate to flush any frames waiting on align
 	}
 
 	dp.closing.Wait()

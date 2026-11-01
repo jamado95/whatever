@@ -2,9 +2,8 @@ package data
 
 import (
 	"fmt"
-	"math"
-	"sync/atomic"
 
+	"whatever/internal/flow/frame"
 	proto "whatever/internal/protocol"
 )
 
@@ -14,45 +13,15 @@ const maxHistoryMs = 365 * 24 * 60 * 60 * 1000
 // defaultHeadroom sizes each ring's slots beyond its kept bars, in columns.
 const defaultHeadroom = 128
 
-// LegState is the state of a stream's latest update at or before a column.
-type LegState uint8
-
-const (
-	Fresh LegState = iota // its candle closed at the update column
-	Gap                   // proven missing at the update column; carries the last Fresh candle
-	Ended                 // the stream's lane closed; carries the last Fresh candle
-)
-
-type slot struct {
-	col   int64        // column held; -1 = empty
-	fresh int64        // newest Fresh column at or before col; -1 = none
-	c     proto.Candle // Fresh: its candle; Gap / Ended: the last Fresh candle
-	state LegState
-	count uint16 // derived: base candles in the window
-}
-
-type ring struct {
-	slots  []slot
-	period int64        // the stream's Period: columns between slots
-	bars   int64        // bars kept for reads; the slots beyond them are headroom
-	first  atomic.Int64 // first column; reads never go below it. 0 until start
-	end    atomic.Int64 // Ended column; math.MaxInt64 while open
-}
-
-// at returns the slot that holds col, or would.
-func (r *ring) at(col int64) *slot {
-	return &r.slots[(col/r.period)%int64(len(r.slots))]
-}
-
 /*
-FrameBuffer holds every stream's market legs, one ring per stream with one slot per update. A direct
-stream's align stage writes its slots until it sends their evaluate; the engine goroutine writes
-released columns and reads through pinned Views. Nothing is locked: the evaluate and event sends
-publish the align stages' slots, and ring capacity keeps their writes off the slots views read.
+FrameBuffer holds every stream's market legs, one frame ring per stream with one slot per update. A
+direct stream's align stage writes its slots until it sends their evaluate; the engine goroutine
+writes released columns and reads through pinned Views. Nothing is locked: the evaluate and event
+sends publish the align stages' slots, and ring capacity keeps their writes off the slots views read.
 */
 type FrameBuffer struct {
 	streams *Streams
-	rings   []ring
+	buf     *frame.Buffer[proto.Candle]
 }
 
 /*
@@ -75,7 +44,7 @@ func newFrameBuffer(streams *Streams, lookback int, headroom int64) (*FrameBuffe
 		maxWindow[s.Source] = max(maxWindow[s.Source], s.Window)
 	}
 
-	buf := &FrameBuffer{streams: streams, rings: make([]ring, len(streams.All))}
+	shapes := make([]frame.Shape, len(streams.All))
 	for i, s := range streams.All {
 		bars := max(int64(lookback), 1)
 		if maxWindow[i] > 0 {
@@ -86,16 +55,22 @@ func newFrameBuffer(streams *Streams, lookback int, headroom int64) (*FrameBuffe
 				s.Sub.ID(), bars, s.Sub.Timeframe)
 		}
 
-		ring := &buf.rings[i]
-		ring.period = s.Period
-		ring.bars = bars
-		ring.slots = make([]slot, bars*s.Window+(headroom+s.Period-1)/s.Period+1)
-		for j := range ring.slots {
-			ring.slots[j].col = -1
+		shapes[i] = frame.Shape{
+			Slots:  bars*s.Window + (headroom+s.Period-1)/s.Period + 1,
+			Period: s.Period,
+			Window: s.Window,
+			Bars:   bars,
 		}
-		ring.end.Store(math.MaxInt64)
 	}
-	return buf, nil
+
+	buf := frame.NewBuffer[proto.Candle](shapes)
+
+	return &FrameBuffer{streams: streams, buf: buf}, nil
+}
+
+// ring returns stream s's ring.
+func (b *FrameBuffer) ring(s int) *frame.Ring[proto.Candle] {
+	return b.buf.Ring(s)
 }
 
 /*
@@ -104,7 +79,7 @@ stream's align stage may fill the whole ring before anything is read, wrapping o
 columns before it.
 */
 func (b *FrameBuffer) start(s int, col int64) {
-	b.rings[s].first.Store(col)
+	b.ring(s).Start(col)
 }
 
 /*
@@ -112,26 +87,11 @@ put writes stream s's slot at col, one of the stream's update columns. A Gap or 
 the last Fresh candle from the stream's previous slot, or a zero candle when there is none; Ended
 also records the end column. Rewriting a column replaces its slot.
 */
-func (b *FrameBuffer) put(s int, col int64, c proto.Candle, state LegState, count uint16) {
-	r := &b.rings[s]
-
-	sl := slot{col: col, fresh: col, c: c, state: state, count: count}
-	if state != Fresh {
-		sl.c, sl.fresh = proto.Candle{}, -1
-		if pc := col - r.period; pc >= 0 {
-			if prev := r.at(pc); prev.col == pc {
-				sl.c, sl.fresh = prev.c, prev.fresh
-			}
-		}
-	}
-	*r.at(col) = sl
-
-	if state == Ended {
-		r.end.Store(col)
-	}
+func (b *FrameBuffer) put(s int, col int64, c proto.Candle, state frame.State) {
+	b.ring(s).Put(col, c, state)
 }
 
 // view returns the View pinned at col, a Current frame.
-func (b *FrameBuffer) view(col int64, complete bool) View {
-	return View{buf: b, col: col, complete: complete, status: Current}
+func (b *FrameBuffer) view(col int64, complete bool) frame.View[proto.Candle] {
+	return frame.NewView(col, b.streams.Stride, frame.Current, complete, b.buf)
 }

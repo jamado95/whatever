@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 	"time"
+	"whatever/internal/flow/frame"
 )
 
 /*
@@ -28,17 +29,17 @@ func TestLane(t *testing.T) {
 	fs[s1d].candles = bars(st, s1d, d+288)
 
 	want := map[int][]evaluate{
-		s1h: append(evals(s1h, Fresh, span(d+12, d+132, 12)...), evals(s1h, Ended, d+144)...),
-		s1d: append(evals(s1d, Fresh, d+288), evals(s1d, Ended, d+576)...),
+		s1h: append(evals(s1h, frame.Fresh, span(d+12, d+132, 12)...), evals(s1h, frame.Ended, d+144)...),
+		s1d: append(evals(s1d, frame.Fresh, d+288), evals(s1d, frame.Ended, d+576)...),
 	}
 	for col := int64(d + 1); col <= d+288; col++ {
-		state := Fresh
+		state := frame.Fresh
 		if col == d+50 || col == d+60 {
-			state = Gap
+			state = frame.Gap
 		}
 		want[s5m] = append(want[s5m], evaluate{stream: s5m, col: col, state: state})
 	}
-	want[s5m] = append(want[s5m], evals(s5m, Ended, d+289)...)
+	want[s5m] = append(want[s5m], evals(s5m, frame.Ended, d+289)...)
 
 	dp, err := newDataPipeline(provs, 20, 600, quiet())
 	if err != nil {
@@ -116,7 +117,7 @@ func TestLaneIndependent(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	// the provider's full output, normalise's held candle and full output, align's item held at the
 	// gate, and an evaluate per ring slot
-	slots := int64(len(dp.buf.rings[s1h].slots))
+	slots := dp.buf.ring(s1h).Len()
 	if n, want := fs[s1h].sent.Load(), fakeBuffer+laneBuffer+1+slots+1; n != want {
 		t.Fatalf("unread lane's provider sent %d bars, want %d", n, want)
 	}

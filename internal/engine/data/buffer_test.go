@@ -6,7 +6,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"whatever/internal/flow/frame"
 	proto "whatever/internal/protocol"
 )
 
@@ -46,13 +48,13 @@ func (f fixture) idx(id string) int { return mustIndex(f.t, f.st, id) }
 // fresh puts a Fresh candle for stream s at each column.
 func (f fixture) fresh(s int, cols ...int64) {
 	for _, col := range cols {
-		f.buf.put(s, col, candle(s, col), Fresh, 0)
+		f.buf.put(s, col, candle(s, col), frame.Fresh)
 	}
 }
 
-// slot returns stream s's slot for col.
-func (f fixture) slot(s int, col int64) slot {
-	return *f.buf.rings[s].at(col)
+// slot returns stream s's slot holding col, and whether there is one.
+func (f fixture) slot(s int, col int64) *frame.Slot[proto.Candle] {
+	return f.buf.ring(s).At(col)
 }
 
 // candle is distinct per stream and column.
@@ -74,8 +76,8 @@ TestNewFrameBuffer covers construction: slots per ring from lookback, derived wi
 the stream table rescaling with the grid; and the 365-day cap, applied per stream.
 */
 func TestNewFrameBuffer(t *testing.T) {
-	slots := func(f fixture, id string) int { return len(f.buf.rings[f.idx(id)].slots) }
-	bars := func(f fixture, id string) int64 { return f.buf.rings[f.idx(id)].bars }
+	slots := func(f fixture, id string) int { return int(f.buf.ring(f.idx(id)).Len()) }
+	bars := func(f fixture, id string) int64 { return f.buf.ring(f.idx(id)).Bars() }
 
 	t.Run("slots per ring", func(t *testing.T) {
 		f := newFixture(t)
@@ -171,7 +173,7 @@ func TestNewFrameBuffer(t *testing.T) {
 
 /*
 TestPut covers the write path: what a Fresh, Gap or Ended slot holds, the last Fresh candle carried
-through gaps, the end column, rewrites and the derived window count.
+through gaps, the end column and rewrites.
 */
 func TestPut(t *testing.T) {
 	t.Run("Fresh stores its candle", func(t *testing.T) {
@@ -179,7 +181,7 @@ func TestPut(t *testing.T) {
 		s := f.idx(idBTC5m)
 		f.fresh(s, 3)
 		got := f.slot(s, 3)
-		if got.col != 3 || got.fresh != 3 || got.c != candle(s, 3) || got.state != Fresh {
+		if got.Col != 3 || got.ValCol != 3 || got.Val != candle(s, 3) || got.State != frame.Fresh {
 			t.Errorf("slot = %+v", got)
 		}
 	})
@@ -188,11 +190,11 @@ func TestPut(t *testing.T) {
 		f := newFixture(t)
 		s := f.idx(idBTC1h) // period 12
 		f.fresh(s, 0)
-		f.buf.put(s, 12, proto.Candle{}, Gap, 0)
-		f.buf.put(s, 24, proto.Candle{}, Ended, 0)
+		f.buf.put(s, 12, proto.Candle{}, frame.Gap)
+		f.buf.put(s, 24, proto.Candle{}, frame.Ended)
 		for _, col := range []int64{12, 24} {
-			if got := f.slot(s, col); got.c != candle(s, 0) || got.fresh != 0 {
-				t.Errorf("col %d: carries %+v from %d, want the candle at 0", col, got.c, got.fresh)
+			if got := f.slot(s, col); got.Val != candle(s, 0) || got.ValCol != 0 {
+				t.Errorf("col %d: carries %+v from %d, want the candle at 0", col, got.Val, got.ValCol)
 			}
 		}
 	})
@@ -200,11 +202,11 @@ func TestPut(t *testing.T) {
 	t.Run("no previous slot carries a zero candle", func(t *testing.T) {
 		f := newFixture(t)
 		s := f.idx(idBTC5m)
-		f.buf.put(s, 0, candle(s, 0), Ended, 0) // no column before 0
-		f.buf.put(s, 7, candle(s, 7), Gap, 0)   // column 6 empty
+		f.buf.put(s, 0, candle(s, 0), frame.Ended) // no column before 0
+		f.buf.put(s, 7, candle(s, 7), frame.Gap)   // column 6 empty
 		for _, col := range []int64{0, 7} {
-			if got := f.slot(s, col); got.c != (proto.Candle{}) || got.fresh != -1 {
-				t.Errorf("col %d: slot = %+v, want a zero candle and fresh -1", col, got)
+			if got := f.slot(s, col); got.Val != (proto.Candle{}) || got.ValCol != -1 {
+				t.Errorf("col %d: slot = %+v, want a zero candle and ValCol -1", col, got)
 			}
 		}
 	})
@@ -214,24 +216,21 @@ func TestPut(t *testing.T) {
 		s := f.idx(idBTC5m)
 		f.fresh(s, 0)
 		for col := int64(1); col <= 3; col++ {
-			f.buf.put(s, col, proto.Candle{}, Gap, 0)
+			f.buf.put(s, col, proto.Candle{}, frame.Gap)
 		}
-		if got := f.slot(s, 3); got.c != candle(s, 0) || got.fresh != 0 {
-			t.Errorf("third gap carries %+v from %d, want the candle at 0", got.c, got.fresh)
+		if got := f.slot(s, 3); got.Val != candle(s, 0) || got.ValCol != 0 {
+			t.Errorf("third gap carries %+v from %d, want the candle at 0", got.Val, got.ValCol)
 		}
 	})
 
 	t.Run("Ended records the end column", func(t *testing.T) {
 		f := newFixture(t)
 		s := f.idx(idBTC5m)
-		r := &f.buf.rings[s]
-		if e := r.end.Load(); e != math.MaxInt64 {
-			t.Fatalf("open stream: end = %d", e)
-		}
 		f.fresh(s, 6)
-		f.buf.put(s, 7, proto.Candle{}, Ended, 0)
-		if e := r.end.Load(); e != 7 {
-			t.Errorf("end = %d, want 7", e)
+		f.buf.put(s, 7, proto.Candle{}, frame.Ended)
+		// past the end, reads clamp to the Ended slot
+		if c, st, _ := f.buf.ring(s).Latest(20); st != frame.Ended || c != candle(s, 6) {
+			t.Errorf("Latest past the end = %+v %d, want Ended carrying the candle at 6", c, st)
 		}
 	})
 
@@ -239,18 +238,9 @@ func TestPut(t *testing.T) {
 		f := newFixture(t)
 		s := f.idx(idBTC5m)
 		f.fresh(s, 2)
-		f.buf.put(s, 2, candle(s, 99), Fresh, 0)
-		if got := f.slot(s, 2); got.c != candle(s, 99) {
-			t.Errorf("slot holds %+v, want the second write", got.c)
-		}
-	})
-
-	t.Run("a derived slot stores its window count", func(t *testing.T) {
-		f := newFixture(t)
-		s := f.idx(idRoll1h)
-		f.buf.put(s, 4, candle(s, 4), Fresh, 5)
-		if got := f.slot(s, 4); got.count != 5 {
-			t.Errorf("count = %d, want 5", got.count)
+		f.buf.put(s, 2, candle(s, 99), frame.Fresh)
+		if got := f.slot(s, 2); got.Val != candle(s, 99) {
+			t.Errorf("slot holds %+v, want the second write", got.Val)
 		}
 	})
 }
@@ -269,11 +259,11 @@ func TestFrameBufferConcurrency(t *testing.T) {
 	go func() {
 		defer close(pub)
 		for col := int64(0); col <= last; col++ {
-			state := Fresh
+			state := frame.Fresh
 			if col == last {
-				state = Ended
+				state = frame.Ended
 			}
-			f.buf.put(s, col, candle(s, col), state, 0)
+			f.buf.put(s, col, candle(s, col), state)
 			pub <- col
 		}
 	}()
@@ -281,14 +271,14 @@ func TestFrameBufferConcurrency(t *testing.T) {
 	dst := make([]proto.Candle, 0, 20)
 	for col := range pub {
 		v := f.buf.view(col, true)
-		c, state, _ := v.Leg(s)
-		dst = v.Candles(s, 20, dst)
+		c, state, _ := v.Latest(s)
+		dst = v.Data(s, 20, dst)
 
-		newest, wantLen, wantState := col, int(min(col+1, 20)), Fresh
+		newest, wantLen, wantState := col, int(min(col+1, 20)), frame.Fresh
 		if col == last {
-			newest, wantLen, wantState = col-1, 19, Ended
+			newest, wantLen, wantState = col-1, 19, frame.Ended
 		}
-		if state != wantState || (state == Fresh && c != candle(s, col)) {
+		if state != wantState || (state == frame.Fresh && c != candle(s, col)) {
 			t.Fatalf("col %d: Leg = %+v %d", col, c, state)
 		}
 		if len(dst) != wantLen {
@@ -312,14 +302,14 @@ func TestFrameBufferStartup(t *testing.T) {
 	const first = 1000
 	f := newFixture(t)
 	s := f.idx(idBTC5m)
-	n := int64(len(f.buf.rings[s].slots))
+	n := f.buf.ring(s).Len()
 
 	pub := make(chan int64, n)
 	go func() {
 		defer close(pub)
 		f.buf.start(s, first)
 		for col := int64(first); col < first+n; col++ {
-			f.buf.put(s, col, candle(s, col), Fresh, 0)
+			f.buf.put(s, col, candle(s, col), frame.Fresh)
 			pub <- col
 		}
 	}()
@@ -327,16 +317,16 @@ func TestFrameBufferStartup(t *testing.T) {
 	dst := make([]proto.Candle, 0, 20)
 	for col := range pub {
 		for _, before := range span(first-n, first-1, 1) {
-			if _, state, age := f.buf.view(before, true).Leg(s); state != Gap || age != -1 {
+			if _, state, age := f.buf.view(before, true).Latest(s); state != frame.Gap || age != -1 {
 				t.Fatalf("col %d: Leg at %d = %d %d, want not started", col, before, state, age)
 			}
 		}
 
 		v := f.buf.view(col, true)
-		if c, state, _ := v.Leg(s); state != Fresh || c != candle(s, col) {
+		if c, state, _ := v.Latest(s); state != frame.Fresh || c != candle(s, col) {
 			t.Fatalf("col %d: Leg = %+v %d", col, c, state)
 		}
-		dst = v.Candles(s, 20, dst)
+		dst = v.Data(s, 20, dst)
 		if want := int(min(col-first+1, 20)); len(dst) != want || dst[len(dst)-1] != candle(s, col-int64(want)+1) {
 			t.Fatalf("col %d: candles %v, want %d down to %d", col, dst, want, col-int64(want)+1)
 		}
@@ -344,7 +334,7 @@ func TestFrameBufferStartup(t *testing.T) {
 }
 
 /*
-TestFrameBufferModel checks Leg, Count and Candles against a brute-force model that keeps every
+TestFrameBufferModel checks Latest and Data against a brute-force model that keeps every
 write. Fixed seed; each stream starts at a random due column, writes Fresh or Gap at every due column
 after that, and may end; the run covers three lengths of the longest ring. Views are pinned at the
 newest column and up to headroom columns behind it, as the engine may be.
@@ -355,15 +345,14 @@ func TestFrameBufferModel(t *testing.T) {
 	rng := rand.New(rand.NewPCG(1, 2))
 
 	type write struct {
-		state LegState
+		state frame.State
 		c     proto.Candle
-		count uint16
 	}
 
 	n := len(f.st.All)
 	var last int64 // three lengths of the longest ring, in columns
 	for i, s := range f.st.All {
-		last = max(last, 3*int64(len(f.buf.rings[i].slots))*s.Period)
+		last = max(last, 3*f.buf.ring(i).Len()*s.Period)
 	}
 
 	hist := make([]map[int64]write, n) // stream → column → write
@@ -393,7 +382,7 @@ func TestFrameBufferModel(t *testing.T) {
 			if !ok {
 				break
 			}
-			if w.state == Fresh {
+			if w.state == frame.Fresh {
 				return w.c, c
 			}
 		}
@@ -404,11 +393,10 @@ func TestFrameBufferModel(t *testing.T) {
 		view := f.buf.view(v, true)
 		for i, s := range f.st.All {
 			var (
-				wc     proto.Candle
-				ws     = Gap
-				wa     = -1
-				wcount int
-				wbars  []proto.Candle
+				wc    proto.Candle
+				ws    = frame.Gap
+				wa    = -1
+				wbars []proto.Candle
 			)
 			if a, ok := latest(i, v); ok {
 				fc, fcol := lastFresh(i, a)
@@ -416,33 +404,24 @@ func TestFrameBufferModel(t *testing.T) {
 				if fcol >= 0 {
 					wa = int(v - fcol)
 				}
-				switch {
-				case s.Kind == Derived:
-					wcount = int(hist[i][a].count)
-				case fcol >= 0:
-					wcount = 1
-				}
 				step := s.Period * s.Window
-				for k, col := int64(0), a; k < f.buf.rings[i].bars && col >= 0; k, col = k+1, col-step {
+				for k, col := int64(0), a; k < f.buf.ring(i).Bars() && col >= 0; k, col = k+1, col-step {
 					w, ok := hist[i][col]
 					if !ok {
 						break
 					}
-					if w.state == Fresh {
+					if w.state == frame.Fresh {
 						wbars = append(wbars, w.c)
 					}
 				}
 			}
 
-			if c, st, age := view.Leg(i); c != wc || st != ws || age != wa {
+			if c, st, age := view.Latest(i); c != wc || st != ws || age != wa {
 				t.Fatalf("%s at %d: Leg = %+v %d %d, want %+v %d %d", s.Sub.ID(), v, c, st, age, wc, ws, wa)
-			}
-			if got := view.Count(i); got != wcount {
-				t.Fatalf("%s at %d: Count = %d, want %d", s.Sub.ID(), v, got, wcount)
 			}
 			for _, nb := range []int{1, lookback, 2 * lookback} {
 				want := wbars[:min(nb, len(wbars))]
-				if got := view.Candles(i, nb, nil); !slices.Equal(got, want) {
+				if got := view.Data(i, nb, nil); !slices.Equal(got, want) {
 					t.Fatalf("%s at %d: Candles(%d) = %d bars, want %d", s.Sub.ID(), v, nb, len(got), len(want))
 				}
 			}
@@ -454,18 +433,51 @@ func TestFrameBufferModel(t *testing.T) {
 			if col%s.Period != 0 || col < startAt[i] || end[i] != math.MaxInt64 {
 				continue
 			}
-			w := write{state: Fresh, c: candle(i, col), count: uint16(1 + rng.IntN(int(s.Window)))}
+			w := write{state: frame.Fresh, c: candle(i, col)}
 			switch {
 			case col >= endAt[i]:
-				w.state = Ended
+				w.state = frame.Ended
 				end[i] = col
 			case rng.IntN(100) < 15:
-				w.state = Gap
+				w.state = frame.Gap
 			}
 			hist[i][col] = w
-			f.buf.put(i, col, w.c, w.state, w.count)
+			f.buf.put(i, col, w.c, w.state)
 		}
 		check(col)
 		check(col - rng.Int64N(min(headroom, col)+1))
 	}
+}
+
+/*
+TestViewBoundary covers the column's timestamp: col × Stride, a UTC boundary — at realistic epoch
+columns, a UTC-midnight column is due for a 1d stream.
+*/
+func TestViewBoundary(t *testing.T) {
+	t.Run("col × Stride", func(t *testing.T) {
+		f := newFixture(t)
+		if got := f.buf.view(7, true).Boundary(); got != 7*f.st.Stride {
+			t.Errorf("Boundary = %d, want %d", got, 7*f.st.Stride)
+		}
+	})
+
+	t.Run("a UTC-midnight column is due for a 1d stream", func(t *testing.T) {
+		const midnight = 1704067200000 // 2024-01-01T00:00:00Z
+		f := newFixture(t)
+		s := f.idx(idETH1d)
+		col := int64(midnight) / f.st.Stride
+		if col%f.st.All[s].Period != 0 {
+			t.Fatalf("column %d is not due for 1d (period %d)", col, f.st.All[s].Period)
+		}
+
+		f.fresh(s, col)
+		v := f.buf.view(col, true)
+		if got := v.Boundary(); got != midnight || time.UnixMilli(got).UTC().Hour() != 0 {
+			t.Errorf("Boundary = %d, want %d", got, int64(midnight))
+		}
+		c, state, age := f.buf.view(col+100, true).Latest(s)
+		if c != candle(s, col) || state != frame.Fresh || age != 100 {
+			t.Errorf("100 columns later: Leg = %+v %d %d, want the midnight candle with age 100", c, state, age)
+		}
+	})
 }

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"whatever/internal/flow/frame"
 	proto "whatever/internal/protocol"
 )
 
@@ -29,7 +30,7 @@ func feedLane(its []laneItem) <-chan laneItem {
 }
 
 // evals returns stream s's evaluates at cols, all in one state.
-func evals(s int, state LegState, cols ...int64) []evaluate {
+func evals(s int, state frame.State, cols ...int64) []evaluate {
 	out := make([]evaluate, len(cols))
 	for i, col := range cols {
 		out[i] = evaluate{stream: s, col: col, state: state}
@@ -103,7 +104,7 @@ func TestAlign(t *testing.T) {
 	const d = day0
 	type step struct {
 		col   int64
-		state LegState
+		state frame.State
 	}
 
 	tests := []struct {
@@ -113,14 +114,14 @@ func TestAlign(t *testing.T) {
 		want []step
 	}{
 		{"consecutive candles", idBTC5m, []int64{d, d + 1, d + 2},
-			[]step{{d, Fresh}, {d + 1, Fresh}, {d + 2, Fresh}, {d + 3, Ended}}},
+			[]step{{d, frame.Fresh}, {d + 1, frame.Fresh}, {d + 2, frame.Fresh}, {d + 3, frame.Ended}}},
 		{"a skipped 5m column", idBTC5m, []int64{d, d + 2},
-			[]step{{d, Fresh}, {d + 1, Gap}, {d + 2, Fresh}, {d + 3, Ended}}},
+			[]step{{d, frame.Fresh}, {d + 1, frame.Gap}, {d + 2, frame.Fresh}, {d + 3, frame.Ended}}},
 		{"a skipped 1h bar", idBTC1h, []int64{d, d + 24},
-			[]step{{d, Fresh}, {d + 12, Gap}, {d + 24, Fresh}, {d + 36, Ended}}},
+			[]step{{d, frame.Fresh}, {d + 12, frame.Gap}, {d + 24, frame.Fresh}, {d + 36, frame.Ended}}},
 		{"a gap of several due columns", idBTC5m, []int64{d, d + 4},
-			[]step{{d, Fresh}, {d + 1, Gap}, {d + 2, Gap}, {d + 3, Gap}, {d + 4, Fresh}, {d + 5, Ended}}},
-		{"no candle", idBTC5m, nil, []step{{-1, Ended}}},
+			[]step{{d, frame.Fresh}, {d + 1, frame.Gap}, {d + 2, frame.Gap}, {d + 3, frame.Gap}, {d + 4, frame.Fresh}, {d + 5, frame.Ended}}},
+		{"no candle", idBTC5m, nil, []step{{-1, frame.Ended}}},
 	}
 
 	for _, tt := range tests {
@@ -142,10 +143,10 @@ func TestAlign(t *testing.T) {
 				if e.col < 0 {
 					continue
 				}
-				if e.state == Fresh {
+				if e.state == frame.Fresh {
 					fresh = candle(s, e.col)
 				}
-				if sl := f.slot(s, e.col); sl.col != e.col || sl.state != e.state || sl.c != fresh {
+				if sl := f.slot(s, e.col); sl == nil || sl.State != e.state || sl.Val != fresh {
 					t.Errorf("slot at %d = %+v, want %d carrying %+v", e.col, sl, e.state, fresh)
 				}
 			}
@@ -153,10 +154,15 @@ func TestAlign(t *testing.T) {
 			var first int64
 			if len(tt.cols) > 0 {
 				first = tt.cols[0]
-			} else if i := slices.IndexFunc(f.buf.rings[s].slots, func(sl slot) bool { return sl.col >= 0 }); i >= 0 {
-				t.Errorf("no candle: slot %d written", i)
+			} else {
+				r := f.buf.ring(s)
+				for i := int64(0); i < r.Len(); i++ {
+					if sl := r.At(i * r.Period()); sl != nil {
+						t.Errorf("no candle: slot %d written", i)
+					}
+				}
 			}
-			if got := f.buf.rings[s].first.Load(); got != first {
+			if got := f.buf.ring(s).First(); got != first {
 				t.Errorf("first column = %d, want %d", got, first)
 			}
 		})
@@ -183,15 +189,15 @@ func TestAlignCapacity(t *testing.T) {
 		g := newGate()
 		out := newAligner(f.buf, g, s).run(feedLane(items(s, span(d, d+99, 1)...)))
 
-		expect(t, settled(out), evals(s, Fresh, span(d, d+24, 1)...))
+		expect(t, settled(out), evals(s, frame.Fresh, span(d, d+24, 1)...))
 		g.consume(d + 19)
 		expect(t, settled(out), nil)
 		g.consume(d + 20)
-		expect(t, settled(out), evals(s, Fresh, d+25))
+		expect(t, settled(out), evals(s, frame.Fresh, d+25))
 		g.consume(d + 30)
-		expect(t, settled(out), evals(s, Fresh, span(d+26, d+35, 1)...))
+		expect(t, settled(out), evals(s, frame.Fresh, span(d+26, d+35, 1)...))
 		g.consume(d + 200)
-		expect(t, settled(out), append(evals(s, Fresh, span(d+36, d+99, 1)...), evals(s, Ended, d+100)...))
+		expect(t, settled(out), append(evals(s, frame.Fresh, span(d+36, d+99, 1)...), evals(s, frame.Ended, d+100)...))
 		if !closed(out) {
 			t.Error("output not closed")
 		}
@@ -203,17 +209,17 @@ func TestAlignCapacity(t *testing.T) {
 		g := newGate()
 		out := newAligner(f.buf, g, s).run(feedLane(items(s, span(d, d+468, 12)...)))
 
-		expect(t, settled(out), evals(s, Fresh, span(d, d+312, 12)...))
+		expect(t, settled(out), evals(s, frame.Fresh, span(d, d+312, 12)...))
 		g.consume(d + 299)
 		expect(t, settled(out), nil)
 		g.consume(d + 300)
-		expect(t, settled(out), evals(s, Fresh, d+324))
+		expect(t, settled(out), evals(s, frame.Fresh, d+324))
 		g.consume(d + 311)
 		expect(t, settled(out), nil)
 		g.consume(d + 312)
-		expect(t, settled(out), evals(s, Fresh, d+336))
+		expect(t, settled(out), evals(s, frame.Fresh, d+336))
 		g.consume(d + 1000)
-		expect(t, settled(out), append(evals(s, Fresh, span(d+348, d+468, 12)...), evals(s, Ended, d+480)...))
+		expect(t, settled(out), append(evals(s, frame.Fresh, span(d+348, d+468, 12)...), evals(s, frame.Ended, d+480)...))
 		if !closed(out) {
 			t.Error("output not closed")
 		}
@@ -225,11 +231,11 @@ func TestAlignCapacity(t *testing.T) {
 		g := newGate()
 		out := newAligner(f.buf, g, s).run(feedLane(items(s, d, d+100)))
 
-		expect(t, settled(out), append(evals(s, Fresh, d), evals(s, Gap, span(d+1, d+24, 1)...)...))
+		expect(t, settled(out), append(evals(s, frame.Fresh, d), evals(s, frame.Gap, span(d+1, d+24, 1)...)...))
 		g.consume(d + 95)
-		expect(t, settled(out), append(evals(s, Gap, span(d+25, d+99, 1)...), evals(s, Fresh, d+100)...))
+		expect(t, settled(out), append(evals(s, frame.Gap, span(d+25, d+99, 1)...), evals(s, frame.Fresh, d+100)...))
 		g.consume(d + 96)
-		expect(t, settled(out), evals(s, Ended, d+101))
+		expect(t, settled(out), evals(s, frame.Ended, d+101))
 		if !closed(out) {
 			t.Error("output not closed")
 		}
