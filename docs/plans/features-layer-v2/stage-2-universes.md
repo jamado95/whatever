@@ -18,7 +18,7 @@ over it. `Config.validate()` collects every error instead of returning
 the first. Nothing consumes universes yet: `data_logger` and `data_logger_v2` ignore them.
 
 ```
-Load          shape: universes, rules, stream IDs, unknown universes
+Load          shape: universes, rules, unknown universes
 instantiate   streams := proto.NewStreams(cfg.Subscriptions)        built once
               cfg.ResolveUniverses(streams)                         errors join build's
 wire          _streams ─▶ data_logger_v2 ─▶ data.New                the full table
@@ -75,15 +75,18 @@ unstaged for review; the step is committed once approved, then the next starts.
 - **Names are taken as named:** every filter, `kind` included, chooses partners only.
 - **An explicit-pairs rule takes no filter**: it chooses no partners, so a filter would do nothing.
 - **Malformed is an error, not "matches nothing":** an empty list (`"symbol": []`, `"pairs": []`),
-  an invalid glob, a malformed name, or an explicit pair without exactly two distinct names.
-- **A name that matches no stream is an error**, as a strategy's subscription reference is. A filter
+  an empty value (`"symbol": [""]`), an invalid glob, or an explicit pair without exactly two
+  distinct names.
+- **A name that matches no stream is an error**, as a strategy's subscription reference is. Lookup
+  is the only check on a name: the table's IDs are valid by construction, so a malformed name is
+  one that matches no stream, and config never parses the ID format. A filter
   that selects nothing is valid; a universe an enabled feature names that resolves to no streams is
   an error.
 - **Pairs are unordered**, stored as `(lower index, higher index)`; asymmetric order stays open
   ([main.md](main.md) § Out of scope). Only a stream paired with itself is excluded: pairs across
   timeframes, or within one symbol, are valid.
 - **`Load` checks shape; the composition root resolves.** Everything that needs no table — names,
-  rules, stream-ID syntax, unknown universes — is in `validate()`. Resolution
+  rules, unknown universes — is in `validate()`. Resolution
   needs the table, so `instantiate` resolves every universe over the one table it built, through
   config's `ResolveUniverses`; its errors are path-named and join `build`'s. A config with both a
   shape error and an unmatched name reports the second on the next run, as `Load` and `build` errors
@@ -231,7 +234,7 @@ name that is no stream's ID is an error, path-named from the rule.
 */
 func Resolve(u Universe, st *proto.Streams) (Resolved, []error)
 
-// check returns u's shape errors, path-named from the rule: pairing, empty lists, globs, names.
+// check returns u's shape errors, path-named from the rule: pairing, empty lists and values, globs.
 func (u Universe) check() []error
 ```
 
@@ -253,16 +256,16 @@ streams are looked up by ID through `Index`.
   provider.
 - **`TestResolveNamed`** — direct and derived streams named by their IDs; no filter, `kind`
   included, drops a named stream; a name that is no stream's ID — a derived stream written with its
-  source's provider among them — is an error naming its path.
+  source's provider, and a malformed name, among them — is an error naming its path.
 - **`TestResolveReferences`** — each reference paired with every partner, itself excluded;
   references are among the streams; no partners, no pairs.
 - **`TestResolveExplicitPairs`** — pairs as written, a derived end named by its ID.
 - **`TestResolveAllPairs`** — every unordered pair of the rule's streams.
 - **`TestResolveUnion`** — rules union; a pair from two rules, or written both ways, is one pair;
   output sorted.
-- **`TestUniverseCheck`** — no rules; `references` with `pairs`; empty lists; a malformed glob; a name
-  without three parts or with an invalid timeframe; an explicit pair of one, three or two equal
-  names; filters on explicit pairs. Errors are collected, path-named.
+- **`TestUniverseCheck`** — no rules; `references` with `pairs`; empty lists; empty values; a
+  malformed glob; an explicit pair of one, three or two equal names; filters on explicit pairs.
+  Errors are collected, path-named.
 - **`TestPairsUnmarshal`** — `"*"`, a list, another string.
 
 ### Acceptance
