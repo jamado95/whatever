@@ -3,8 +3,10 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 
 	proto "whatever/internal/protocol"
@@ -14,6 +16,7 @@ type Config struct {
 	Providers     []ComponentConfig    `json:"providers"`
 	Strategies    []ComponentConfig    `json:"strategies"`
 	Features      []FeatureConfig      `json:"features"`
+	Universes     []Universe           `json:"universes"`
 	Subscriptions []proto.Subscription `json:"subscriptions"`
 	Engine        EngineConfig         `json:"engine"`
 }
@@ -21,6 +24,7 @@ type Config struct {
 type FeatureConfig struct {
 	Type     string           `json:"type"`
 	Disabled bool             `json:"disabled"`
+	Universe string           `json:"universe"` // a universe's name; every variant runs on it
 	Variants []map[string]any `json:"variants"`
 }
 
@@ -124,48 +128,64 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	if err := cfg.validate(); err != nil {
-		return nil, err
+	if errs := cfg.validate(); len(errs) > 0 {
+		return nil, errors.Join(errs...)
 	}
 
 	return &cfg, nil
 }
 
-func (c *Config) validate() error {
+// validate returns every shape error in the file: features, subscriptions, providers, universes and
+// the engine, each path-named.
+func (c *Config) validate() []error {
+	var errs []error
+	fail := func(format string, args ...any) {
+		errs = append(errs, fmt.Errorf(format, args...))
+	}
+
+	universes := make(map[string]bool, len(c.Universes))
+	for _, u := range c.Universes {
+		universes[u.Name] = true
+	}
+
 	for i, f := range c.Features {
 		if f.Type == "" {
-			return fmt.Errorf("features[%d]: missing required 'type' field", i)
+			fail("features[%d]: missing required 'type' field", i)
+		}
+		if !f.Disabled && f.Universe != "" && !universes[f.Universe] {
+			fail("features[%d] (%s): unknown universe %q", i, f.Type, f.Universe)
 		}
 	}
 
 	if len(c.Subscriptions) == 0 {
-		return fmt.Errorf("subscriptions: at least one subscription is required")
+		fail("subscriptions: at least one subscription is required")
 	}
 	seen := make(map[string]bool, len(c.Subscriptions))
 	for i, s := range c.Subscriptions {
-		if s.Symbol == "" {
-			return fmt.Errorf("subscriptions[%d]: missing required 'symbol' field", i)
+		missing := len(errs)
+
+		sv := reflect.ValueOf(s)
+		for f := 0; f < sv.NumField(); f++ {
+			if field := sv.Field(f); field.Kind() == reflect.String && field.String() == "" {
+				fail("subscriptions[%d]: missing required '%s' field", i, strings.ToLower(sv.Type().Field(f).Name))
+			}
 		}
-		if s.Timeframe == "" {
-			return fmt.Errorf("subscriptions[%d]: missing required 'timeframe' field", i)
+		// an incomplete subscription has no ID, and no timeframe to derive from
+		if len(errs) > missing {
+			continue
 		}
-		if s.Provider == "" {
-			return fmt.Errorf("subscriptions[%d]: missing required 'provider' field", i)
-		}
+
 		if seen[s.ID()] {
-			return fmt.Errorf("subscriptions[%d]: duplicate subscription %q", i, s.ID())
+			fail("subscriptions[%d]: duplicate subscription %q", i, s.ID())
 		}
 		seen[s.ID()] = true
 
 		// Each derived window must be coarser than its source and a multiple of it.
 		for _, tf := range s.Derive.List() {
 			if tf.TimeframeMs() <= s.Timeframe.TimeframeMs() {
-				return fmt.Errorf("subscriptions[%d] (%s): derive %q must be coarser than %q",
-					i, s.ID(), tf, s.Timeframe)
-			}
-			if tf.TimeframeMs()%s.Timeframe.TimeframeMs() != 0 {
-				return fmt.Errorf("subscriptions[%d] (%s): derive %q must be a multiple of %q",
-					i, s.ID(), tf, s.Timeframe)
+				fail("subscriptions[%d] (%s): derive %q must be coarser than %q", i, s.ID(), tf, s.Timeframe)
+			} else if tf.TimeframeMs()%s.Timeframe.TimeframeMs() != 0 {
+				fail("subscriptions[%d] (%s): derive %q must be a multiple of %q", i, s.ID(), tf, s.Timeframe)
 			}
 		}
 	}
@@ -178,19 +198,32 @@ func (c *Config) validate() error {
 			continue
 		}
 		if names[p.Name] {
-			return fmt.Errorf("providers[%d]: duplicate provider name %q", i, p.Name)
+			fail("providers[%d]: duplicate provider name %q", i, p.Name)
 		}
 		// Reserved for derived streams, so their IDs never collide with direct ones.
 		if strings.HasPrefix(p.Name, proto.DerivedProviderPrefix) {
-			return fmt.Errorf("providers[%d]: name %q must not start with %q",
-				i, p.Name, proto.DerivedProviderPrefix)
+			fail("providers[%d]: name %q must not start with %q", i, p.Name, proto.DerivedProviderPrefix)
 		}
 		names[p.Name] = true
 	}
 
-	if c.Engine.Type == "" {
-		return fmt.Errorf("engine: missing required 'type' field")
+	named := make(map[string]bool, len(c.Universes))
+	for i, u := range c.Universes {
+		if u.Name == "" {
+			fail("universes[%d]: missing required 'name' field", i)
+		} else if named[u.Name] {
+			fail("universes[%d]: duplicate universe name %q", i, u.Name)
+		}
+		named[u.Name] = true
+
+		for _, err := range u.check() {
+			errs = append(errs, fmt.Errorf("%s: %w", universePath(i, u.Name), err))
+		}
 	}
 
-	return nil
+	if c.Engine.Type == "" {
+		fail("engine: missing required 'type' field")
+	}
+
+	return errs
 }

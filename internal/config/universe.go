@@ -273,3 +273,41 @@ func checkGlob(at, g string) error {
 	}
 	return nil
 }
+
+/*
+ResolveUniverses resolves every universe over st, keyed by name, for a config Load accepted. Errors
+are prefixed universes[i] (name); a universe an enabled feature names that resolves to no streams is
+an error.
+*/
+func (c *Config) ResolveUniverses(st *proto.Streams) (map[string]Resolved, []error) {
+	used := make(map[string]bool)
+	for _, f := range c.Features {
+		if !f.Disabled && f.Universe != "" {
+			used[f.Universe] = true
+		}
+	}
+
+	var errs []error
+	resolved := make(map[string]Resolved, len(c.Universes))
+	for i, u := range c.Universes {
+		r, rerrs := Resolve(u, st)
+		for _, err := range rerrs {
+			errs = append(errs, fmt.Errorf("%s: %w", universePath(i, u.Name), err))
+		}
+		// an unmatched name already explains an empty universe
+		if len(rerrs) == 0 && used[u.Name] && len(r.Streams) == 0 {
+			errs = append(errs, fmt.Errorf("%s: selects no streams", universePath(i, u.Name)))
+		}
+		resolved[u.Name] = r
+	}
+
+	return resolved, errs
+}
+
+// universePath is universe i's error prefix, universes[i] (name).
+func universePath(i int, name string) string {
+	if name == "" {
+		return fmt.Sprintf("universes[%d]", i)
+	}
+	return fmt.Sprintf("universes[%d] (%s)", i, name)
+}

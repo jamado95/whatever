@@ -32,6 +32,10 @@ func instantiate(cfg *config.Config, log *logger.Logger) (*components, []error) 
 		features:   make([]proto.Feature, 0),
 	}
 
+	// Universes resolve over the table; nothing consumes them until feature expansion
+	_, uerrs := cfg.ResolveUniverses(c.streams)
+	errs = append(errs, uerrs...)
+
 	// 1. Providers
 	for _, pc := range cfg.Providers {
 		if pc.Disabled {

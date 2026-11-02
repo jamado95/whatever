@@ -35,7 +35,7 @@ func main() {
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		log.Error(err, fmt.Sprintf("%s: %v", *configPath, err))
+		reportErrors(log, *configPath, []error{err})
 		os.Exit(1)
 	}
 
@@ -44,11 +44,7 @@ func main() {
 	// than fatal so that one pass reports every problem in the file.
 	eng, errs := build(cfg, log)
 	if len(errs) > 0 {
-		for _, e := range errs {
-			log.Error(e, fmt.Sprintf("%s: %v", *configPath, e))
-		}
-		log.Error(fmt.Errorf("%d config error(s)", len(errs)),
-			fmt.Sprintf("%s: %d config error(s)", *configPath, len(errs)))
+		reportErrors(log, *configPath, errs)
 		os.Exit(1)
 	}
 
@@ -69,6 +65,25 @@ func main() {
 	}
 
 	log.Info("whtv shutdown complete")
+}
+
+// reportErrors logs each config error on its own line, a joined error split into its parts, then
+// their count.
+func reportErrors(log *logger.Logger, path string, errs []error) {
+	var all []error
+	for _, err := range errs {
+		if joined, ok := err.(interface{ Unwrap() []error }); ok {
+			all = append(all, joined.Unwrap()...)
+		} else {
+			all = append(all, err)
+		}
+	}
+
+	for _, e := range all {
+		log.Error(e, fmt.Sprintf("%s: %v", path, e))
+	}
+	log.Error(fmt.Errorf("%d config error(s)", len(all)),
+		fmt.Sprintf("%s: %d config error(s)", path, len(all)))
 }
 
 // build instantiates every enabled component and wires the engine. Errors from

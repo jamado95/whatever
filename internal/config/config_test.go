@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -140,6 +141,21 @@ func TestMissingSubscriptionProvider(t *testing.T) {
 	}
 }
 
+// A subscription without a timeframe is reported alone, its derive windows unchecked.
+func TestMissingSubscriptionTimeframe(t *testing.T) {
+	body := `{
+      "providers": [{ "type": "binance_csv", "file": "x.csv" }],
+      "subscriptions": [{ "symbol": "BTCUSDT", "provider": "binance_csv", "derive": ["1h"] }],
+      "engine": { "type": "data_logger" }
+    }`
+	_, err := Load(writeConfig(t, body))
+	if err == nil {
+		t.Fatal("Load succeeded, want a missing-timeframe error")
+	}
+	wantErrs(t, err.(interface{ Unwrap() []error }).Unwrap(),
+		"subscriptions[0]: missing required 'timeframe' field")
+}
+
 func TestNoSubscriptionsRejected(t *testing.T) {
 	body := `{
       "providers": [{ "type": "binance_csv", "file": "x.csv" }],
@@ -205,4 +221,155 @@ func TestDerivedProviderPrefixRejected(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "must not start with") {
 		t.Fatalf("expected a reserved-prefix error, got: %v", err)
 	}
+}
+
+// universeConfig is a valid config around a universes block and a features block.
+func universeConfig(universes, features string) string {
+	return `{
+      "providers": [{ "type": "binance_csv", "file": "x.csv" }],
+      "subscriptions": [{ "symbol": "BTCUSDT", "timeframe": "1h", "provider": "binance_csv" }],
+      "universes": ` + universes + `,
+      "features": ` + features + `,
+      "engine": { "type": "data_logger" }
+    }`
+}
+
+func TestLoadUniverses(t *testing.T) {
+	body := universeConfig(`[
+      { "name": "usdt", "rules": [{ "symbol": ["*USDT"], "kind": ["direct"] }] },
+      { "name": "lead", "rules": [
+        { "references": ["BTCUSDT:1h:binance_csv"], "timeframe": ["1h"] },
+        { "pairs": [["BTCUSDT:1h:binance_csv", "ETHUSDT:1h:binance_csv"]] }
+      ] },
+      { "name": "all_pairs", "rules": [{ "pairs": "*" }] }
+    ]`, `[{ "type": "rsi", "universe": "usdt" }]`)
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if len(cfg.Universes) != 3 {
+		t.Fatalf("got %d universes, want 3", len(cfg.Universes))
+	}
+	usdt, lead, all := cfg.Universes[0], cfg.Universes[1], cfg.Universes[2]
+	if usdt.Name != "usdt" || usdt.Rules[0].Symbol[0] != "*USDT" || usdt.Rules[0].Kind[0] != proto.StreamDirect {
+		t.Errorf("usdt = %+v, want a *USDT direct filter", usdt)
+	}
+	if lead.Rules[0].References[0] != "BTCUSDT:1h:binance_csv" || !lead.Rules[1].Pairs.explicit() ||
+		len(lead.Rules[1].Pairs.List) != 1 {
+		t.Errorf("lead = %+v, want a references rule and one explicit pair", lead)
+	}
+	if !all.Rules[0].Pairs.All {
+		t.Errorf("all_pairs = %+v, want \"*\"", all)
+	}
+	if cfg.Features[0].Universe != "usdt" {
+		t.Errorf("feature universe = %q, want usdt", cfg.Features[0].Universe)
+	}
+}
+
+func TestUniverseUnknownFieldRejected(t *testing.T) {
+	body := universeConfig(`[{ "name": "u", "rules": [{ "refrences": ["BTCUSDT:1h:binance_csv"] }] }]`, `[]`)
+	_, err := Load(writeConfig(t, body))
+	if err == nil || !strings.Contains(err.Error(), `unknown field "refrences"`) {
+		t.Fatalf("expected refrences to be rejected as an unknown field, got: %v", err)
+	}
+}
+
+func TestUniverseErrors(t *testing.T) {
+	cases := []struct {
+		name      string
+		universes string
+		features  string
+		want      []string
+	}{
+		{"empty and duplicate names",
+			`[{ "rules": [{}] }, { "name": "u", "rules": [{}] }, { "name": "u", "rules": [{}] }]`, `[]`,
+			[]string{"universes[0]: missing required 'name' field", `universes[2]: duplicate universe name "u"`}},
+		{"an unknown universe on an enabled feature",
+			`[]`, `[{ "type": "rsi", "universe": "usdt" }, { "type": "ema", "universe": "usdt", "disabled": true }]`,
+			[]string{`features[0] (rsi): unknown universe "usdt"`}},
+		{"rule shape errors prefixed with their universe",
+			`[{ "name": "u", "rules": [{ "symbol": [] }, { "references": [""], "pairs": "*" }] }, { "name": "v", "rules": [] }]`,
+			`[]`,
+			[]string{
+				"universes[0] (u): rules[0].symbol: empty list",
+				"universes[0] (u): rules[1]: references and pairs are exclusive",
+				"universes[0] (u): rules[1].references: empty value",
+				"universes[1] (v): rules: at least one rule is required",
+			}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, universeConfig(tc.universes, tc.features)))
+			if err == nil {
+				t.Fatal("Load succeeded, want errors")
+			}
+			wantErrs(t, err.(interface{ Unwrap() []error }).Unwrap(), tc.want...)
+		})
+	}
+}
+
+func TestResolveUniverses(t *testing.T) {
+	named := func(name string, rules ...string) Universe {
+		u := universe(t, rules...)
+		u.Name = name
+		return u
+	}
+	cfg := &Config{
+		Universes: []Universe{
+			named("btc", `{"symbol": ["BTC*"], "timeframe": ["1h"]}`),
+			named("typo", `{"references": ["BTCUSDT:1h:binance"]}`),
+			named("empty", `{"symbol": ["SOL*"]}`),
+			named("unused", `{"symbol": ["SOL*"]}`),
+			named("disabled_only", `{"symbol": ["SOL*"]}`),
+		},
+		Features: []FeatureConfig{
+			{Type: "rsi", Universe: "btc"},
+			{Type: "sma", Universe: "typo"},
+			{Type: "ema", Universe: "empty"},
+			{Type: "vwap", Universe: "disabled_only", Disabled: true},
+		},
+	}
+	st := testStreams()
+
+	got, errs := cfg.ResolveUniverses(st)
+	wantErrs(t, errs,
+		`universes[1] (typo): rules[0].references[0]: no stream has ID "BTCUSDT:1h:binance"`,
+		"universes[2] (empty): selects no streams")
+
+	if len(got) != len(cfg.Universes) {
+		t.Fatalf("got %d universes, want one per name", len(got))
+	}
+	want := []int{index(t, st, btc1h), index(t, st, btc1hD)}
+	slices.Sort(want)
+	if !slices.Equal(got["btc"].Streams, want) {
+		t.Errorf("btc = %s, want BTC 1h streams", render(st, got["btc"]))
+	}
+}
+
+func TestValidateCollectsErrors(t *testing.T) {
+	body := `{
+      "providers": [
+        { "type": "binance_csv", "name": "p", "file": "x.csv" },
+        { "type": "binance_csv", "name": "p", "file": "y.csv" }
+      ],
+      "features": [{ "type": "" }],
+      "universes": [{ "name": "u", "rules": [{ "kind": [] }] }],
+      "subscriptions": [
+        { "symbol": "BTCUSDT", "timeframe": "1h" },
+        { "symbol": "BTCUSDT", "timeframe": "1h", "provider": "p", "derive": ["5m"] }
+      ],
+      "engine": {}
+    }`
+	_, err := Load(writeConfig(t, body))
+	if err == nil {
+		t.Fatal("Load succeeded, want errors")
+	}
+	wantErrs(t, err.(interface{ Unwrap() []error }).Unwrap(),
+		"features[0]: missing required 'type' field",
+		"subscriptions[0]: missing required 'provider' field",
+		`subscriptions[1] (BTCUSDT:1h:p): derive "5m" must be coarser than "1h"`,
+		`providers[1]: duplicate provider name "p"`,
+		"universes[0] (u): rules[0].kind: empty list",
+		"engine: missing required 'type' field")
 }

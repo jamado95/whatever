@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -113,5 +115,43 @@ func TestBuildDataLoggerV2AcceptsDerivations(t *testing.T) {
 	eng, errs := build(cfg, testLogger())
 	if len(errs) > 0 || eng == nil {
 		t.Fatalf("expected data_logger_v2 to build with derivations, got: %v", errs)
+	}
+}
+
+func TestReportErrorsSplitsJoined(t *testing.T) {
+	var out bytes.Buffer
+	log := logger.NewLogger(logger.LoggerConfig{Level: "debug", Output: &out})
+	reportErrors(log, "c.json", []error{errors.Join(errors.New("first"), errors.New("second")), errors.New("third")})
+
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	want := []string{"c.json: first", "c.json: second", "c.json: third", "c.json: 3 config error(s)"}
+	if len(lines) != len(want) {
+		t.Fatalf("got %d lines, want %d:\n%s", len(lines), len(want), out.String())
+	}
+	for i, w := range want {
+		if !strings.Contains(lines[i], w) {
+			t.Errorf("line %d = %s, want it to contain %q", i, lines[i], w)
+		}
+	}
+}
+
+func TestBuildReportsUniverseErrors(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []config.ComponentConfig{csvProvider("binance_csv")},
+		Features:  []config.FeatureConfig{{Type: "ghost_feature", Universe: "btc"}},
+		Universes: []config.Universe{
+			{Name: "btc", Rules: []config.Rule{{References: []string{"BTCUSDT:1h:ghost"}}}},
+		},
+		Subscriptions: []proto.Subscription{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "binance_csv"}},
+		Engine:        config.EngineConfig{Type: "data_logger"},
+	}
+	_, errs := build(cfg, testLogger())
+	for _, want := range []string{
+		`universes[0] (btc): rules[0].references[0]: no stream has ID "BTCUSDT:1h:ghost"`,
+		`feature "ghost_feature" not registered`,
+	} {
+		if !hasError(errs, want) {
+			t.Errorf("missing error %q, got: %v", want, errs)
+		}
 	}
 }

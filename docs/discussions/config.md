@@ -71,7 +71,9 @@ engine as an injected `_subscription` dependency.
 `--validate-only` constructs every enabled component and exits before `Run`. It needs no separate
 validation machinery because `main.go` already builds everything before running anything, and no
 factory performs I/O. Errors are accumulated rather than fatal, so one pass reports every
-independent problem.
+independent problem: `Load` collects its validation errors, universes' shape included, and `build`
+collects construction errors, universe resolution over the stream table among them. `Load`'s errors
+stop the run, so `build`'s surface on the next one.
 
 ## Decisions
 
@@ -100,6 +102,9 @@ Executed implementation plans:
 
 - [`docs/plans/config-strict-parsing.md`](../plans/config-strict-parsing.md) — strict config parsing
   and validation. Executed 2026-07-26.
+- [`docs/plans/features-layer-v2/stage-2-universes.md`](../plans/features-layer-v2/stage-2-universes.md)
+  — universes, their resolver over the stream table, and collected validation errors. Executed
+  2026-11-02.
 
 As implemented:
 
@@ -107,6 +112,7 @@ As implemented:
 |---|---|
 | `Decode`, `DecodeOptions`, `Dep`, `OptDep`, `Duration`, `Validator` | `internal/config/decode.go` |
 | File shape, strict `Load`, `EngineConfig.Opts()` | `internal/config/config.go` |
+| `Universe`, `Rule`, `Pairs`, `Resolve`, `ResolveUniverses` | `internal/config/universe.go` |
 | `Timeframe.UnmarshalJSON` | `internal/protocol/provider.go` |
 | `TickerType`, `TickerConfig`, `newTicker` | `internal/engine/ticker.go` |
 | Per-component config structs | beside each factory |
@@ -149,23 +155,26 @@ Resolved by this work: silent ticker fallback, triplicated engine parsers, untyp
   validated today; enabling it will surface the mismatch.
 - `swing_highlow` was updated but sits behind a `//go:build wip` tag, so it is not in the default
   build and its `Validate()` (even period) is unexercised.
-- **Config changes agreed in [[features]]**, planned in
-  `docs/plans/features-layer-v2/stage-2-universes.md`:
+- **Universes implemented**, agreed in [[features]] —
+  `docs/plans/features-layer-v2/stage-2-universes.md`; nothing consumes them yet:
   - **`universes` block, and `universe` per feature** — named stream and pair sets built from
     self-contained rules (references, explicit pairs, `*`) with filters on symbol, timeframe,
     provider and kind. See [features § Universes](features.md#universes); example config in
     [features § Solution — Universes](features.md#universes-1).
-  - **Universe resolution is config's** — a pure function of rules over the stream table
+  - **Universe resolution is config's** — `Resolve`, a pure function of rules over the stream table
     (`proto.Streams`). `Load` checks universes' shape only; the composition root builds the table
-    once in `instantiate`, resolves universes over it through config, and injects the table as
-    `_streams`. See
-    [features § Feature layer](features.md#feature-layer).
+    once in `instantiate`, resolves universes over it through `ResolveUniverses`, and injects the
+    table as `_streams`. See [features § Feature layer](features.md#feature-layer).
   - **Rules name streams by their stream IDs**, derived ones included, so a name matches at most one
-    stream and subscriptions need no new rule. See [features § Universes](features.md#universes).
-  - **Composition is never in config.** Dependencies come from each feature type's registered
-    descriptor, which validation reads without instantiating; a dependency type with no configured
-    variant is an error. Factories keep building variant IDs. See
-    [features § Feature graph](features.md#feature-graph).
+    stream and subscriptions need no new rule. Lookup is the only check on a name. See
+    [features § Universes](features.md#universes).
+  - **`validate()` collects every error**; `Load` returns them joined and `main` logs one per line,
+    as it does `build`'s.
+- **Composition is never in config**, agreed in [[features]] and planned in
+  `docs/plans/features-layer-v2/main.md`. Dependencies come from each feature type's registered
+  descriptor, which validation reads without instantiating; a dependency type with no configured
+  variant is an error. Factories keep building variant IDs. See
+  [features § Feature graph](features.md#feature-graph).
 
 ## Resources
 
