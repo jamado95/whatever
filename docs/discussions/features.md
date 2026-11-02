@@ -399,7 +399,7 @@ bound up with the strategy input contract ([[strategy-layer]]).
   running on it: `docs/plans/features-layer-v2/stage-1-frame.md`.
 - The stream table in `internal/protocol`, built by the composition root, and universes in config,
   resolved over it, implemented; nothing consumes universes yet —
-  `docs/plans/features-layer-v2/stage-2-universes.md`, its config guide pending.
+  `docs/plans/features-layer-v2/stage-2-universes.md`. Config guide: `configs/README.md`.
 - Registered and working: `sma`, `ema`, `rsi`, `vwap`, `engulfing_candle`.
 - `swing_highlow` is broken behind a `wip` build tag. It duplicates swing-detection logic that also
   exists (also broken) inside `buy_the_dip` — see [[strategy-layer]]. Consolidating swing detection

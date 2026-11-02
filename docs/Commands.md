@@ -23,6 +23,9 @@ so there is no Python setup step.
 | `make validate [CONFIG=]` | Validate a config and exit without running anything. |
 | `./whatever [flags]` | Run a previously built binary. |
 
+The config file format — every block and field, universes by example, common errors — is in
+[configs/README.md](../configs/README.md).
+
 Engine type, provider, features, symbol and limits are all set in the config file; the two flags
 below only choose *which* file and *whether to run it*. Ctrl-C shuts down cleanly. Configs live in
 `configs/`. As checked in, `make run` executes the `data_logger_v2` engine

@@ -79,10 +79,9 @@ type resolveCase struct {
 	pairs   [][2]string // either order
 }
 
-// runResolve resolves each case over testStreams and wants exactly its streams and pairs, sorted.
-func runResolve(t *testing.T, cases []resolveCase) {
+// runResolve resolves each case over st and wants exactly its streams and pairs, sorted.
+func runResolve(t *testing.T, st *proto.Streams, cases []resolveCase) {
 	t.Helper()
-	st := testStreams()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, errs := Resolve(universe(t, tc.rules...), st)
@@ -124,7 +123,7 @@ func wantErrs(t *testing.T, errs []error, want ...string) {
 }
 
 func TestResolveFilters(t *testing.T) {
-	runResolve(t, []resolveCase{
+	runResolve(t, testStreams(), []resolveCase{
 		{"no filter selects every stream", []string{`{}`},
 			[]string{btc5m, btc1h, btc1hD, eth1h, eth5m, eth1hD, ethbtc}, nil},
 		{"symbol glob", []string{`{"symbol": ["*USDT"]}`},
@@ -146,7 +145,7 @@ func TestResolveFilters(t *testing.T) {
 }
 
 func TestResolveDerived(t *testing.T) {
-	runResolve(t, []resolveCase{
+	runResolve(t, testStreams(), []resolveCase{
 		{"its window timeframe and its source's provider", []string{`{"timeframe": ["1h"], "provider": ["binance"]}`},
 			[]string{btc1hD, eth1h}, nil},
 		{"not its source's timeframe", []string{`{"timeframe": ["5m"], "kind": ["derived"]}`}, nil, nil},
@@ -155,7 +154,7 @@ func TestResolveDerived(t *testing.T) {
 }
 
 func TestResolveNamed(t *testing.T) {
-	runResolve(t, []resolveCase{
+	runResolve(t, testStreams(), []resolveCase{
 		{"a derived stream by its ID, kind choosing partners only",
 			[]string{`{"references": ["BTCUSDT:1h:derived_BTCUSDT:5m:binance"], "timeframe": ["1h"], "kind": ["direct"]}`},
 			[]string{btc1hD, btc1h, eth1h, ethbtc},
@@ -182,7 +181,7 @@ func TestResolveNamed(t *testing.T) {
 }
 
 func TestResolveReferences(t *testing.T) {
-	runResolve(t, []resolveCase{
+	runResolve(t, testStreams(), []resolveCase{
 		{"every partner, itself excluded", []string{`{"references": ["BTCUSDT:1h:kraken"], "timeframe": ["1h"]}`},
 			[]string{btc1h, btc1hD, eth1h, eth1hD, ethbtc},
 			[][2]string{{btc1h, btc1hD}, {btc1h, eth1h}, {btc1h, eth1hD}, {btc1h, ethbtc}}},
@@ -196,7 +195,7 @@ func TestResolveReferences(t *testing.T) {
 }
 
 func TestResolveExplicitPairs(t *testing.T) {
-	runResolve(t, []resolveCase{
+	runResolve(t, testStreams(), []resolveCase{
 		{"as written", []string{`{"pairs": [
 			["BTCUSDT:1h:kraken", "ETHUSDT:1h:derived_ETHUSDT:5m:kraken"],
 			["ETHBTC:1h:kraken", "BTCUSDT:5m:binance"]]}`},
@@ -206,7 +205,7 @@ func TestResolveExplicitPairs(t *testing.T) {
 }
 
 func TestResolveAllPairs(t *testing.T) {
-	runResolve(t, []resolveCase{
+	runResolve(t, testStreams(), []resolveCase{
 		{"every unordered pair", []string{`{"pairs": "*", "symbol": ["ETH*"], "timeframe": ["1h"]}`},
 			[]string{eth1h, eth1hD, ethbtc},
 			[][2]string{{eth1h, eth1hD}, {eth1h, ethbtc}, {eth1hD, ethbtc}}},
@@ -219,7 +218,7 @@ func TestResolveAllPairs(t *testing.T) {
 }
 
 func TestResolveUnion(t *testing.T) {
-	runResolve(t, []resolveCase{
+	runResolve(t, testStreams(), []resolveCase{
 		{"a pair from two rules, written both ways, is one pair",
 			[]string{
 				`{"pairs": "*", "symbol": ["ETHUSDT"]}`,
@@ -316,5 +315,91 @@ func TestPairsUnmarshal(t *testing.T) {
 		if err := json.Unmarshal([]byte(js), &p); err == nil {
 			t.Errorf("%s decoded as %+v, want an error", js, p)
 		}
+	}
+}
+
+// readme labels the streams of configs/README.md § Universes by the guide's letters.
+var readme = map[string]string{
+	"A": "BTCUSDT:5m:btc_5m",
+	"B": "BTCUSDT:1h:derived_BTCUSDT:5m:btc_5m",
+	"C": "BTCUSDT:1h:btc_1h",
+	"D": "ETHUSDT:5m:eth_5m",
+	"E": "ETHUSDT:1h:derived_ETHUSDT:5m:eth_5m",
+	"F": "SOLUSDT:1h:sol_1h",
+	"G": "ETHBTC:1h:ethbtc_1h",
+}
+
+// readmeStreams is the table of the guide's five example subscriptions.
+func readmeStreams() *proto.Streams {
+	derive1h := proto.NewTimeframeDerivationSet(proto.Timeframe1h)
+	return proto.NewStreams([]proto.Subscription{
+		{Symbol: "BTCUSDT", Timeframe: proto.Timeframe5m, Provider: "btc_5m", Derive: derive1h},
+		{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "btc_1h"},
+		{Symbol: "ETHUSDT", Timeframe: proto.Timeframe5m, Provider: "eth_5m", Derive: derive1h},
+		{Symbol: "SOLUSDT", Timeframe: proto.Timeframe1h, Provider: "sol_1h"},
+		{Symbol: "ETHBTC", Timeframe: proto.Timeframe1h, Provider: "ethbtc_1h"},
+	})
+}
+
+// TestResolveExamples resolves every universe example of configs/README.md, written as the guide
+// writes it, so the guide and the resolver cannot disagree.
+func TestResolveExamples(t *testing.T) {
+	st := readmeStreams()
+	for _, id := range readme {
+		index(t, st, id) // the guide's stream IDs are the table's
+	}
+
+	examples := []struct {
+		rules   []string
+		streams string // the guide's letters
+		pairs   string // two letters each
+	}{
+		{[]string{`{}`}, "A B C D E F G", ""},
+		{[]string{`{"symbol": ["*USDT"]}`}, "A B C D E F", ""},
+		{[]string{`{"timeframe": ["1h"]}`}, "B C E F G", ""},
+		{[]string{`{"timeframe": ["1h"], "kind": ["direct"]}`}, "C F G", ""},
+		{[]string{`{"symbol": ["BTCUSDT", "ETHUSDT"], "timeframe": ["1h"]}`}, "B C E", ""},
+		{[]string{`{"provider": ["*_5m"]}`}, "A B D E", ""},
+		{[]string{`{"references": ["BTCUSDT:1h:btc_1h"], "timeframe": ["1h"]}`}, "B C E F G", "CB CE CF CG"},
+		{[]string{`{"references": ["BTCUSDT:5m:btc_5m"], "symbol": ["*USDT"], "timeframe": ["1h"]}`}, "A B C E F", "AB AC AE AF"},
+		{[]string{`{"references": ["BTCUSDT:1h:btc_1h", "SOLUSDT:1h:sol_1h"], "symbol": ["ETH*"], "timeframe": ["1h"]}`}, "C E F G", "CE CG FE FG"},
+		{[]string{`{"references": ["BTCUSDT:1h:derived_BTCUSDT:5m:btc_5m"], "timeframe": ["1h"], "kind": ["direct"]}`}, "B C F G", "BC BF BG"},
+		{[]string{`{"pairs": [["BTCUSDT:1h:btc_1h", "ETHUSDT:1h:derived_ETHUSDT:5m:eth_5m"], ["SOLUSDT:1h:sol_1h", "ETHBTC:1h:ethbtc_1h"]]}`}, "C E F G", "CE FG"},
+		{[]string{`{"pairs": "*", "symbol": ["*USDT"], "timeframe": ["1h"]}`}, "B C E F", "BC BE BF CE CF EF"},
+		{[]string{`{"pairs": "*", "symbol": ["*USDT"], "timeframe": ["1h"], "kind": ["direct"]}`}, "C F", "CF"},
+		{[]string{`{"pairs": "*", "symbol": ["BTCUSDT"]}`}, "A B C", "AB AC BC"},
+		{[]string{
+			`{ "pairs": "*", "symbol": ["*USDT"], "timeframe": ["1h"], "kind": ["direct"] }`,
+			`{ "pairs": [["SOLUSDT:1h:sol_1h", "BTCUSDT:1h:btc_1h"]] }`,
+			`{ "symbol": ["ETHBTC"] }`,
+		}, "C F G", "CF"},
+		{[]string{`{ "symbol": ["*USDT"] }`}, "A B C D E F", ""}, // the usdt universe rsi_14 binds to
+	}
+
+	cases := make([]resolveCase, len(examples))
+	for i, ex := range examples {
+		cases[i] = resolveCase{name: strings.Join(ex.rules, " "), rules: ex.rules}
+		for _, l := range strings.Fields(ex.streams) {
+			cases[i].streams = append(cases[i].streams, readme[l])
+		}
+		for _, p := range strings.Fields(ex.pairs) {
+			cases[i].pairs = append(cases[i].pairs, [2]string{readme[p[:1]], readme[p[1:]]})
+		}
+	}
+	runResolve(t, st, cases)
+
+	errExamples := []struct{ rule, want string }{
+		{`{"references": ["BTCUSDT:1h:btc_5m"]}`, `no stream has ID "BTCUSDT:1h:btc_5m"`},
+		{`{"pairs": [["BTCUSDT:1h:btc_1h", "SOLUSDT:1h:sol_1h"]], "kind": ["direct"]}`, "explicit pairs take no filter"},
+	}
+	for _, ex := range errExamples {
+		t.Run(ex.rule, func(t *testing.T) {
+			u := universe(t, ex.rule)
+			errs := u.check()
+			if len(errs) == 0 {
+				_, errs = Resolve(u, st)
+			}
+			wantErrs(t, errs, ex.want)
+		})
 	}
 }

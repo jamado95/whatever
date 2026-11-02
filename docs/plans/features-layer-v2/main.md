@@ -80,7 +80,7 @@ From [features.md](../../discussions/features.md):
 Tiered. Stage docs live beside this one, produced iteratively:
 
 - `stage-1-frame.md` — *implemented.*
-- `stage-2-universes.md` — *planned.*
+- `stage-2-universes.md` — *implemented.*
 - `stage-3-contract-store.md` — *to plan.*
 - `stage-4-ported-features.md` — *to plan.*
 - `stage-5-expansion.md` — *to plan.*
@@ -119,7 +119,7 @@ data_logger_v2:   features.New(instances) ─▶ loop: data.Next ─▶ pacer �
   benchmarks within noise; `data_logger_v2` output unchanged.
 - Plan: `stage-1-frame.md`.
 
-### Stage 2 — stream table and universes
+### Stage 2 — stream table and universes ✅ implemented
 
 - **Goal:** one stream table shared by config, the data layer and the feature layer; universes are
   declared, validated and resolvable over it.

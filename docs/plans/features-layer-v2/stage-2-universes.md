@@ -338,7 +338,6 @@ another component's error.
   names, instance-name filters with globs, filters choosing partners only). At implementation:
   Solution § Universes, the syntax settled and its example on instance names; WIP references this
   stage.
-- [main.md](main.md) — stage 2 marked implemented.
 
 ### Acceptance
 
@@ -447,7 +446,8 @@ A–F, `ema_20` on A–G.
 ### Documentation
 
 - `docs/Commands.md` — the run section points to `configs/README.md` for the file format.
-- [main.md](main.md) — `configs/README.md` joins the targeted updates.
+- [main.md](main.md) — `configs/README.md` joins the targeted updates; stage 2 marked implemented,
+  moved from step 3 since the guide is part of the stage.
 
 ### Acceptance
 
