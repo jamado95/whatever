@@ -22,8 +22,8 @@ implement from this doc.
 From [features.md](../../discussions/features.md):
 
 - **Graph.** A node is a feature instance at a coordinate — a stream or a pair. Composition is in
-  code: each type's registered descriptor names the feature types it reads (arity, symmetry,
-  dependencies); the config never names inputs. One instance per dependency variant, at every
+  code: each type's registered descriptor names the feature types it reads (arity, dependencies;
+  symmetry with asymmetric pair order); the config never names inputs. One instance per dependency variant, at every
   level; pair features take the same variant on both ends.
 - **Identity.** A type registers its base ID; its factory builds the variant ID; expansion composes
   the rest, dash-separated, outermost first (`zscore_50-rsi_14`).
@@ -31,15 +31,16 @@ From [features.md](../../discussions/features.md):
   stream. Self-contained rules (references, explicit pairs, `*`) with filters on symbol, timeframe,
   provider and kind; derived streams match by their own timeframe and their source's provider.
   Resolution belongs to config.
-- **Pieces.** The composition root calls a pure expansion function exported by
-  `internal/engine/features` and injects the instances; the feature engine binds them, allocates the
-  store, builds the schedules and steps each frame.
+- **Pieces.** The composition root injects variants and resolved universes; the engine's factory
+  calls `features.Expand`, a pure function returning a validated `Graph`, so `--validate-only` covers
+  expansion; `features.New(graph)`, in `Run`, allocates the store, binds the nodes, builds the
+  schedules and steps each frame.
 - **Store.** Owned by the feature layer. One ring per feature instance, sized `lookback × Window`
-  at its stream's `Period`, aligned by column with the data rings; a pair's ring sized like its
-  coarser end's. A memory warning above 1 GB.
+  at its stream's `Period`, aligned by column with the data rings; a pair's ring steps at its ends'
+  larger period, one bar its coarser end's. A memory warning above 1 GB.
 - **Views in `internal/flow/frame`.** Read-only, pinned at a frame; writes stay inside each layer.
 - **Scheduling and firing.** Ready-driven over the frame's active subgraph, serial first. A node
-  fires only when every input is `Fresh`; a pair samples at its coarser end's period; schedules are
+  fires only when every input is `Fresh`; a pair samples at its ends' larger period; schedules are
   precompiled per due pattern. Features complete between `Next` calls.
 - **Purity.** Features keep no state; recursive ones read their own past results.
 - **One lookback for every stream**, kept by `data.New`.
@@ -51,14 +52,25 @@ From [features.md](../../discussions/features.md):
   layer sizes and writes its own buffers; the data layer keeps its staging, and the derived window
   count is dropped. `View[T]` embeds an unexported header, so a view cannot be re-pinned; views are made with
   `NewView` and `Pin`.
-- **Feature slots carry state.** A node writes at every due column of its coordinate — `Fresh`, or
-  `Gap` carrying the last `Fresh` value — and `Ended` once its stream ends; a column mismatch means
+- **Feature slots carry state.** A result is written at every due column of its coordinate — `Fresh`,
+  or `Gap` carrying the last `Fresh` value — and `Ended` once its stream ends; a column mismatch means
   overwritten or not started, as for candles. Replaces `{col, value}` slots and absence by column
   mismatch ([features.md](../../discussions/features.md)).
-- **One typed buffer per feature variant ID**, one ring per stream (per pair for pair features),
-  empty where the variant does not run.
+- **One typed buffer per composed ID**, one ring per stream of the stream table, or per pair of the
+  feature layer's pair table for pair features, empty where the ID does not run. A buffer per variant
+  ID would put `zscore_50-rsi_14` and `zscore_50-rsi_21` on the same rings.
+- **Features are typed; the engine recovers the type.** The contract, in `internal/protocol/feature`:
+  `Feature[T]` is a variant (`ID`, `Lookback`, `Bind`), `FeatureNode[T]` a variant bound at one
+  coordinate (`Compute() (T, bool)`); one struct may be both. `T` is recorded at registration; the
+  registry hands out variants with `T` erased, and the feature engine recovers `Feature[T]` with a
+  type switch, one case per supported type — `float64` and `int` — so only it creates
+  `frame.Buffer[T]`. A struct value type (MACD) is declared in its feature's domain package and
+  adds a case. A missing case is caught by a test over the registered types and by `Expand`, not
+  the compiler: a constraint listing the types would put domain types in `protocol`. Nodes never
+  write: the engine writes what `Compute` returns — `Fresh`, or `Gap` when it cannot compute.
 - **Consumers read only the feature layer's view.** `Step` returns a `features.View` pinned at the
-  data view's frame; `ViewOf[T](fv, id)` narrows it to a `frame.View[T]`, type-checked.
+  data view's frame, embedding it; `ViewOf[T](fv, id)` narrows it to a composed ID's
+  `frame.View[T]`, type-checked.
 - **Buffers stay with their owners.** Holding a `frame.Buffer` is holding write access to its rings,
   so only the data layer and the feature engine hold buffers. Nodes never hold one, not even to pin
   an input: the engine pins their inputs and hands them views.
@@ -81,7 +93,7 @@ Tiered. Stage docs live beside this one, produced iteratively:
 
 - `stage-1-frame.md` — *implemented.*
 - `stage-2-universes.md` — *implemented.*
-- `stage-3-contract-store.md` — *to plan.*
+- `stage-3-contract-store.md` — *planned.*
 - `stage-4-ported-features.md` — *to plan.*
 - `stage-5-expansion.md` — *to plan.*
 - `stage-6-engine.md` — *to plan.*
@@ -93,15 +105,16 @@ and 6.
 ## Iteration 1 — serial feature engine
 
 **Goal.** `data_logger_v2` runs features through the feature engine instead of the bridge: variants
-from the new registry, universes from config, instances expanded at the composition root, results
+from the new registry, universes from config, instances expanded by the engine's factory, results
 in the feature store, one serial step per frame. Exports are identical to the bridge's; `data_logger`
 is unchanged.
 
 ```
-composition root: config (universes) ─▶ registry v2 (variants, descriptors) ─▶ Expand ─▶ instances
-data_logger_v2:   features.New(instances) ─▶ loop: data.Next ─▶ pacer ─▶ features.Step(view) ─▶ exporter
-                                                       │                       │
-                                                       └── flow/frame View ────┘ data rings + result rings
+composition root:       config ─▶ registry v2 (variants) + resolved universes ─▶ injected
+data_logger_v2 factory: features.Expand(streams, universes, specs) ─▶ graph         (--validate-only)
+data_logger_v2 Run:     features.New(graph) ─▶ loop: data.Next ─▶ pacer ─▶ fe.Step(view) ─▶ exporter
+                                                         │                     │
+                                                         └── flow/frame View ──┘ data rings + result rings
 ```
 
 ### Stage 1 — `flow/frame` ✅ implemented
@@ -140,56 +153,65 @@ data_logger_v2:   features.New(instances) ─▶ loop: data.Next ─▶ pacer �
 ### Stage 3 — contract, registry and store
 
 - **Goal:** the new feature contract, its registry, and the feature store that binds nodes.
-- **Touches:** the contract package (variant: `ID`, `Lookback`, `Bind`; node: `Compute`; the
-  binder); a new registry in `internal/registry` taking base ID, descriptor and factory; the store in
-  `internal/engine/features` — one `frame.Buffer[T]` per variant, binding, each node writing only its
-  own ring; `features.View` and `ViewOf[T]`; tests.
-- **Boundary:** no expansion or scheduling; tests bind nodes by hand.
+- **Touches:** new `internal/protocol/feature` — `Feature[T]` (`ID`, `Lookback`, `Bind`),
+  `FeatureNode[T]` (`Compute`), `Descriptor`, `NewType[T]`, the erased `Type` and `Variant` with
+  their `Zero`, the binder and its `Input[T]` handles; `reg.FeatureTypes` in `internal/registry`,
+  holding `feature.Type`s; the store in new `internal/engine/features` — the type switch recovering
+  each variant's `T`, one `frame.Buffer[T]` per composed ID in the stream and pair tables, binding,
+  runners each writing only their own ring; `features.View` and `ViewOf[T]`; tests.
+- **Boundary:** no expansion or scheduling; tests build instances, pin and fire by hand.
 - **Acceptance:** a bound node reads candles and its dependency's results through views pinned at
-  the frame and writes its own; value types are checked at `Bind` and at `ViewOf`; a skipped column
-  reads as `Gap` carrying the last value; history stepped like the data rings on direct and rolling
-  streams; a pair result is one ring; no allocation on writes or reads.
+  the frame, and the engine writes what it returns; value types are checked at `Bind` and at
+  `ViewOf`; every supported value type allocates and binds, and an unsupported one is an error
+  naming it; a warming-up or skipped column reads as `Gap`
+  carrying the last value; history stepped like the data rings on direct and rolling streams; a
+  pair result is one ring, stepping at its sampling period; no allocation on writes or reads.
+- Plan: `stage-3-contract-store.md`.
 
 ### Stage 4 — ported features
 
 - **Goal:** `sma`, `ema`, `rsi`, `vwap` and `engulfing_candle` on the new contract.
 - **Touches:** a new feature package beside `internal/domains/features`; registration in the new
-  registry; tests.
+  registry; tests, among them one in `internal/engine/features` checking every registered type's
+  value type against the engine's switch.
 - **Acceptance:** each ported feature produces the original's value at every column of the BTCUSDT
   reference dataset, on direct and rolling streams, including warm-up absence; IDs match the
-  originals' (`ema_20_s3`).
+  originals' (`ema_20_s3`); every registered value type has a case in the switch.
 
 ### Stage 5 — expansion
 
-- **Goal:** the pure function that turns configuration into instances.
-- **Touches:** `internal/engine/features` (`Expand`: variants × dependency variants × coordinates,
-  dependencies pulled onto their dependents' streams, composed IDs, validation); the composition
-  root (`cmd`) builds the new registry's variants beside today's features and calls `Expand`; tests
-  with test-only features.
-- **Boundary:** the instances are injected into `data_logger_v2` but not run yet.
+- **Goal:** the pure function that turns configuration into a validated feature graph.
+- **Touches:** `internal/engine/features` (`Expand(streams, universes, specs) (*Graph, error)`:
+  variants × dependency variants × coordinates, dependencies pulled onto their dependents' streams,
+  composed IDs, validation; the `Graph` holds the instances, the pair table and the lookback); the
+  composition root (`cmd`) builds the new registry's variants beside today's features and injects
+  them as specs with the resolved universes; `data_logger_v2`'s factory calls `Expand`; tests with
+  test-only features.
+- **Boundary:** the graph is built in `data_logger_v2`'s factory but not run yet.
 - **Acceptance:** expansion over chains, several dependency types and pairs; errors for an unknown
   dependency type or one with no variant, type-level cycles, a pair feature without a universe or
-  with a universe without pairs, and duplicate composed IDs; `data_logger` and its feature
-  instantiation unchanged.
+  with a universe without pairs, duplicate composed IDs, and a value type the engine does not
+  support; `--validate-only` reports them;
+  `data_logger` and its feature instantiation unchanged.
 
 ### Stage 6 — serial engine
 
 - **Goal:** the feature engine runs a frame.
-- **Touches:** `internal/engine/features` — `New(instances, …)`: bind, allocate the variant buffers,
-  memory estimate and warning, due-pattern schedules; `Step(view)`: pick the pattern, drop nodes
+- **Touches:** `internal/engine/features` — `New(graph, …)`, called in `Run`: memory estimate and
+  warning, the store (allocate, bind), due-pattern schedules; `Step(view)`: pick the pattern, drop nodes
   whose inputs are not `Fresh`, run the serial topological order; tests with test-only features.
 - **Acceptance:** dependencies computed before their dependents; a coarse stream's nodes fire only at
-  its due columns; `Gap` and `Ended` legs fire nothing, and their nodes write `Gap` / `Ended` carrying
-  the last value; `Partial` frames compute their `Fresh` streams; pairs fire at their coarser end's period only when both ends
-  are `Fresh`; a run equals a brute-force evaluation over the same frames; the warning fires above
-  1 GB; no allocation per `Step`.
+  its due columns; `Gap` and `Ended` legs fire nothing, and their nodes' results are written `Gap` /
+  `Ended` carrying the last value; `Partial` frames compute their `Fresh` streams; pairs fire at their
+  ends' larger period only when both ends are `Fresh`; a run equals a brute-force evaluation over the
+  same frames; the warning fires above 1 GB; no allocation per `Step`.
 
 ### Stage 7 — `data_logger_v2` integration
 
 - **Goal:** `data_logger_v2` runs the feature engine; the bridge is gone.
-- **Touches:** `internal/engine/data_logger_v2.go` (`features.New`, `Step` after the pacer, the
-  exported record filled from the feature layer's view, `data.New` sized from the instances' longest
-  `Lookback`); its tests; a serial `Step` benchmark at N = 10, 100, 1000
+- **Touches:** `internal/engine/data_logger_v2.go` (`features.New(graph)` in `Run`, `Step` after the
+  pacer, the exported record filled from the feature layer's view, `data.New` sized from the graph's
+  lookback); its tests; a serial `Step` benchmark at N = 10, 100, 1000
   streams; `docs/Commands.md`.
 - **Acceptance:** on `configs/data_logger_v2.json`, records and feature values identical to the
   bridge's output; `--validate-only` valid for both configs; `make check` clean; benchmark checked
@@ -242,7 +264,8 @@ High-level only.
 - [README.md](../../discussions/README.md): features row status.
 - [data layer v2 main plan](../data-layer-v2/main.md): iteration 4 points to this plan.
 - `docs/Architecture.md`: `internal/flow/frame` (stage 1), the stream table in `internal/protocol`
-  (stage 2), `internal/engine/features` (stage 6).
+  (stage 2), the contract in `internal/protocol/feature` and `reg.FeatureTypes` (stage 3),
+  `internal/engine/features` (stage 6).
 - `docs/Commands.md`: benchmark commands (stage 7).
 - `configs/README.md`: written in stage 2; pair-feature rules (stage 5); universes in use, and the
   feature types from the new registry (stage 7).
@@ -259,10 +282,14 @@ High-level only.
 
 ## Open items to resolve within stages
 
-- The contract's home: `internal/protocol` cannot import `flow/frame`, which imports it (stage 3).
-- What `Compute` receives — its inputs' views, pinned by the engine, never buffers — and how a node writes `Gap`
-  for a column it skips (stage 3).
-- The new registry's shape and name beside `reg.Features` (stage 3).
+- The contract's home — resolved in stage 3: `internal/protocol/feature`. Only `frame_test.go`
+  imports `proto`, so no cycle forced it; the subpackage keeps the new names clear of
+  `proto.Feature`.
+- What `Compute` receives, and how a node writes `Gap` for a column it skips — resolved in stage 3:
+  nothing; a node reads `Input` handles taken at `Bind`, narrowed to its coordinate, and returns its
+  value. The engine writes `Fresh` or `Gap`, and `Gap` / `Ended` for columns it skips.
+- The new registry's shape and name beside `reg.Features` — resolved in stage 3: `reg.FeatureTypes`,
+  holding `feature.Type`s (base ID, descriptor, factory, value type).
 - The ported features' package (stage 4).
 - How the composition root builds the stream table `Expand` needs — resolved in stage 2:
   `proto.NewStreams`, injected as `_streams`.

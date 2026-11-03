@@ -81,7 +81,8 @@ recursive forms possible.
 - **Features are pure functions.** Configuration only, no state of their own; identical output for
   identical input, cheap to re-instantiate for sweeps — the reproducibility `docs/Backtesting.md`
   requires.
-- **Insufficient history means "absent", not "zero".** A feature that cannot compute writes nothing.
+- **Insufficient history means "absent", not "zero".** A feature that cannot compute returns no
+  value; its slot at the column is a `Gap`.
 - **Strict definitions over permissive ones** for pattern features (documented for `engulfing`).
 - **A feature ID encodes every parameter that distinguishes one instance from another.** Defaulted
   values are omitted (`ema_20`, `vwap_50`); a non-default extends the ID (`ema_20_s3`). A duplicate
@@ -101,13 +102,13 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   It reads its coordinate's candles, or its dependencies' results at the same coordinate (on each
   end, for a pair). Direct, feature-of-feature, cross-raw and cross-feature are derived from that,
   not separate mechanisms.
-- **Composition is in code, never in config.** A feature receives only the `View`; how it reads its
-  dependencies is internal to it. Its type's descriptor names the feature types it reads, each once
+- **Composition is in code, never in config.** A feature receives only handles to its inputs at its
+  coordinate; how it reads its dependencies is internal to it. Its type's descriptor names the feature types it reads, each once
   (`zscore` lists `rsi`), and none when it reads candles only. It validates the config and builds
   the graph; it is not an input list. `Lookback()` is its read depth: its dependencies' results, or
   its candles.
-- **An instance is bound at construction** to its coordinate and its dependencies' variants, and
-  reads them for the streams it was instantiated on.
+- **An instance is bound once, when the engine is built,** to its coordinate and its dependencies'
+  variants, and reads them for the streams it was instantiated on.
 - **One instance per dependency variant, at every level.** With `rsi_14` and `rsi_21` configured,
   `zscore_50` becomes `zscore_50-rsi_14` and `zscore_50-rsi_21`; instances multiply across a
   feature's own variants and every level of its dependencies. A dependency type with no configured
@@ -115,9 +116,16 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
 - **Combining variants of one type is not a feature.** No instance sees two variants of one type, so
   a crossover (`ema_20` against `ema_50`) is not a feature. Indicators built from variants of one type
   (MACD) compute them internally and store their own struct as the result's value.
-- **Type-level descriptors at registration.** Each type registers its base ID, factory and a
-  descriptor: arity (single-stream or pair), symmetry (pair features only) and dependencies. Config
-  validation and expansion read descriptors without instantiating anything.
+- **Type-level descriptors at registration.** Each type registers its base ID, factory, value type
+  and a descriptor: arity (single-stream or pair) and dependencies; symmetry joins it with
+  asymmetric pair order (Open Questions). Expansion reads descriptors without instantiating
+  anything.
+- **A variant and its node are typed by their value.** A variant (`feature.Feature[T]`: `ID`,
+  `Lookback`, `Bind`) binds at one coordinate into a node (`feature.FeatureNode[T]`:
+  `Compute() (T, bool)`); one struct may be both, `Bind` returning a bound copy. The node reads
+  `Input` handles taken at `Bind`, narrowed to its coordinate, and returns its value, or false when
+  it cannot compute; it never writes. `T` is any type the feature engine supports (§ Feature
+  buffer); a dependency's is checked at `Bind`.
 - **Pair features expand like any other.** `corr` declares `returns` once; each pair gets one
   instance per `returns` variant (`corr_100-returns_1`, `corr_100-returns_5`), reading that variant
   on both of its streams.
@@ -128,12 +136,12 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   Warm-up adds along paths (`zscore_50-rsi_14` is valid after about 64 bars).
 - **Recursive features stay pure.** `x_c = f(x_prev, input_c)` reads `x_prev` directly from its own
   past results at its coordinate's step, before writing `x_c`, so no extra depth is declared; state
-  beyond the output (Wilder's average gain and loss, running sums) is stored in the result. No
-  feature keeps state of its own. Exact EMA and Wilder RSI become possible; values depend on the
-  seed column, so warm-up length matters, and across a gap the recursion steps from the last `Fresh`
-  value.
-- **Determinism by construction.** Each node writes only its own result, so writes are disjoint and
-  need no locks; the counter decrement publishes a write to same-frame readers; nothing is emitted
+  beyond the output (Wilder's average gain and loss, running sums) is stored in the result, as the
+  feature's own struct. No feature keeps state of its own. Exact EMA and Wilder RSI become
+  possible; values depend on the seed column, so warm-up length matters, and across a gap the
+  recursion steps from the last `Fresh` value.
+- **Determinism by construction.** Each node's value is written only to its own result, so writes
+  are disjoint and need no locks; the counter decrement publishes a write to same-frame readers; nothing is emitted
   in completion order.
 - **Identity.** A type registers its base ID (`ema`); its factory builds the variant ID from its own
   parameters (`ema_20_s3`). Composed IDs are the composition, in order, dash-separated, outermost
@@ -143,11 +151,13 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
 
 ### Feature layer
 
-- **The composition root expands, the engine runs.** A pure function exported by
-  `internal/engine/features` turns variants, descriptors, resolved universes and the stream table
-  into instances with composed IDs; the composition root calls it and injects the instances, keeping
-  today's dependency injection. The feature engine binds them, allocates the store and builds the
-  schedules; `Step(view)` runs one frame.
+- **Expansion at construction, the store at run.** The composition root injects variants and
+  resolved universes, and knows nothing of expansion. The engine's factory calls `features.Expand`,
+  a pure function turning them and the stream table into a validated `Graph` — instances with
+  composed IDs, the pair table, the lookback — so `--validate-only` reports expansion errors.
+  `features.New(graph)`, in `Run` beside `data.New`, allocates the store, binds the nodes and builds
+  the schedules; `Step(view)` runs one frame. The graph describes, the engine holds one run's state,
+  as the stream table and the data pipeline do. See § Reversed on 2026-11-03.
 - **One stream table for every layer.** The stream table is its own protocol domain
   (`proto.Streams`), built once by the composition root and injected into the data layer and the
   feature layer: a stream's index in it is its index in the data rings, the feature buffers and
@@ -177,8 +187,9 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
 - **Firing.** A node fires at column `c` only if every input it reads at `c` is `Fresh`. A carried
   input — a `Gap`, `Pending` or `Ended` leg at a due column, or a coarse stream between its due
   columns — does not fire it. `Partial` frames compute over their `Fresh` streams. A skipped column
-  leaves the result absent and history reads skip it, like `Gap` candle slots. A node that runs but
-  writes nothing (warm-up) still releases its dependents.
+  is a `Gap` slot carrying the last value, and history reads skip it, like `Gap` candle slots. A
+  node that runs but cannot compute (warm-up) is written `Gap` too, and still releases its
+  dependents.
 - **A pair's sampling clock** defaults to the least common multiple of its streams' periods, so both
   ends are due where it fires.
 - **Due-pattern schedules.** Which nodes may fire at `c` depends only on which periods divide `c`, a
@@ -193,25 +204,42 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   sketched in [[data-layer-v2]] § FrameBuffer (`View.Feature`, `FeatureWriter`).
 - **Only the feature engine holds feature buffers.** Holding a `frame.Buffer` is holding write access
   to its rings, so nodes and consumers get views, never buffers or rings: nodes cannot pin their
-  inputs themselves, and the engine hands them their inputs' views.
+  inputs themselves, and the engine hands them their inputs' views. The engine writes what each
+  node returns into the node's own ring.
 - **One ring per result, each result stored once.** A result is a feature instance at its
-  coordinate, keyed `(feature ID, stream)` or `(feature ID, pair)`. A pair result is one ring,
-  referenced from both streams.
+  coordinate. Each composed ID has one typed buffer — not each variant ID, which `zscore_50-rsi_14`
+  and `zscore_50-rsi_21` share — with one ring per stream of the stream table, or per pair of the
+  feature layer's pair table (every pair a pair instance runs on, sorted), empty where the ID does
+  not run. A pair result is one ring, at the pair's index.
 - **Slots carry their state:** `{Col, ValCol, Val, State}`, as candle slots do. A column a feature
   skips is a `Gap` slot carrying the last `Fresh` value, so absence is a state rather than a column
   mismatch.
-- **A value is a float, or the feature's own struct** for multi-output features (MACD). Each ring is
-  typed by its feature's value type, so writes never allocate.
+- **Value types are the engine's switch.** Each ring is typed by its feature's value type, so writes
+  never allocate. The contract leaves `T` unconstrained; the feature engine supports the types its
+  switch names — `float64` and `int` today. A multi-output feature (MACD) or recursive state declares
+  its own struct in its feature's domain package, which the engine imports for its case and
+  consumers for `ViewOf`. A constraint listing the types would put domain types in `protocol`, an
+  import cycle, so a missing case is caught by a test over every registered type and by expansion
+  (`--validate-only`), not the compiler.
+- **Only the feature engine creates feature buffers.** Registration records `T` — `Zero()`, a zero
+  value — and erases it; the engine switches on `Zero()`, asserts `Feature[T]` and instantiates
+  `frame.Buffer[T]` there — Go instantiates it only where `T` is known. Registering through the
+  engine would keep the switch out, but domain packages would import the engine; merging the
+  contract into the feature domain would move feature registration out of `internal/registry`.
+  Rejected as value types: `map[string]float64`, which allocates per write or aliases one map across
+  the history.
 - **Sized to the lookback.** A stream's result rings hold `lookback × Window` slots at its `Period`,
   a value at `(col / Period) % size`. No headroom: results are written only on the engine goroutine,
   at the column being processed. Result rings wrap sooner than data rings, but for every column a
   view can read both hold that column's entry.
-- **A pair's ring is sized like its coarser end's.** The timeframe enum is a divisibility chain, so a
-  pair's period is always its coarser end's — an invariant new timeframes must keep.
-- **Per-stream feature map, built once and read-only:** `s → map[key]int`, the key a feature ID plus,
-  for pair features, the pair — one entry per feature on `s` and one per pair feature for every pair
-  `s` belongs to. Features never look it up: their inputs' rings are resolved at construction;
-  consumers resolve their keys once, when wired.
+- **A pair's ring steps at its sampling period** — `max(Pa, Pb)`, where both ends are due — and one
+  bar is its coarser end's: `Window = max(Pa × Wa, Pb × Wb) / Period`. Sizing it like its coarser
+  end's fails for a rolling 1h (period 1, window 12) paired with a direct 1h (period 12): at period
+  1 the ring anchors on columns the pair never writes. The timeframe enum is a divisibility chain, so
+  both ends' periods divide the pair's — an invariant new timeframes must keep.
+- **No per-stream feature map.** Buffers share the stream table's and the pair table's indices, so
+  features never look anything up — their inputs' rings are resolved at `Bind` — and consumers
+  resolve a composed ID once with `ViewOf` and a pair with `View.Pair`.
 - **Memory warning.** Construction estimates the feature buffer's memory (results × slots × slot
   size) and logs a warning above 1 GB, naming the largest universes.
 
@@ -240,6 +268,16 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   construction, so no rule on derivations is needed.
 - **No rules over both ends of a pair.** Same-timeframe pairs come from one `*` rule per timeframe.
 
+### Reversed on 2026-11-03
+
+Superseded by § Feature layer and § Feature buffer above; kept for context.
+
+| Was | Now | Why |
+|---|---|---|
+| The composition root calls the exported expansion function and injects the instances; the engine binds, allocates and schedules | The engine's factory calls `Expand`, which returns a validated `Graph`; `features.New(graph)` in `Run` allocates and binds | The composition root holds no feature-layer logic; `--validate-only` still covers expansion; the engine's run state is built in `Run`, beside `data.New` |
+| A per-stream feature map, `s → map[key]int` | Buffers indexed by the stream table and a pair table | One index space with the data layer; no map key to choose |
+| A pair's ring sized like its coarser end's | Stepping at `max(Pa, Pb)`, with its coarser end's bar | A rolling coarse end has a finer period than the pair's sampling clock |
+
 ## Solution
 
 Executed stages of `docs/plans/features-layer-v2/main.md`, iteration 4 of
@@ -259,11 +297,12 @@ table and universes).
 
 | Piece | Job | When | Home |
 |---|---|---|---|
-| Feature types | Pure maths; base ID, descriptor and factory registered | — | `internal/domains/features` |
+| Contract | `Feature[T]`, `FeatureNode[T]`, descriptor, `NewType[T]` (recording `T`), binder and `Input` handles | — | `internal/protocol/feature` |
+| Feature types | Pure maths; base ID, descriptor, value type and factory registered | — | `internal/domains/features` |
 | Stream table | One entry per direct subscription and derived window; the index space of every layer | Composition root | `internal/protocol` |
 | Registry and config | Type → factory and descriptor; variants decoded strictly; `universes` block, `universe` per feature; universe resolution | Config parse, composition root | `internal/registry`, `internal/config` |
-| Expansion | Variants × dependency variants × coordinates; validation; composed IDs | Composition root | `internal/engine/features` (pure function) |
-| Feature engine | Bind instances, allocate the store, due-pattern schedules; `Step(view)` | Construction, then each frame | `internal/engine/features` |
+| Expansion | Variants × dependency variants × coordinates; validation; composed IDs; the `Graph` | Engine construction | `internal/engine/features` (pure function) |
+| Feature engine | Recover each variant's value type, allocate the store (`frame.Buffer[T]` per composed ID), bind the nodes, due-pattern schedules; `Step(view)` | `Run`, then each frame | `internal/engine/features` |
 | Frame primitives | Generic rings and buffers, pinned `View[T]` | — | `internal/flow/frame` |
 | Consumers | Exporter and strategies read through the `View` | After `Step` | — |
 
@@ -272,26 +311,29 @@ Leaving the data path: `Snapshot`, `SortedWindow`, `FeatureChain`, `Update`, and
 
 ### Contract sketch
 
-Shape proposed, not settled. A factory builds a variant; expansion binds it once per coordinate ×
-dependency-variant combination into a node, which takes typed handles to its inputs and its own
-result — value types are checked there, at construction.
+Planned in `docs/plans/features-layer-v2/stage-3-contract-store.md`. A factory builds a variant; the
+engine binds it once per instance into a node, which takes typed handles to its inputs at its
+coordinate — value types are checked there, at construction.
 
 ```go
-reg.Features.Register("zscore", reg.FeatureDesc{Arity: feat.SingleStream, Dependencies: []string{"rsi"}}, factory)
+reg.FeatureTypes.Register(feature.NewType[float64]("zscore",
+	feature.Descriptor{Arity: feature.Single, Dependencies: []string{"rsi"}}, newZScore))
 
-type Feature interface { // variant
-	ID() string   // "zscore_50", rendered by the factory
+type Feature[T any] interface { // variant
+	ID() string // "zscore_50", rendered by the factory
 	Lookback() int
-	Bind(b *Binder) (Node, error)
+	Bind(b *feature.Binder) (FeatureNode[T], error) // inputs: Candles, Dep[T](b, "rsi"), PairCandles, PairDep[T]
 }
 
-type Node interface {
-	Compute(v frame.View) // reads through handles taken at Bind; writes its own result, or nothing
+type FeatureNode[T any] interface {
+	Compute() (T, bool) // reads through handles taken at Bind; false: cannot compute (warm-up)
 }
 ```
 
-- Firing is the engine's job; `Compute` runs only when every input is `Fresh`.
-- Nodes may hold scratch buffers for allocation-free reads, never carried values.
+- Firing is the engine's job; `Compute` runs only when every input is `Fresh`. The engine writes
+  `Fresh`, or `Gap` when `Compute` returns false, and `Gap` / `Ended` at columns it skips.
+- Nodes may hold scratch buffers for allocation-free reads, allocated in `Bind`, never carried
+  values.
 
 ### Scheduling
 
@@ -316,9 +358,10 @@ nodes) and every other column (5m nodes). Derived streams take their source's pe
 ### Feature buffer
 
 ```
-results   r → ring of {col, valCol, val, state}   one per (feature ID, stream) or (feature ID, pair)
-streams   A → { rsi_14: r1, zscore_50-rsi_14: r2, corr_100-returns_1 (A,B): r7, (A,C): r8 }
-          B → { rsi_14: r3, zscore_50-rsi_14: r4, corr_100-returns_1 (A,B): r7 }   ← r7 stored once
+buffer per composed ID, typed by its value      rings indexed like every layer's
+rsi_14               frame.Buffer[float64]      [A] [B] [C]       stream table; empty where it does not run
+zscore_50-rsi_14     frame.Buffer[float64]      [A] [B] [ ]
+corr_100-returns_1   frame.Buffer[float64]      [AB] [AC]         pair table; (A,B) stored once
 ```
 
 ### Universes
@@ -381,11 +424,13 @@ bound up with the strategy input contract ([[strategy-layer]]).
 
 - **Asymmetric pair order** (beta, hedged spread, lead-lag) — which stream is the first operand, for
   reference rules and `*`. Proposed: `(stream, reference)` from reference rules, both orders from
-  `*`, explicit pairs as written; symmetric features store each pair once, in sorted order.
+  `*`, explicit pairs as written; symmetric features store each pair once, in sorted order. Symmetry
+  joins the descriptor with it.
 - **Parameters in IDs** must not emit `-`: `iDWithParam` formats with `'g'` (`ema_20_s1e-05`), and
-  negative values carry a sign.
-- **Per-stream map key** — a struct `{feature ID, pair}` versus a built string, or a dense
-  `idx[s][k]` table with −1 where absent; plan-level.
+  negative values carry a sign. Planned: `Type.Create` rejects such a variant ID (stage 3); the
+  format is fixed when it is ported (stage 4).
+- **Pair features over pair features** (a z-score of a spread) — a node reading a pair result;
+  iteration 1 allows single-stream dependencies only.
 - **`Late` revisions** (pinned) — recompute the subgraph reachable from the revised stream over
   `[c, now]`, pair nodes included.
 - **Strategies as graph nodes**, run as soon as their inputs are ready — pending measurements.
@@ -400,6 +445,8 @@ bound up with the strategy input contract ([[strategy-layer]]).
 - The stream table in `internal/protocol`, built by the composition root, and universes in config,
   resolved over it, implemented; nothing consumes universes yet —
   `docs/plans/features-layer-v2/stage-2-universes.md`. Config guide: `configs/README.md`.
+- Planned: the contract in `internal/protocol/feature`, `reg.FeatureTypes` and the feature store —
+  `docs/plans/features-layer-v2/stage-3-contract-store.md`.
 - Registered and working: `sma`, `ema`, `rsi`, `vwap`, `engulfing_candle`.
 - `swing_highlow` is broken behind a `wip` build tag. It duplicates swing-detection logic that also
   exists (also broken) inside `buy_the_dip` — see [[strategy-layer]]. Consolidating swing detection
