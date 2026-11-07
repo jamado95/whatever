@@ -25,7 +25,12 @@ Core Architecture
   index in every layer)
   - internal/protocol/frame: generic rings and buffers, and the read-only views pinned at a frame
     that layers hand each other and consumers
-- internal/registry: registers all internal component factories
+  - internal/protocol/feature: the feature contract — `Feature` (what a factory configures: `ID`,
+    `Lookback`, `Pair`, `Deps`, `Bind`) and `Bind[T]`, which takes a node's `Input[T]` handles from a
+    `Binder` and returns the node, a function computing its value. Holds no buffer: results live in
+    the feature engine
+- internal/registry: registers all internal component factories; `FeatureTypes` holds the feature
+  contract's factories by base ID, beside `Features`, `FeatureChain`'s
 
 Design Rules
 - Domains contain business logic only

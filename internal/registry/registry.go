@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	proto "whatever/internal/protocol"
+	"whatever/internal/protocol/feature"
 )
 
 var (
@@ -17,6 +18,9 @@ var (
 	}
 	Features = &registry[proto.Feature]{
 		factories: make(map[string]Factory[proto.Feature]),
+	}
+	FeatureTypes = &registry[feature.Feature]{
+		factories: make(map[string]Factory[feature.Feature]),
 	}
 	Execution = &registry[proto.Executor]{
 		factories: make(map[string]Factory[proto.Executor]),
