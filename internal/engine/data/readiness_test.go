@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"whatever/internal/flow/frame"
 	"whatever/internal/flow/pipe"
 	proto "whatever/internal/protocol"
+	"whatever/internal/protocol/frame"
 )
 
 // segment is a run of released columns, from..to inclusive, sharing one completeness.

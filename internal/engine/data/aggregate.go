@@ -3,8 +3,8 @@ package data
 import (
 	"math"
 
-	"whatever/internal/flow/frame"
 	proto "whatever/internal/protocol"
+	"whatever/internal/protocol/frame"
 )
 
 // deque is a fixed-capacity ring of (column, value) holding a window's running maximum at the front.

@@ -1,6 +1,6 @@
 package data
 
-import "whatever/internal/flow/frame"
+import "whatever/internal/protocol/frame"
 
 /*
 evaluate tells readiness that a direct stream has decided its due columns up to col: Fresh or Gap at

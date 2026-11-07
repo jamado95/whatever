@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"whatever/internal/flow/frame"
 	proto "whatever/internal/protocol"
+	"whatever/internal/protocol/frame"
 )
 
 // items returns stream s's lane items at cols, carrying its test candles.

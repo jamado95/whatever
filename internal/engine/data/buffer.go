@@ -3,8 +3,8 @@ package data
 import (
 	"fmt"
 
-	"whatever/internal/flow/frame"
 	proto "whatever/internal/protocol"
+	"whatever/internal/protocol/frame"
 )
 
 // maxHistoryMs caps the history a stream may keep: 365 days.

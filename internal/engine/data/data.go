@@ -10,10 +10,10 @@ import (
 	"math"
 	"sync"
 
-	"whatever/internal/flow/frame"
 	"whatever/internal/flow/pipe"
 	"whatever/internal/logger"
 	proto "whatever/internal/protocol"
+	"whatever/internal/protocol/frame"
 )
 
 var (

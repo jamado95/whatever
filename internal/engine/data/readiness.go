@@ -3,8 +3,8 @@ package data
 import (
 	"math"
 
-	"whatever/internal/flow/frame"
 	proto "whatever/internal/protocol"
+	"whatever/internal/protocol/frame"
 )
 
 /*

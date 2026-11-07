@@ -7,8 +7,8 @@ import (
 	"slices"
 	"testing"
 
-	"whatever/internal/flow/frame"
 	proto "whatever/internal/protocol"
+	"whatever/internal/protocol/frame"
 )
 
 const idRoll1dOf5m = "BTCUSDT:1d:derived_BTCUSDT:5m:btc_5m"

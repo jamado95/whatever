@@ -12,11 +12,11 @@ import (
 	"whatever/internal/config"
 	feat "whatever/internal/domains/features"
 	"whatever/internal/engine/data"
-	"whatever/internal/flow/frame"
 	"whatever/internal/flow/timing"
 	"whatever/internal/idgen"
 	"whatever/internal/logger"
 	proto "whatever/internal/protocol"
+	"whatever/internal/protocol/frame"
 	reg "whatever/internal/registry"
 )
 

@@ -18,9 +18,9 @@ import (
 	"time"
 
 	"whatever/internal/domains/provider"
-	"whatever/internal/flow/frame"
 	"whatever/internal/logger"
 	proto "whatever/internal/protocol"
+	"whatever/internal/protocol/frame"
 	reg "whatever/internal/registry"
 )
 
