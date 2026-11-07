@@ -443,8 +443,9 @@ bound up with the strategy input contract ([[strategy-layer]]).
   `*`, explicit pairs as written; symmetric features store each pair once, in sorted order. Symmetry
   joins `Feature` with it.
 - **Parameters in IDs** must not emit `-`: `iDWithParam` formats with `'g'` (`ema_20_s1e-05`), and
-  negative values carry a sign. Planned: `Expand` rejects such a variant ID (stage 5); the format is
-  fixed when it is ported (stage 4).
+  negative values carry a sign. Planned: the ported `iDWithParam` formats with `'f'`
+  (`ema_20_s0.00001`), identical to `'g'` for values in [1e-4, 1e6) (stage 4); `Expand` rejects a
+  variant ID with `-`, as from a negative value (stage 5).
 - **How a strategy reads a struct result.** `ViewOf` is in `engine/features` and a struct value type
   in its feature's domain, while a domain imports only `protocol` ([[engine]]). To settle before
   strategies read features.

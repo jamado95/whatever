@@ -101,7 +101,7 @@ Tiered. Stage docs live beside this one, produced iteratively:
 - `stage-1-frame.md` — *implemented.*
 - `stage-2-universes.md` — *implemented.*
 - `stage-3-contract-store.md` — *implemented.*
-- `stage-4-ported-features.md` — *to plan.*
+- `stage-4-ported-features.md` — *planned.*
 - `stage-5-expansion.md` — *to plan.*
 - `stage-6-engine.md` — *to plan.*
 - `stage-7-data-logger-v2.md` — *to plan.*
@@ -180,12 +180,17 @@ data_logger_v2 Run:     features.New(graph) ─▶ loop: data.Next ─▶ pacer 
 ### Stage 4 — ported features
 
 - **Goal:** `sma`, `ema`, `rsi`, `vwap` and `engulfing_candle` on the new contract.
-- **Touches:** a new feature package beside `internal/domains/features`; registration in the new
-  registry; tests, among them one in `internal/engine/features` building a variant of every registered
-  type from a table of options and checking it against the engine's switch.
-- **Acceptance:** each ported feature produces the original's value at every column of the BTCUSDT
-  reference dataset, on direct and rolling streams, including warm-up absence; IDs match the
+- **Touches:** new `internal/domains/featuresv2` (`featv2`) beside `internal/domains/features`,
+  registering in `reg.FeatureTypes`, its IDs formatting floats with `'f'`; the data layer's reference
+  sampling moved into `internal/engine/data/datatest`, shared by both reference tests; tests, among
+  them, in `internal/engine/features`, one building a variant of every registered type from a table
+  of options and checking it against the engine's switch, a comparison with the originals over the
+  reference dataset, and a check that a lookback beyond the data layer's cap fails `data.New`.
+- **Acceptance:** each ported feature produces the original's value at every column where the bridge
+  evaluates, over a random four-month sample of the BTCUSDT reference dataset per run (skipped without
+  it, like the data layer's), on direct and rolling streams, including warm-up absence; IDs match the
   originals' (`ema_20_s3`); every registered type is in the table and has a case in the switch.
+- Plan: `stage-4-ported-features.md`.
 
 ### Stage 5 — expansion
 
@@ -302,9 +307,11 @@ High-level only.
   columns it skips.
 - The new registry's shape and name beside `reg.Features` — resolved in stage 3: `reg.FeatureTypes`,
   a `registry[feature.Feature]`.
-- The ported features' package (stage 4).
+- The ported features' package — resolved in stage 4: `internal/domains/featuresv2` (`featv2`),
+  renamed into `internal/domains/features` when the originals retire.
 - How the composition root builds the stream table `Expand` needs — resolved in stage 2:
   `proto.NewStreams`, injected as `_streams`.
-- Filling the exported record from results — the exporter contract is untouched (stage 7).
+- Filling the exported record from results — the exporter contract is untouched; only results
+  `Fresh` at the record's column are exported, since a `Gap` carries the last value (stage 7).
 - `FeatureChain.Evaluate` loses its only caller in stage 7: kept as the regression reference, or
   removed with the bridge (stage 7).
