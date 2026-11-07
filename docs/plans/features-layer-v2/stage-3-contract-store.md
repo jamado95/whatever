@@ -337,8 +337,8 @@ func newColumn(f feature.Feature, shapes []frame.Shape) (column, error) {
 **New `internal/engine/features/features_test.go`** — test-only features, as factories return them:
 `last` (its stream's close, `Lookback` 1), `sum` (its last `n` closes, warm-up below `n`), `diff` (over
 `last`: its last two values), `sign` (`int`) and `label` (`string`, unsupported); and helpers building
-a stream table — BTCUSDT 5m deriving 1h, BTCUSDT 1h and ETHUSDT 5m — candles in a
-`frame.Buffer[proto.Candle]` written by the test, and data views pinned with `frame.NewView`.
+candles in a `frame.Buffer[proto.Candle]` written by the test, and data views pinned with
+`frame.NewView`.
 
 **New `internal/engine/features/results_test.go`** — columns built with `newColumn` over hand-made
 shapes, bound with `feature.NewBinder`:
@@ -443,8 +443,9 @@ func (v View) Pair(a, b int) (int, bool)
 
 ### Tests
 
-**`internal/engine/features/features_test.go`** — adds `spread` (pair: close A − close B) and
-`pdiff` (pair over `last`).
+**`internal/engine/features/features_test.go`** — adds `spread` (pair: close A − close B), `pdiff`
+(pair over `last`), and a helper building a stream table: BTCUSDT 5m deriving 1h, BTCUSDT 1h and
+ETHUSDT 5m.
 
 **New `internal/engine/features/graph_test.go`** — `Graph`s from `newGraph` over hand-built instances:
 
