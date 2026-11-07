@@ -31,6 +31,7 @@ Design Rules
   - Backtesting strat param optimisation needs many instances (how to handle TBD)
 - Engine wires domains together
 - Protocol defines contracts; implementations live in domains
+- `internal/protocol` and its subpackages import nothing outside `internal/protocol`
 - `flow/pipe` is the primary data/control flow mechanism
   - Pipeline stages follow `pipe.Stage`: a stage owns its goroutine and closes its output when its
     input closes. Channel hops only where parallelism or blocking needs them; steps

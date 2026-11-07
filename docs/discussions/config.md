@@ -171,9 +171,9 @@ Resolved by this work: silent ticker fallback, triplicated engine parsers, untyp
   - **`validate()` collects every error**; `Load` returns them joined and `main` logs one per line,
     as it does `build`'s.
 - **Composition is never in config**, agreed in [[features]] and planned in
-  `docs/plans/features-layer-v2/main.md`. Dependencies come from each feature type's registered
-  descriptor, which validation reads without instantiating; a dependency type with no configured
-  variant is an error. Factories keep building variant IDs. See
+  `docs/plans/features-layer-v2/main.md`. Dependencies come from each configured variant's `Deps`,
+  which validation reads without binding; a dependency type with no configured variant is an error.
+  Factories keep building variant IDs. See
   [features § Feature graph](features.md#feature-graph).
 
 ## Resources

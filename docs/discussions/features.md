@@ -103,12 +103,12 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   end, for a pair). Direct, feature-of-feature, cross-raw and cross-feature are derived from that,
   not separate mechanisms.
 - **Composition is in code, never in config.** A feature receives only handles to its inputs at its
-  coordinate; how it reads its dependencies is internal to it. Its type's descriptor names the feature types it reads, each once
-  (`zscore` lists `rsi`), and none when it reads candles only. It validates the config and builds
-  the graph; it is not an input list. `Lookback()` is its read depth: its dependencies' results, or
-  its candles.
-- **An instance is bound once, when the engine is built,** to its coordinate and its dependencies'
-  variants, and reads them for the streams it was instantiated on.
+  coordinate; how it reads its dependencies is internal to it. Its `Deps` names the feature types it
+  reads, each once (`zscore` lists `rsi`), and none when it reads candles only. It validates the
+  config and builds the graph; it is not an input list. `Lookback` is its read depth: its
+  dependencies' results, or its candles.
+- **An instance is bound once, at expansion,** to its coordinate and its dependencies' variants, and
+  reads them for the streams it was instantiated on.
 - **One instance per dependency variant, at every level.** With `rsi_14` and `rsi_21` configured,
   `zscore_50` becomes `zscore_50-rsi_14` and `zscore_50-rsi_21`; instances multiply across a
   feature's own variants and every level of its dependencies. A dependency type with no configured
@@ -116,16 +116,14 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
 - **Combining variants of one type is not a feature.** No instance sees two variants of one type, so
   a crossover (`ema_20` against `ema_50`) is not a feature. Indicators built from variants of one type
   (MACD) compute them internally and store their own struct as the result's value.
-- **Type-level descriptors at registration.** Each type registers its base ID, factory, value type
-  and a descriptor: arity (single-stream or pair) and dependencies; symmetry joins it with
-  asymmetric pair order (Open Questions). Expansion reads descriptors without instantiating
-  anything.
-- **A variant and its node are typed by their value.** A variant (`feature.Feature[T]`: `ID`,
-  `Lookback`, `Bind`) binds at one coordinate into a node (`feature.FeatureNode[T]`:
-  `Compute() (T, bool)`); one struct may be both, `Bind` returning a bound copy. The node reads
-  `Input` handles taken at `Bind`, narrowed to its coordinate, and returns its value, or false when
-  it cannot compute; it never writes. `T` is any type the feature engine supports (§ Feature
-  buffer); a dependency's is checked at `Bind`.
+- **One feature type.** A factory returns a `feature.Feature`: `ID`, `Lookback`, `Pair`, `Deps`,
+  `Bind`. Expansion reads arity and dependencies from those fields without binding anything. Variants
+  of one type declare the same ones, which expansion checks; symmetry joins them with asymmetric pair
+  order (Open Questions). A type's base ID is the name it registers under.
+- **A node is the function `Bind` returns.** `Bind`, a `feature.Bind[T]` held as `any`, takes the
+  node's `Input` handles from a binder, narrowed to one coordinate, allocates its scratch and returns
+  `func() (T, bool)`: the value, or false when it cannot compute. A node never writes. `T` is any type
+  the feature engine supports (§ Feature buffer); a dependency's is checked at `Bind`.
 - **Pair features expand like any other.** `corr` declares `returns` once; each pair gets one
   instance per `returns` variant (`corr_100-returns_1`, `corr_100-returns_5`), reading that variant
   on both of its streams.
@@ -146,29 +144,33 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
 - **Identity.** A type registers its base ID (`ema`); its factory builds the variant ID from its own
   parameters (`ema_20_s3`). Composed IDs are the composition, in order, dash-separated, outermost
   first — `zscore_50-rsi_14`, `corr_100-returns_1` — built by expansion (§ Feature layer). Several
-  dependencies compose in descriptor order (`f_1-rsi_14-vwap_20`), unambiguous since each type's
+  dependencies compose in `Deps` order (`f_1-rsi_14-vwap_20`), unambiguous since each type's
   dependencies are fixed in code. A variant ID never contains `-`.
 
 ### Feature layer
 
-- **Expansion at construction, the store at run.** The composition root injects variants and
+- **Expansion and binding at construction, rings at run.** The composition root injects variants and
   resolved universes, and knows nothing of expansion. The engine's factory calls `features.Expand`,
   a pure function turning them and the stream table into a validated `Graph` — instances with
-  composed IDs, the pair table, the lookback — so `--validate-only` reports expansion errors.
-  `features.New(graph)`, in `Run` beside `data.New`, allocates the store, binds the nodes and builds
-  the schedules; `Step(view)` runs one frame. The graph describes, the engine holds one run's state,
-  as the stream table and the data pipeline do. See § Reversed on 2026-11-03.
+  composed IDs, every node bound, the pair table, the lookback — so `--validate-only` reports
+  expansion and bind errors, all in one pass. A node needs the addresses of its inputs' views, not
+  rings, so `features.New(graph)`, in `Run` beside `data.New`, only allocates the rings and builds
+  the schedules; `Step(view)` runs one frame. A `Graph` runs once: it holds bound nodes and the views
+  they read. See § Reversed on 2026-11-07.
 - **One stream table for every layer.** The stream table is its own protocol domain
   (`proto.Streams`), built once by the composition root and injected into the data layer and the
   feature layer: a stream's index in it is its index in the data rings, the feature buffers and
   resolved universes ([[data-layer-v2]] § Subscriptions and the grid).
 - **Universe resolution belongs to config** — a pure function of rules over the stream table,
   independent of the feature engine.
-- **Views in `internal/flow/frame`.** Generic, concrete rings (`frame.Ring[T]`, one per entry, reads
-  stepped by `Period × Window`) in a `frame.Buffer[T]`, read through a `frame.View[T]` pinned at a
-  frame: a read-only snapshot for consumers, with direct calls. Each layer sizes and writes its own
-  buffers. The frame header is unexported, so a view cannot be re-pinned; views are made with
-  `NewView` and `Pin`.
+- **Views are part of the protocol layer**, in `internal/protocol/frame`. Generic, concrete rings
+  (`frame.Ring[T]`, one per entry, reads stepped by `Period × Window`) in a `frame.Buffer[T]`, read
+  through a `frame.View[T]` pinned at a frame: a read-only snapshot for consumers, with direct calls.
+  Each layer sizes and writes its own buffers. The frame header is unexported, so a view cannot be
+  re-pinned; views are made with `NewView` and `Pin`.
+- **`protocol` imports nothing outside itself.** `internal/protocol` and its subpackages import only
+  each other. The root imports neither `frame` nor `feature`: a cycle either way, through
+  `frame_test.go` for `frame`.
 
 ### Scheduling and firing
 
@@ -218,11 +220,11 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   never allocate. The contract leaves `T` unconstrained; the feature engine supports the types its
   switch names — `float64` and `int` today. A multi-output feature (MACD) or recursive state declares
   its own struct in its feature's domain package, which the engine imports for its case and
-  consumers for `ViewOf`. A constraint listing the types would put domain types in `protocol`, an
-  import cycle, so a missing case is caught by a test over every registered type and by expansion
-  (`--validate-only`), not the compiler.
-- **Only the feature engine creates feature buffers.** Registration records `T` — `Zero()`, a zero
-  value — and erases it; the engine switches on `Zero()`, asserts `Feature[T]` and instantiates
+  consumers for `ViewOf`. A compile-time list of the types would put domain types in `protocol`, an
+  import cycle, so a missing case or a malformed `Bind` is caught by a test over every registered type
+  and by expansion (`--validate-only`), not the compiler.
+- **Only the feature engine creates feature buffers.** It switches on a feature's `Bind`
+  (`case feature.Bind[float64]`), which hands it the typed function, and instantiates
   `frame.Buffer[T]` there — Go instantiates it only where `T` is known. Registering through the
   engine would keep the switch out, but domain packages would import the engine; merging the
   contract into the feature domain would move feature registration out of `internal/registry`.
@@ -238,9 +240,9 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   1 the ring anchors on columns the pair never writes. The timeframe enum is a divisibility chain, so
   both ends' periods divide the pair's — an invariant new timeframes must keep.
 - **No per-stream feature map.** Buffers share the stream table's and the pair table's indices, so
-  features never look anything up — their inputs' rings are resolved at `Bind` — and consumers
-  resolve a composed ID once with `ViewOf` and a pair with `View.Pair`.
-- **Memory warning.** Construction estimates the feature buffer's memory (results × slots × slot
+  features never look anything up — their inputs' views and ring indices are taken at `Bind` — and
+  consumers resolve a composed ID once with `ViewOf` and a pair with `View.Pair`.
+- **Memory warning.** `features.New` estimates the feature buffer's memory (results × slots × slot
   size) and logs a warning above 1 GB, naming the largest universes.
 
 ### Universes
@@ -274,15 +276,25 @@ Superseded by § Feature layer and § Feature buffer above; kept for context.
 
 | Was | Now | Why |
 |---|---|---|
-| The composition root calls the exported expansion function and injects the instances; the engine binds, allocates and schedules | The engine's factory calls `Expand`, which returns a validated `Graph`; `features.New(graph)` in `Run` allocates and binds | The composition root holds no feature-layer logic; `--validate-only` still covers expansion; the engine's run state is built in `Run`, beside `data.New` |
+| The composition root calls the exported expansion function and injects the instances; the engine binds, allocates and schedules | The engine's factory calls `Expand`, which returns a validated `Graph`; `features.New(graph)` runs in `Run` | The composition root holds no feature-layer logic; `--validate-only` still covers expansion; the engine's run state is built in `Run`, beside `data.New` |
 | A per-stream feature map, `s → map[key]int` | Buffers indexed by the stream table and a pair table | One index space with the data layer; no map key to choose |
 | A pair's ring sized like its coarser end's | Stepping at `max(Pa, Pb)`, with its coarser end's bar | A rolling coarse end has a finer period than the pair's sampling clock |
+
+### Reversed on 2026-11-07
+
+Superseded by § Feature graph, § Feature layer and § Feature buffer above; kept for context.
+
+| Was | Now | Why |
+|---|---|---|
+| `Feature[T]`, `FeatureNode[T]`, `Factory[T]`, `Type`, `Variant`, `Descriptor` and a registry type of their own | One `feature.Feature` struct; a node is the function `Bind` returns; the generic registry | They split one feature by lifetime and by typed or erased form |
+| `features.New` allocates the store and binds | `Expand` binds; `New` allocates | `--validate-only` covers every `Bind`; a node needs views' addresses, not rings |
+| Rings, slots and `View` in `internal/flow/frame` | `internal/protocol/frame` | Views are part of the protocol layer, and `protocol` imports nothing outside itself |
 
 ## Solution
 
 Executed stages of `docs/plans/features-layer-v2/main.md`, iteration 4 of
-`docs/plans/data-layer-v2`: `stage-1-frame.md` (`flow/frame`), `stage-2-universes.md` (the stream
-table and universes).
+`docs/plans/data-layer-v2`: `stage-1-frame.md` (`frame`), `stage-2-universes.md` (the stream table and
+universes).
 
 ### Node shape
 
@@ -297,13 +309,13 @@ table and universes).
 
 | Piece | Job | When | Home |
 |---|---|---|---|
-| Contract | `Feature[T]`, `FeatureNode[T]`, descriptor, `NewType[T]` (recording `T`), binder and `Input` handles | — | `internal/protocol/feature` |
-| Feature types | Pure maths; base ID, descriptor, value type and factory registered | — | `internal/domains/features` |
+| Contract | `Feature`, `Bind[T]`, binder and `Input` handles | — | `internal/protocol/feature` |
+| Feature types | Pure maths; a factory returning a `Feature`, registered under the base ID | — | `internal/domains/features` |
 | Stream table | One entry per direct subscription and derived window; the index space of every layer | Composition root | `internal/protocol` |
-| Registry and config | Type → factory and descriptor; variants decoded strictly; `universes` block, `universe` per feature; universe resolution | Config parse, composition root | `internal/registry`, `internal/config` |
-| Expansion | Variants × dependency variants × coordinates; validation; composed IDs; the `Graph` | Engine construction | `internal/engine/features` (pure function) |
-| Feature engine | Recover each variant's value type, allocate the store (`frame.Buffer[T]` per composed ID), bind the nodes, due-pattern schedules; `Step(view)` | `Run`, then each frame | `internal/engine/features` |
-| Frame primitives | Generic rings and buffers, pinned `View[T]` | — | `internal/flow/frame` |
+| Registry and config | Type → factory; variants decoded strictly; `universes` block, `universe` per feature; universe resolution | Config parse, composition root | `internal/registry`, `internal/config` |
+| Expansion | Variants × dependency variants × coordinates; validation; composed IDs; each variant's value type recovered; every node bound; the `Graph` | Engine construction | `internal/engine/features` (pure function) |
+| Feature engine | Allocate the rings (`frame.Buffer[T]` per composed ID), due-pattern schedules; `Step(view)` | `Run`, then each frame | `internal/engine/features` |
+| Frame primitives | Generic rings and buffers, pinned `View[T]` | — | `internal/protocol/frame` |
 | Consumers | Exporter and strategies read through the `View` | After `Step` | — |
 
 Leaving the data path: `Snapshot`, `SortedWindow`, `FeatureChain`, `Update`, and the
@@ -311,27 +323,30 @@ Leaving the data path: `Snapshot`, `SortedWindow`, `FeatureChain`, `Update`, and
 
 ### Contract sketch
 
-Planned in `docs/plans/features-layer-v2/stage-3-contract-store.md`. A factory builds a variant; the
-engine binds it once per instance into a node, which takes typed handles to its inputs at its
-coordinate — value types are checked there, at construction.
+Planned in `docs/plans/features-layer-v2/stage-3-contract-store.md`. A factory returns one `Feature`;
+expansion calls its `Bind` once per instance, taking typed handles to its inputs at its coordinate —
+value types are checked there, at construction — and the function it returns is the node.
 
 ```go
-reg.FeatureTypes.Register(feature.NewType[float64]("zscore",
-	feature.Descriptor{Arity: feature.Single, Dependencies: []string{"rsi"}}, newZScore))
+reg.FeatureTypes.Register("zscore", newZScore)
 
-type Feature[T any] interface { // variant
-	ID() string // "zscore_50", rendered by the factory
-	Lookback() int
-	Bind(b *feature.Binder) (FeatureNode[T], error) // inputs: Candles, Dep[T](b, "rsi"), PairCandles, PairDep[T]
+type Feature struct {
+	ID       string   // "zscore_50", rendered by the factory
+	Lookback int
+	Pair     bool     // runs on a pair of streams
+	Deps     []string // {"rsi"}
+	Bind     any      // a Bind[T]
 }
 
-type FeatureNode[T any] interface {
-	Compute() (T, bool) // reads through handles taken at Bind; false: cannot compute (warm-up)
-}
+// Inputs: Candles(b), Dep[T](b, "rsi"), PairCandles(b), PairDep[T](b, "rsi").
+// The node reads through them; false: cannot compute (warm-up).
+type Bind[T any] = func(b *Binder) func() (T, bool)
 ```
 
-- Firing is the engine's job; `Compute` runs only when every input is `Fresh`. The engine writes
-  `Fresh`, or `Gap` when `Compute` returns false, and `Gap` / `Ended` at columns it skips.
+- Firing is the engine's job; a node runs only when every input is `Fresh`. The engine writes
+  `Fresh`, or `Gap` when the node returns false, and `Gap` / `Ended` at columns it skips.
+- The binder keeps its first error and the engine reads it after `Bind`, so `Bind` returns none and
+  never reads an input.
 - Nodes may hold scratch buffers for allocation-free reads, allocated in `Bind`, never carried
   values.
 
@@ -425,10 +440,13 @@ bound up with the strategy input contract ([[strategy-layer]]).
 - **Asymmetric pair order** (beta, hedged spread, lead-lag) — which stream is the first operand, for
   reference rules and `*`. Proposed: `(stream, reference)` from reference rules, both orders from
   `*`, explicit pairs as written; symmetric features store each pair once, in sorted order. Symmetry
-  joins the descriptor with it.
+  joins `Feature` with it.
 - **Parameters in IDs** must not emit `-`: `iDWithParam` formats with `'g'` (`ema_20_s1e-05`), and
-  negative values carry a sign. Planned: `Type.Create` rejects such a variant ID (stage 3); the
-  format is fixed when it is ported (stage 4).
+  negative values carry a sign. Planned: `Expand` rejects such a variant ID (stage 5); the format is
+  fixed when it is ported (stage 4).
+- **How a strategy reads a struct result.** `ViewOf` is in `engine/features` and a struct value type
+  in its feature's domain, while a domain imports only `protocol` ([[engine]]). To settle before
+  strategies read features.
 - **Pair features over pair features** (a z-score of a spread) — a node reading a pair result;
   iteration 1 allows single-stream dependencies only.
 - **`Late` revisions** (pinned) — recompute the subgraph reachable from the revised stream over
@@ -440,12 +458,14 @@ bound up with the strategy input contract ([[strategy-layer]]).
 
 - Feature graph agreed in discussion (Decisions § Feature graph onwards); planned in
   `docs/plans/features-layer-v2/main.md`.
-- `internal/flow/frame` implemented — generic rings, buffers and pinned views — with the data layer
-  running on it: `docs/plans/features-layer-v2/stage-1-frame.md`.
+- `frame` implemented — generic rings, buffers and pinned views — with the data layer running on it:
+  `docs/plans/features-layer-v2/stage-1-frame.md`. In `internal/flow/frame` until stage 3 moves it to
+  `internal/protocol/frame`.
 - The stream table in `internal/protocol`, built by the composition root, and universes in config,
   resolved over it, implemented; nothing consumes universes yet —
   `docs/plans/features-layer-v2/stage-2-universes.md`. Config guide: `configs/README.md`.
-- Planned: the contract in `internal/protocol/feature`, `reg.FeatureTypes` and the feature store —
+- Planned: `frame` in the protocol layer, the contract in `internal/protocol/feature`,
+  `reg.FeatureTypes`, and the feature graph, engine and view —
   `docs/plans/features-layer-v2/stage-3-contract-store.md`.
 - Registered and working: `sma`, `ema`, `rsi`, `vwap`, `engulfing_candle`.
 - `swing_highlow` is broken behind a `wip` build tag. It duplicates swing-detection logic that also

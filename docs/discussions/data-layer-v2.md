@@ -346,7 +346,8 @@ construction, one provider stream.
   in other packages, so holding a `frame.Buffer` is holding write access: nothing above the data
   layer may hold its buffer or a ring. The guard is possession — the `FrameBuffer`'s buffer and its
   methods are unexported, and `DataPipeline` exposes no buffer.
-- **Rings, slots and the `View` live in `internal/flow/frame`** (features-layer-v2 stage 1): the
+- **Rings, slots and the `View` live in `internal/protocol/frame`**, part of the protocol layer
+  (features-layer-v2 stage 1 built them in `flow/frame`, stage 3 moves them): the
   `FrameBuffer` is a `frame.Buffer[proto.Candle]` plus the data layer's sizing and staging; reads are
   `View.Latest` and `View.Data`; leg states and frame statuses are `frame.State` and `frame.Status`.
 - **One ring per stream, one slot per update:** `slot = (col / Period) % size`. Each ring is sized to
@@ -509,7 +510,7 @@ for next := head + 1; decided(next) && next <= reach; next++ {
 ### Events
 
 ```go
-package frame // internal/flow/frame
+package frame // internal/protocol/frame
 
 type Status uint8
 
@@ -558,7 +559,7 @@ the columns before `f`.
 ### FrameBuffer
 
 ```go
-// internal/flow/frame (features-layer-v2 stage 1): one ring per entry, one slot per update.
+// internal/protocol/frame (features-layer-v2 stages 1 and 3): one ring per entry, one slot per update.
 type Slot[T any] struct {
     Col    int64 // column held; -1 = empty
     ValCol int64 // column Val was written at: Col when Fresh, the carried value's when not; -1 = none
@@ -678,7 +679,8 @@ func Records[T any](v frame.View[proto.Candle], s Section[T]) []T
 - Readiness's event channel sized from the rings, the largest `spare·Period` over direct streams,
   instead of `defaultHeadroom` — `docs/plans/readiness-views-capacity.md`.
 - The `View`, rings and slots moved to `internal/flow/frame`, and the derived window count was dropped
-  — `docs/plans/features-layer-v2/stage-1-frame.md`.
+  — `docs/plans/features-layer-v2/stage-1-frame.md`. Stage 3 of that plan moves them on to
+  `internal/protocol/frame`.
 - The stream table moved to `internal/protocol` (`proto.NewStreams`), built by the composition root
   and injected into `data.New` (§ Subscriptions and the grid) —
   `docs/plans/features-layer-v2/stage-2-universes.md` step 1.
