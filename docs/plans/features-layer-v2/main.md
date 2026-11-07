@@ -52,9 +52,9 @@ From [features.md](../../discussions/features.md):
   types and `View[T]` pins a buffer at a frame: reads are written once and called directly. Each
   layer sizes and writes its own buffers; the data layer keeps its staging, and the derived window
   count is dropped. `View[T]` embeds an unexported header, so a view cannot be re-pinned; views are made with
-  `NewView` and `Pin`. Stage 1 built them in `flow/frame`; stage 3 moves them.
+  `NewView` and `Pin`. Stage 1 built them in `flow/frame`; stage 3 moved them.
 - **`protocol` imports nothing outside itself.** `internal/protocol` and its subpackages import only
-  each other, which is why `frame` moves: the contract reads views.
+  each other, which is why `frame` moved: the contract reads views.
 - **Feature slots carry state.** A result is written at every due column of its coordinate — `Fresh`,
   or `Gap` carrying the last `Fresh` value — and `Ended` once its stream ends; a column mismatch means
   overwritten or not started, as for candles. Replaces `{col, value}` slots and absence by column
@@ -100,7 +100,7 @@ Tiered. Stage docs live beside this one, produced iteratively:
 
 - `stage-1-frame.md` — *implemented.*
 - `stage-2-universes.md` — *implemented.*
-- `stage-3-contract-store.md` — *planned.*
+- `stage-3-contract-store.md` — *implemented.*
 - `stage-4-ported-features.md` — *to plan.*
 - `stage-5-expansion.md` — *to plan.*
 - `stage-6-engine.md` — *to plan.*
@@ -137,7 +137,7 @@ data_logger_v2 Run:     features.New(graph) ─▶ loop: data.Next ─▶ pacer 
 - **Acceptance:** every existing `internal/engine/data` test passes unchanged in behaviour; reads
   allocate nothing; `go test -race ./internal/engine/data/... ./internal/flow/frame/...` clean;
   benchmarks within noise; `data_logger_v2` output unchanged.
-- Plan: `stage-1-frame.md`. Stage 3 moves the package to `internal/protocol/frame`.
+- Plan: `stage-1-frame.md`. Stage 3 moved the package to `internal/protocol/frame`.
 
 ### Stage 2 — stream table and universes ✅ implemented
 
@@ -157,7 +157,7 @@ data_logger_v2 Run:     features.New(graph) ─▶ loop: data.Next ─▶ pacer 
   `--validate-only` covers them.
 - Plan: `stage-2-universes.md`.
 
-### Stage 3 — contract, registry and store
+### Stage 3 — contract, registry and store ✅ implemented
 
 - **Goal:** `frame` in the protocol layer, the new feature contract, its registry, and the graph,
   engine and view that bind nodes and hold their results.

@@ -294,7 +294,8 @@ Superseded by § Feature graph, § Feature layer and § Feature buffer above; ke
 
 Executed stages of `docs/plans/features-layer-v2/main.md`, iteration 4 of
 `docs/plans/data-layer-v2`: `stage-1-frame.md` (`frame`), `stage-2-universes.md` (the stream table and
-universes).
+universes), `stage-3-contract-store.md` (`frame` in the protocol layer, the contract, the registry, and
+the feature graph, engine and view).
 
 ### Node shape
 
@@ -323,7 +324,7 @@ Leaving the data path: `Snapshot`, `SortedWindow`, `FeatureChain`, `Update`, and
 
 ### Contract sketch
 
-Planned in `docs/plans/features-layer-v2/stage-3-contract-store.md`. A factory returns one `Feature`;
+Implemented by `docs/plans/features-layer-v2/stage-3-contract-store.md`. A factory returns one `Feature`;
 expansion calls its `Bind` once per instance, taking typed handles to its inputs at its coordinate —
 value types are checked there, at construction — and the function it returns is the node.
 
@@ -459,13 +460,13 @@ bound up with the strategy input contract ([[strategy-layer]]).
 - Feature graph agreed in discussion (Decisions § Feature graph onwards); planned in
   `docs/plans/features-layer-v2/main.md`.
 - `frame` implemented — generic rings, buffers and pinned views — with the data layer running on it:
-  `docs/plans/features-layer-v2/stage-1-frame.md`. In `internal/flow/frame` until stage 3 moves it to
-  `internal/protocol/frame`.
+  `docs/plans/features-layer-v2/stage-1-frame.md`. Stage 3 moved it to `internal/protocol/frame`.
 - The stream table in `internal/protocol`, built by the composition root, and universes in config,
   resolved over it, implemented; nothing consumes universes yet —
   `docs/plans/features-layer-v2/stage-2-universes.md`. Config guide: `configs/README.md`.
-- Planned: `frame` in the protocol layer, the contract in `internal/protocol/feature`,
-  `reg.FeatureTypes`, and the feature graph, engine and view —
+- The contract in `internal/protocol/feature`, `reg.FeatureTypes`, and the feature graph, engine and
+  view in `internal/engine/features` implemented, tested with hand-built instances and hand-fired
+  nodes; nothing registers, expands or schedules yet —
   `docs/plans/features-layer-v2/stage-3-contract-store.md`.
 - Registered and working: `sma`, `ema`, `rsi`, `vwap`, `engulfing_candle`.
 - `swing_highlow` is broken behind a `wip` build tag. It duplicates swing-detection logic that also
@@ -483,6 +484,7 @@ bound up with the strategy input contract ([[strategy-layer]]).
 ## Resources
 
 - `internal/protocol/feature.go`, `internal/protocol/snapshot.go`, `internal/protocol/sorted_window.go`
+- `internal/protocol/feature/`, `internal/protocol/frame/`, `internal/engine/features/`
 - `internal/domains/features/`, `internal/engine/data_logger_v2.go` (bridge),
   `internal/engine/data/view.go`, `internal/engine/data/buffer.go`
 - `docs/Protocol.md` § Features

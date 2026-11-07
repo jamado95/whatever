@@ -123,9 +123,9 @@ the tree building, tested and `make check` clean.
   rings. A real run needs it anyway.
 - **`Engine` holds the run; there is no separate store.** It allocates and pins here; stage 6 adds
   schedules, `Step` and the memory warning to it.
-- **`newGraph` checks what expansion will guarantee:** each dependency's composed ID runs at the
-  instance's coordinate (on each end, for a pair), an ID runs once per coordinate, and one ID has one
-  variant ID.
+- **`newGraph` checks what expansion will guarantee:** a feature's `Pair` matches its coordinate, each
+  dependency's composed ID runs at the instance's coordinate (on each end, for a pair), an ID runs once
+  per coordinate, and one ID has one variant ID.
 - **The graph's input is internal.** `instance` and `column` are unexported: from stage 5 `Expand`
   builds the instances, and stage 6 fires the columns, in the same package; this stage's tests build
   and fire them in the package.
@@ -399,12 +399,15 @@ naming the composed ID and coordinate.
 func newGraph(streams *proto.Streams, instances []instance) (*Graph, error)
 ```
 
-`newGraph` checks, before binding: a pair's ends are two streams of the table, lower first; one
-composed ID runs once per coordinate and has one variant ID; every dependency's composed ID runs at
-the instance's stream, or on both ends of its pair. Each binder gets `&g.candles` and its dependencies'
-`cell()`s; each instance binds with ring `A` of its column, or its pair's index. Errors are wrapped
-with the composed ID and coordinate: `features: zscore_50-rsi_14 on BTCUSDT:1h:btc_1h: feature: no
-dependency of type "rsi"`.
+`newGraph` checks, before binding: a stream is in the table; a pair's ends are two streams of the
+table, lower first; a feature's `Pair` matches its coordinate; one composed ID runs once per coordinate
+and has one variant ID; every dependency's composed ID runs at the instance's stream, or on both ends
+of its pair. An instance with a bad coordinate, a repeated ID or a second variant is left out, so the
+rest is still sized and bound; a dependent of a column that failed is not bound, its cause already
+reported. Each binder gets `&g.candles` and its dependencies' `cell()`s; each instance binds with ring
+`A` of its column, or its pair's index. Errors are wrapped with the composed ID and coordinate:
+`features: zscore_50-rsi_14 on BTCUSDT:1h:btc_1h: feature: no dependency of type "rsi"`. An unsupported
+value type is reported once, by `newColumn`, naming the variant ID.
 
 ### Changes — new `internal/engine/features/engine.go`
 
@@ -443,9 +446,9 @@ func (v View) Pair(a, b int) (int, bool)
 
 ### Tests
 
-**`internal/engine/features/features_test.go`** — adds `spread` (pair: close A − close B), `pdiff`
-(pair over `last`), and a helper building a stream table: BTCUSDT 5m deriving 1h, BTCUSDT 1h and
-ETHUSDT 5m.
+**`internal/engine/features/features_test.go`** — adds `seen`, `spread` (pair: close A − close B),
+`pdiff` (pair over `last`), and helpers building a stream table — BTCUSDT 5m deriving 1h, BTCUSDT 1h
+and ETHUSDT 5m — its candles, and instances.
 
 **New `internal/engine/features/graph_test.go`** — `Graph`s from `newGraph` over hand-built instances:
 
@@ -453,19 +456,22 @@ ETHUSDT 5m.
   allocates them, and the nodes then read and write without rebinding.
 - **`TestGraphShapes`** — rings empty where an ID does not run; a stream's ring is `{L × W, P, W, L}`
   with `L` the longest `Lookback`; `L` is 1 without lookback.
-- **`TestGraphBindErrors`** — `diff` over `sign` (`Dep[float64]` over `int`), `spread` at a stream,
-  `last` at a pair and `label` are all reported by one `newGraph` call, each naming its composed ID
-  and coordinate, with no ring allocated.
-- **`TestGraphErrors`** — an ID twice on one coordinate; a dependency not running at the stream, or
-  on one end of a pair; two variant IDs under one composed ID; a pair's ends equal, reversed or out of
-  range; each named by ID and coordinate.
+- **`TestGraphBindErrors`** — `label`, `diff` over `sign` (`Dep[float64]` over `int`), `diff` with no
+  dependency, and a `Bind` at odds with its feature's `Pair` either way are all reported by one
+  `newGraph` call, each naming its feature, and its coordinate when bound.
+- **`TestGraphErrors`** — an ID twice on one coordinate; a dependency not running at the stream, on one
+  end of a pair, or only as a pair result; two variants under one composed ID, including one ID as a
+  stream and a pair feature; a stream outside the table; a pair's ends equal, reversed or out of range;
+  a pair feature on one stream and a single-stream feature on a pair; each named by ID and coordinate.
+  A dependent of an unsupported value type reports only its cause.
 
 **New `internal/engine/features/engine_test.go`**
 
 - **`TestEngineFrame`** — `last` and `diff` on every stream: `diff` fired after `last` reads its
-  result at the same column; `ViewOf` reads both, and no later column; `sign` reads back as `int`.
-- **`TestEngineGap`** — after `skip(Gap)` on `last`, `diff` sees `Gap` in `Latest` and skips the
-  column in `Data`.
+  result at the same column; `ViewOf` reads both, and no later column, even from an older frame's view;
+  a coarse stream between updates carries its value; `sign` reads back as `int`.
+- **`TestEngineGap`** — after `skip(Gap)` on `last`, a dependent sees `Gap` in `Latest` (`seen`, a test
+  feature reporting the state it reads) and `diff` skips the column in `Data`.
 - **`TestEngineHistory`** — result history steps one bar: the direct 1h on the 5m grid (period 12)
   and the rolling 1h from 5m (period 1, window 12); `Gap` skipped.
 - **`TestEnginePairs`** — one pair table, sorted, shared by every pair ID; `Pair` in either order; a

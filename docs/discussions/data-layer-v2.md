@@ -347,7 +347,7 @@ construction, one provider stream.
   layer may hold its buffer or a ring. The guard is possession — the `FrameBuffer`'s buffer and its
   methods are unexported, and `DataPipeline` exposes no buffer.
 - **Rings, slots and the `View` live in `internal/protocol/frame`**, part of the protocol layer
-  (features-layer-v2 stage 1 built them in `flow/frame`, stage 3 moves them): the
+  (features-layer-v2 stage 1 built them in `flow/frame`, stage 3 moved them): the
   `FrameBuffer` is a `frame.Buffer[proto.Candle]` plus the data layer's sizing and staging; reads are
   `View.Latest` and `View.Data`; leg states and frame statuses are `frame.State` and `frame.Status`.
 - **One ring per stream, one slot per update:** `slot = (col / Period) % size`. Each ring is sized to
@@ -679,7 +679,7 @@ func Records[T any](v frame.View[proto.Candle], s Section[T]) []T
 - Readiness's event channel sized from the rings, the largest `spare·Period` over direct streams,
   instead of `defaultHeadroom` — `docs/plans/readiness-views-capacity.md`.
 - The `View`, rings and slots moved to `internal/flow/frame`, and the derived window count was dropped
-  — `docs/plans/features-layer-v2/stage-1-frame.md`. Stage 3 of that plan moves them on to
+  — `docs/plans/features-layer-v2/stage-1-frame.md`. Stage 3 of that plan moved them on to
   `internal/protocol/frame`.
 - The stream table moved to `internal/protocol` (`proto.NewStreams`), built by the composition root
   and injected into `data.New` (§ Subscriptions and the grid) —
