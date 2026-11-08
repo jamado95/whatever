@@ -122,8 +122,8 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   order (Open Questions). A type's base ID is the name it registers under.
 - **A node is the function `Bind` returns.** `Bind`, a `feature.Bind[T]` held as `any`, takes the
   node's `Input` handles from a binder, narrowed to one coordinate, and returns `func() (T, bool)`:
-  the value, or false when it cannot compute. A node reads in place: `Input.Data(n, order)` iterates
-  its ring, newest or oldest first, without copying. A node never writes. `T` is any type the feature
+  the value, or false when it cannot compute. A node reads its stream's candles as a prefix of the
+  engine's copy, `Input.Last(n)` (§ Feature buffer). A node never writes. `T` is any type the feature
   engine supports (§ Feature buffer); a dependency's is checked at `Bind`. See § Reversed on
   2026-11-08.
 - **Pair features expand like any other.** `corr` declares `returns` once; each pair gets one
@@ -241,11 +241,17 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   end's fails for a rolling 1h (period 1, window 12) paired with a direct 1h (period 12): at period
   1 the ring anchors on columns the pair never writes. The timeframe enum is a divisibility chain, so
   both ends' periods divide the pair's — an invariant new timeframes must keep.
+- **One candle copy per stream.** The engine owns a `[]proto.Candle` per stream, as deep as the
+  longest `Lookback` among the instances reading its candles (a pair counts for both ends), and
+  refills it with `View.Data` at each frame the stream updates, before any node fires. A node's
+  `Input.Last(n)` is its first n candles: one ring walk per stream, no copy per node. Every node on
+  the stream shares it, never writing it or keeping it past its call. Dependency results have no copy
+  until a feature reads one (iteration 3); they read through `Data` into scratch.
 - **No per-stream feature map.** Buffers share the stream table's and the pair table's indices, so
   features never look anything up — their inputs' views and ring indices are taken at `Bind` — and
   consumers resolve a composed ID once with `ViewOf` and a pair with `View.Pair`.
 - **Memory warning.** `features.New` estimates the feature buffer's memory (results × slots × slot
-  size) and logs a warning above 1 GB, naming the largest universes.
+  size, and the candle copies) and logs a warning above 1 GB, naming the largest universes.
 
 ### Universes
 
@@ -294,11 +300,11 @@ Superseded by § Feature graph, § Feature layer and § Feature buffer above; ke
 
 ### Reversed on 2026-11-08
 
-Superseded by § Feature graph above; kept for context.
+Superseded by § Feature graph and § Feature buffer above; kept for context.
 
 | Was | Now | Why |
 |---|---|---|
-| A node copies its reads into scratch allocated in `Bind`: `Input.Data(n, dst)` | `Input.Data(n, order)` iterates the ring in place, newest or oldest first | Scratch held a copy of a stream's history per variant; the rings' one copy is shared, and nothing is allocated |
+| A node copies its candle reads into scratch allocated in `Bind`: `Input.Data(n, dst)` | Candle reads are prefixes of one engine copy per stream, `Input.Last(n)`, refilled once per frame at the stream's longest lookback | Scratch held a copy of a stream's history per variant. With the reference variants, a copy per stream read about 3× faster than per-node scratch and 2.2× faster than iterating the ring in place per node, holding the longest lookback per stream |
 
 ## Solution
 
@@ -325,7 +331,7 @@ the feature graph, engine and view).
 | Stream table | One entry per direct subscription and derived window; the index space of every layer | Composition root | `internal/protocol` |
 | Registry and config | Type → factory; variants decoded strictly; `universes` block, `universe` per feature; universe resolution | Config parse, composition root | `internal/registry`, `internal/config` |
 | Expansion | Variants × dependency variants × coordinates; validation; composed IDs; each variant's value type recovered; every node bound; the `Graph` | Engine construction | `internal/engine/features` (pure function) |
-| Feature engine | Allocate the rings (`frame.Buffer[T]` per composed ID), due-pattern schedules; `Step(view)` | `Run`, then each frame | `internal/engine/features` |
+| Feature engine | Allocate the rings (`frame.Buffer[T]` per composed ID) and one candle copy per stream, due-pattern schedules; `Step(view)` | `Run`, then each frame | `internal/engine/features` |
 | Frame primitives | Generic rings and buffers, pinned `View[T]` | — | `internal/protocol/frame` |
 | Consumers | Exporter and strategies read through the `View` | After `Step` | — |
 
@@ -358,8 +364,9 @@ type Bind[T any] = func(b *Binder) func() (T, bool)
   `Fresh`, or `Gap` when the node returns false, and `Gap` / `Ended` at columns it skips.
 - The binder keeps its first error and the engine reads it after `Bind`, so `Bind` returns none and
   never reads an input.
-- Nodes read in place: `Input.Data(n, order)` yields up to n `Fresh` values, newest or oldest first.
-  Scratch, allocated in `Bind`, is only working memory, never carried values.
+- Nodes read candles through `Input.Last(n)`, a prefix of the engine's copy of their stream, and
+  dependencies through `Data(n, dst)`. Scratch, allocated in `Bind`, holds dependency reads and
+  working memory, never carried values.
 
 ### Scheduling
 

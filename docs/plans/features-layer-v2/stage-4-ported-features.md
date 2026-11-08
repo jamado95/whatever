@@ -8,10 +8,11 @@ and the engine's columns, graph and view, tested with test-only features; nothin
 
 This stage ports `sma`, `ema`, `rsi`, `vwap` and `engulfing_candle` onto the contract, in a new
 package `internal/domains/featuresv2` (`featv2`) beside `internal/domains/features` (`feat`). Each is
-registered under the original's type name, with the original's config and maths. Before the ports,
-`Data` becomes an iterator over the ring, newest or oldest first, so nodes read the one copy of
-history the rings hold instead of each copying what it reads into scratch. The ports are then checked
-against the originals at every column where the bridge evaluates:
+registered under the original's type name, with its maths copied unchanged. Nodes read their stream's
+candles from one copy per stream owned by the feature engine: filled once per frame at the stream's
+longest lookback, each node taking the prefix it needs, rather than each node copying what it reads
+into its own scratch. The ring walk that fills it steps slot indices instead of dividing per slot. The
+ports are then checked against the originals at every column where the bridge evaluates:
 
 - a table of every registered type, checked against the engine's switch;
 - a comparison over the BTCUSDT reference dataset, on a random four-month sample per run and
@@ -21,28 +22,31 @@ against the originals at every column where the bridge evaluates:
 ```
 featv2 init   reg.FeatureTypes.Register("sma", newSMA) … five types
 factory       config.Decode ─▶ feature.Feature{ID, Lookback, Bind: Bind[float64] | Bind[int]}
-node          in.Data(n, order) ─▶ the original's maths, in its order ─▶ (value, true) | (0, false)
+pin           each stream updated at the frame: history[s] = view.Data(s, depth[s], history[s])
+node          in.Last(n) ─▶ the original's maths ─▶ (value, true) | (0, false)
 checked       newGraph ─▶ New ─▶ pin ─▶ fire ─▶ ViewOf  ==  FeatureChain.Evaluate(sub, view.Data(s, L))
 ```
 
-Outside the new package and the tests, the data layer's reference sampling moves into a helper
-package, and `Data` in `frame` and `feature` becomes an iterator, its callers following. `cmd` does not
-import `featv2` until stage 5.
+Outside the new package and the tests: the data layer's reference sampling moves into a helper
+package; `frame`'s ring walk steps slot indices; the contract's `Input` gains `Last`, and the feature
+engine sizes, allocates and fills the copies. `cmd` does not import `featv2` until stage 5.
 
 The plan, with the decisions it records in [main.md](main.md) and
-[features.md](../../discussions/features.md), is committed before step 1. It was amended after step 1
-to read through iterators (step 2); the amendment, with the decisions it records in features.md and
-[data-layer-v2.md](../../discussions/data-layer-v2.md), is committed before step 2. The stage is
-implemented in four steps, in order. Each step is a review checkpoint: its changes stay unstaged for
-review, are committed once approved, and the next step starts from that commit. Every step leaves the
-tree building, tested and `make check` clean.
+[features.md](../../discussions/features.md), is committed before step 1. It was amended twice after
+step 1: first to iterate the ring in place (`85792d5`), then, after benchmarks, to read from one copy
+per stream. The second amendment supersedes the first; with the decisions it records in main.md,
+features.md and [data-layer-v2.md](../../discussions/data-layer-v2.md), it is committed before step 2.
+The stage is implemented in five steps, in order. Each step is a review checkpoint: its changes stay
+unstaged for review, are committed once approved, and the next step starts from that commit. Every
+step leaves the tree building, tested and `make check` clean.
 
 | Step | Adds | Commit |
 |---|---|---|
 | 1 | The reference sample shared | `refactor(data): share the reference sample` |
-| 2 | `Data` as an ordered iterator | `refactor(frame): read ring data through an ordered iterator` |
-| 3 | The five ported features | `feat(features): port the five features to the feature contract` |
-| 4 | Checks against the originals; the stage's documentation | `test(features): check the ported features against the originals` |
+| 2 | The ring walk stepping slot indices | `perf(frame): step slot indices in the ring walk` |
+| 3 | One candle copy per stream | `feat(features): read candles from one engine copy per stream` |
+| 4 | The five ported features | `feat(features): port the five features to the feature contract` |
+| 5 | Checks against the originals; the stage's documentation | `test(features): check the ported features against the originals` |
 
 ## Decisions
 
@@ -56,43 +60,59 @@ tree building, tested and `make check` clean.
   originals retire.
 - **Same config schemas.** The factories decode the originals' config structs strictly, so one config
   entry builds in both registries (stage 5).
-- **`Data` iterates in place.** `Ring.Data(col, n, o)`, `View.Data(i, n, o)` and `Input.Data(n, o)`
-  return an `iter.Seq[T]` over up to n `Fresh` values, the values the slice read returned, walking the
-  ring's slots as the loop ranges: `frame.NewestFirst`, or `frame.OldestFirst`, which walks back to
-  the n-th value, then forward from it. One method with an order, not one per direction. Nothing is
-  copied or allocated, and values come out by value, so a reader cannot write the ring. A caller
-  wanting a slice collects into its own: `slices.AppendSeq(dst[:0], v.Data(i, n, o))`. A slice of the
-  ring itself is not possible: values sit inside slots, a ring wraps, a rolling stream's bars are
-  `Window` slots apart, and `Gap` slots are skipped.
-- **The walk runs while the node ranges,** under the guarantee the slice read relied on: align writes
-  a slot only once it holds nothing a view may still read ([data-layer-v2.md](../../discussions/data-layer-v2.md)
-  Solution § FrameBuffer). A node ranges its inputs within its call and keeps no iterator.
-- **Allocation-free is checked, not assumed.** An iterator ranged where it is made stays on the stack
-  with its loop body, as the compiler handles it today; the language does not promise it.
-  `frame`'s and `featv2`'s allocation tests check it. If either allocates, implementation stops for a
-  decision (a cursor type, `for it.Next()`, cannot allocate).
-- **Maths in the originals' order.** Each port's loop runs over the iterator and accumulates in the
-  order the original's loop does, so floating-point results match bit for bit: newest first for
-  `sma`, `vwap`, `rsi` (each change from the previous close) and `engulfing_candle`; oldest first for
-  `ema`, seeding with the first p values, then the recurrence. Each counts what it read for its
-  warm-up. Rounding to 6 decimals stays, as does `rsi`'s unrounded 100.
-- **Reads equal the bridge's.** `Ring.Data` walks back at most the ring's bars and stops at n `Fresh`
-  values. A node's `in.Data(n, o)` therefore yields the prefix of the bridge's
-  `view.Data(s, lookback, NewestFirst)` that `SortedWindow.Last(n)` takes, newest first or reversed,
-  and close times strictly increase, so the window's sort changes nothing. Values compare with `==`.
-- **One read shape.** Every port reads its stream's last `n` candles in one order and needs at least
-  `min` of them. A package helper `overCandles[T](n, o, f)` returns the `feature.Bind[T]`: it takes
-  `Candles`, and its node returns `f(in.Data(n, o))`. `f`, the maths over an `iter.Seq[proto.Candle]`,
-  counts the candles and returns false below `min`. Nodes hold no scratch and allocate nothing per
-  call, as stage 6's `Step` requires.
+- **Candles are read from one engine copy per stream.** The feature engine owns a `[]proto.Candle`
+  per stream, as deep as the longest `Lookback` among the instances reading that stream's candles.
+  Each frame, before any node fires, it refills the copy of every stream updated at the frame
+  (`Fresh`, age 0) with `view.Data(s, depth, copy)`: one ring walk per stream. A node's `in.Last(n)`
+  is the copy's first `min(n, len)` candles, newest first: a sub-slice, with no copy and no
+  allocation. Replaces per-node scratch ([features.md](../../discussions/features.md) § Reversed on
+  2026-11-08).
+- **Why a copy per stream.** Benchmarked over rings of 1000 `Fresh` candles, 10 to 1000 streams, every
+  stream read once per frame with the reference variants (ten reads, 419 candles in all, the longest
+  100): about 0.8 µs per stream, against 1.9 µs iterating the ring in place per node and 2.5–3.1 µs
+  with per-node scratch. At ten times the depth: 8–11 µs, against 17–20 and 25–31. The copy walks the
+  ring once and every node then loops over a contiguous slice; iterating walks the ring per node.
+  With one feature per stream, iterating in place is fastest, but configs run many per stream.
+  Memory: a copy holds its stream's longest lookback, 5.6 KB at 100 candles, whatever the number of
+  variants; per-node scratch held the sum of the reads.
+- **Depth per stream.** The instances reading candles are those without dependencies: a feature with
+  `Deps` reads none (stage 3). A single-stream instance counts for its stream, a pair instance for
+  both ends. A stream no instance reads has no copy. `newGraph` computes the depths and allocates
+  nothing, so `--validate-only` pays nothing; `New` allocates.
+- **Filled where nodes fire.** Only streams updated at the frame are refilled, and those are the
+  only ones whose nodes fire: a node runs only when every input is `Fresh`, a pair only when both ends
+  are (stage 6). Elsewhere a copy keeps its last frame's candles, and nothing reads it. `pin` fills
+  before any node fires, so nodes fired in parallel (iteration 2) only read the copies.
+- **Shared, and read-only by contract.** Every node on a stream reads one backing array. A node never
+  writes the slice and never keeps it past its call; Go cannot enforce either. A port writing into it
+  would make the reference check diverge.
+- **Dependency reads are unchanged.** `Dep` and `PairDep` inputs have no copy: `Last` returns nil on
+  them, and they read through `Data(n, dst)` into scratch. A copy of a dependency's results would be
+  filled between firings, after the dependency and before its dependents, which is scheduling
+  (stage 6). It waits for the first feature reading a dependency (iteration 3).
+- **The ring walk steps slot indices.** `Ring.Data` computes its latest slot's index once and steps
+  it back `Window` slots per bar, wrapping, instead of `At`'s division and modulo per slot, and loads
+  `first` once. A slot holding another column still stops the walk. Its results are unchanged. A
+  100-candle read measured about 7% faster (730 → 683 ns), and that walk now fills each stream's copy.
+- **Maths copied unchanged, including the iteration order.** A node runs the original's loops over
+  `[]proto.Candle` in the same order, so floating-point sums match bit for bit. Rounding to 6
+  decimals stays, as does `rsi`'s unrounded 100.
+- **Reads equal the bridge's.** A stream's copy is `view.Data(s, depth)`, and its depth is at least
+  any reader's n, so `Last(n)` is `Data(s, n)`: the prefix of the bridge's `view.Data(s, lookback)`
+  that `SortedWindow.Last(n)` takes. Close times strictly increase, so the window's sort changes
+  nothing. Values compare with `==`.
+- **One read shape.** Every port reads its last `n` candles and needs at least `min` of them. A
+  package helper `overCandles[T](n, min, f)` returns the `feature.Bind[T]`: it takes `Candles`, and its
+  node returns false when `in.Last(n)` holds fewer than `min` candles, otherwise `f(candles)`. Nodes
+  hold no scratch and allocate nothing per call, as stage 6's `Step` requires.
 
-  | Type | Lookback | `n` | Order | `min` | Also false | Value |
-  |---|---|---|---|---|---|---|
-  | `sma` | p | p | newest first | p | — | `float64` |
-  | `ema` | 2p | 2p | oldest first | p | — | `float64` |
-  | `rsi` | p+1 | p+1 | newest first | p+1 | — | `float64` |
-  | `vwap` | p | p | newest first | p | zero total volume | `float64` |
-  | `engulfing_candle` | 2 | 2 | newest first | 2 | — | `int` |
+  | Type | Lookback | `n` | `min` | `f` returns false | Value |
+  |---|---|---|---|---|---|
+  | `sma` | p | p | p | — | `float64` |
+  | `ema` | 2p | 2p | p | — | `float64` |
+  | `rsi` | p+1 | p+1 | p+1 | — | `float64` |
+  | `vwap` | p | p | p | zero total volume | `float64` |
+  | `engulfing_candle` | 2 | 2 | 2 | — | `int` |
 
 - **Absent is false.** Wherever the original writes nothing (warm-up, and `vwap`'s zero volume), the
   node returns false and the engine writes `Gap`.
@@ -173,63 +193,90 @@ exercise it.
 - `go test -race -count=1 -run Reference -v ./internal/engine/data/` passes with the dataset and skips
   without it; `make check` clean.
 
-## Step 2 — `Data` as an ordered iterator
+## Step 2 — the ring walk stepping slot indices
 
 ### Changes — `internal/protocol/frame/frame.go`
 
+`Ring.Data` keeps its signature and its results:
+
 ```go
-// Order is the order Data yields values in.
-type Order uint8
-
-const (
-	NewestFirst Order = iota
-	OldestFirst
-)
-
 /*
-Data yields up to n Fresh values, one bar (window slots) per step back from the latest update at or
-before col, in order o. Gap and Ended slots are skipped. The walk covers at most the ring's bars and
-stops where At finds no slot: below the first column, or a bar overwritten. OldestFirst walks back to
-the n-th value, then forward from it. Slots are read as the caller ranges.
+Data appends up to n Fresh values to dst[:0], newest first, one bar (window slots) per step back
+from the latest update at or before col. Gap and Ended slots are skipped. The walk covers at most the
+ring's bars and stops below the first column or at a slot holding another column: a bar overwritten.
+It steps the slot index rather than computing it per slot.
 */
-func (r *Ring[T]) Data(col int64, n int, o Order) iter.Seq[T]
-
-// Data yields up to n of entry i's Fresh values, in order o, one bar per step back from its latest
-// update at or before the view's column.
-func (v View[T]) Data(i, n int, o Order) iter.Seq[T]
+func (r *Ring[T]) Data(col int64, n int, dst []T) []T
 ```
 
-### Changes — `internal/protocol/feature/feature.go`
-
-```go
-// Data yields up to n Fresh values, in order o, one bar per step back from the ring's latest update
-// at or before the frame.
-func (in Input[T]) Data(n int, o frame.Order) iter.Seq[T]
-```
-
-### Changes — callers
-
-- `internal/engine/data_logger_v2.go`: the bridge collects into its history,
-  `slices.AppendSeq(history[:0], view.Data(s, lookback, frame.NewestFirst))`.
-- Tests that read `Data` into a slice collect the iterator, with `slices.Collect`, or
-  `slices.AppendSeq` into a buffer where they check allocations: `frame`, `feature`,
-  `internal/engine/data` (`buffer_test.go`, `data_test.go`) and `internal/engine/features`
-  (`engine_test.go`, `results_test.go`, and the test features in `features_test.go`). Their
-  expectations do not change.
+- The latest slot's index is `(col / period) % len`, computed once; each bar back subtracts `window`,
+  adding `len` when negative. `first` is loaded once. Each slot's column is compared with the bar's,
+  as `At` does.
 
 ### Tests — `internal/protocol/frame/frame_test.go`
 
-- The `Data` table (gaps, wrap, rolling stride, the first column, an overwritten bar) runs in both
-  orders: `OldestFirst` yields `NewestFirst`'s values reversed.
-- Breaking out of the loop stops the walk, in both orders.
-- Ranging `Data` in either order allocates nothing.
+- `TestRingData`'s cases stay, plus a rolling ring and a coarse ring read across the slot index wrap.
+- `TestRingAllocations` stays: reads into a slice with capacity allocate nothing.
 
 ### Acceptance
 
 - `go test -race ./internal/protocol/... ./internal/engine/...` passes; with the dataset,
   `go test -race -count=1 -run Reference -v ./internal/engine/data/` passes; `make check` clean.
 
-## Step 3 — the five ported features
+## Step 3 — one candle copy per stream
+
+### Changes — `internal/protocol/feature/feature.go`
+
+```go
+/*
+NewBinder places a feature at at. candles and each dependency's view are re-pinned by the engine each
+frame; history holds one candle copy per stream, refilled by the engine at each frame its stream
+updates; deps maps a dependency type to a *frame.View[T] of its value type.
+*/
+func NewBinder(at [2]int, candles *frame.View[proto.Candle], history [][]proto.Candle,
+	deps map[string]any) *Binder
+
+/*
+Last returns up to n Fresh values, newest first: the first n of the engine's copy of a candle input,
+filled at the frame. It is valid during the node's call and never written. A dependency input has no
+copy: nil.
+*/
+func (in Input[T]) Last(n int) []T
+```
+
+- `Input` gains the address of its stream's copy, which `Candles` and `PairCandles` set; `Dep` and
+  `PairDep` leave it nil.
+- `Data(n, dst)` stays: dependency inputs read through it.
+
+### Changes — `internal/engine/features`
+
+- `graph.go`: `Graph` gains `history`, one `[]proto.Candle` per stream, nil until `New`, and the
+  depth of each stream: the longest `Lookback` among the instances without dependencies on it, a
+  pair instance counting for both ends. `newGraph` computes the depths and passes `history` to
+  `NewBinder`.
+- `engine.go`: `New` allocates each stream's copy with its depth as capacity, for streams with a
+  depth. `pin` refills the copy of every stream updated at the frame (`Latest` is `Fresh`, age 0) with
+  `v.Data(s, depth, copy)`, before any node fires.
+- `features_test.go`: the test feature `sum` reads `in.Last(n)` and holds no scratch; `diff`, a
+  dependent, keeps `Data`.
+
+### Tests
+
+- `internal/protocol/feature/feature_test.go`: `Last` returns at most n candles of its stream's copy,
+  following the copy as the engine refills it; on a pair, each end its own stream's; nil on a
+  dependency input; reading allocates nothing.
+- `internal/engine/features`:
+  - depths: the longest candle-reading `Lookback` per stream, a pair counting for both ends, a
+    dependent not counting; no copy for a stream nothing reads;
+  - `pin` refills only the streams updated at the frame, and a node's `Last(n)` equals
+    `Data(s, n)` there, on direct and rolling streams;
+  - `TestEngineAllocations` stays at zero with `pin` filling the copies.
+
+### Acceptance
+
+- `go test -race ./internal/protocol/... ./internal/engine/...` passes; `make check` clean.
+
+## Step 4 — the five ported features
 
 ### Changes — new `internal/domains/featuresv2`
 
@@ -239,7 +286,7 @@ func (in Input[T]) Data(n int, o frame.Order) iter.Seq[T]
   - its base-ID constant, and its config struct where it has its own (`EMAConfig`,
     `EngulfingConfig`);
   - a factory registered in `init` with `reg.FeatureTypes.Register`;
-  - its maths as a function over an `iter.Seq[proto.Candle]`, returning false below its `min`.
+  - its maths as a function over `[]proto.Candle`, newest first.
 
 For example:
 
@@ -253,44 +300,10 @@ func newSMA(opts map[string]any) (feature.Feature, error) {
 	return feature.Feature{
 		ID:       iDWithPeriod(SMAID, p),
 		Lookback: p,
-		Bind: overCandles(p, frame.NewestFirst, func(candles iter.Seq[proto.Candle]) (float64, bool) {
-			return sma(candles, p)
+		Bind: overCandles(p, p, func(candles []proto.Candle) (float64, bool) {
+			return sma(candles, p), true
 		}),
 	}, nil
-}
-
-// sma is the mean close of period candles; false with fewer.
-func sma(candles iter.Seq[proto.Candle], period int) (float64, bool) {
-	sum, n := 0.0, 0
-	for c := range candles {
-		sum += c.Close
-		n++
-	}
-	if n < period {
-		return 0, false
-	}
-	return roundDecimals(sum/float64(period), 6), true
-}
-
-// ema reads oldest first: the SMA of the first period candles, then the recurrence over the rest.
-func ema(candles iter.Seq[proto.Candle], period int, smoothing float64) (float64, bool) {
-	multiplier := smoothing / float64(period+1)
-	sum, ema, n := 0.0, 0.0, 0
-	for c := range candles {
-		if n < period {
-			sum += c.Close
-			if n == period-1 {
-				ema = sum / float64(period)
-			}
-		} else {
-			ema = (c.Close * multiplier) + (ema * (1 - multiplier))
-		}
-		n++
-	}
-	if n < period {
-		return 0, false
-	}
-	return roundDecimals(ema, 6), true
 }
 ```
 
@@ -305,24 +318,24 @@ Features are built through `reg.FeatureTypes.Create`, as the originals' tests do
 - **`TestConfigErrors`**: a missing, zero or negative `period` for each period type; a zero or
   negative `smoothing`; an unknown key; and any key on `engulfing_candle`.
 - **`TestNodeAllocations`**: every type's node, bound with `feature.NewBinder` over a candle buffer
-  pinned with `frame.NewView`, returns a value and allocates nothing per call.
+  pinned with `frame.NewView` and a copy filled from it, returns a value and allocates nothing per
+  call.
 
 ### Acceptance
 
 - `go test -race ./internal/domains/featuresv2/` passes; `make check` clean.
 
-## Step 4 — checks against the originals
+## Step 5 — checks against the originals
 
 ### Changes — new `internal/engine/features/ported_test.go`
 
 It blank-imports `featv2` and imports `feat`, `internal/engine/data`, `datatest` and `provider`. Its
 comparison
-helper takes a pinned engine and a `FeatureChain` of the originals. At each stream updated at the
-frame's column (`Fresh`, age 0) it:
+helper takes a pinned engine, whose `pin` has filled the copies, and a `FeatureChain` of the
+originals. At each stream updated at the frame's column (`Fresh`, age 0) it:
 
 1. fires every port;
-2. evaluates the chain like the bridge,
-   `Evaluate(sub, slices.AppendSeq(history[:0], view.Data(s, chain.Lookback(), frame.NewestFirst)))`;
+2. evaluates the chain like the bridge, `Evaluate(sub, view.Data(s, chain.Lookback(), history))`;
 3. checks that `ViewOf` reads `Fresh` with the original's value where the snapshot holds the ID, and
    `Gap` where it does not.
 
@@ -349,7 +362,7 @@ values and absences each variant was compared on.
   - § Feature layer pieces: feature types in `internal/domains/featuresv2` until the originals retire.
 - [main.md](main.md): stage 4 marked implemented.
 - `docs/Architecture.md`: `internal/domains` gains `featuresv2`, registering in `FeatureTypes`;
-  `internal/engine/data` gains `datatest`.
+  `internal/engine/data` gains `datatest`; the feature engine owns one candle copy per stream.
 - `docs/Commands.md`:
   - the `make test` row lists `internal/domains/featuresv2`;
   - a new row, `go test -count=1 -run Reference -v ./internal/engine/features/`, compares the ported
@@ -363,7 +376,7 @@ values and absences each variant was compared on.
 - Stage acceptance ([main.md](main.md)): each port produces the original's value at every column
   where the bridge evaluates, on direct and rolling streams, warm-up absence included; IDs match the
   originals' (`ema_20_s3`); every registered type is in the table and has a case in the switch; nodes
-  read in place, allocating nothing.
+  hold no candle scratch and allocate nothing per call.
 
 ## Documentation recorded at planning
 
@@ -378,19 +391,20 @@ Committed with this plan, before step 1:
 - [features.md](../../discussions/features.md) § Open Questions, *Parameters in IDs*: the ported
   `iDWithParam` formats with `'f'`; negative values are left to `Expand` (stage 5).
 
-Committed with the amendment, before step 2:
+Committed with the second amendment, before step 2, superseding the first (`85792d5`):
 
-- [main.md](main.md): stage 4's touches and acceptance: `Data` an ordered iterator, nodes reading in
-  place.
+- [main.md](main.md): stage 4's touches and acceptance (the walk, the copies, `Last`); stage 6's
+  memory estimate counting the copies.
 - [features.md](../../discussions/features.md):
-  - § Feature graph, *A node is the function `Bind` returns*: nodes read in place through
-    `Data(n, order)`; `Bind` allocates no scratch for reads;
-  - § Contract sketch: scratch only for working memory;
-  - § Reversed on 2026-11-08: reads copied into per-node scratch.
-- [data-layer-v2.md](../../discussions/data-layer-v2.md):
-  - Solution § FrameBuffer: `View.Data`'s signature, and *Reads iterate in place* replacing *Reads
-    copy into a caller-supplied slice*;
-  - § Reversed on 2026-11-08: reads copied into `dst`.
+  - § Feature graph, *A node is the function `Bind` returns*: nodes read candles through `Last`;
+  - § Feature buffer: one candle copy per stream; the memory warning counting the copies;
+  - § Feature layer pieces: the engine allocating the copies;
+  - § Contract sketch: scratch for dependency reads and working memory;
+  - § Reversed on 2026-11-08: per-node scratch replaced by a copy per stream, in place of the
+    iterator `85792d5` recorded.
+- [data-layer-v2.md](../../discussions/data-layer-v2.md): `85792d5`'s iterator reverted
+  (`View.Data`'s slice signature and *Reads copy into a caller-supplied slice* restored, its
+  § Reversed on 2026-11-08 removed); the walk stepping slot indices noted.
 
 ## Out of scope
 
@@ -399,19 +413,20 @@ Committed with the amendment, before step 2:
 - Exact recursion (iteration 4), and checking the maths against textbook values: the originals are
   the reference.
 - Exporting `Gap` results (stage 7).
-- Dependency reads beyond `Input.Data`'s new signature: no feature reads a dependency yet.
+- Copies of dependency results (iteration 3), and filling the copies from `Step`'s schedules
+  (stage 6).
 
 ## Verification
 
 ```bash
 # step 1
 go test -race -count=1 -run Reference -v ./internal/engine/data/
-# step 2
+# steps 2 and 3
 go test -race ./internal/protocol/... ./internal/engine/...
 go test -race -count=1 -run Reference -v ./internal/engine/data/
-# step 3
-go test -race ./internal/domains/featuresv2/
 # step 4
+go test -race ./internal/domains/featuresv2/
+# step 5
 go test -race ./internal/engine/features/ ./internal/domains/featuresv2/
 go test -count=1 -run Reference -v ./internal/engine/features/
 # every step
