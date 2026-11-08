@@ -101,7 +101,7 @@ Tiered. Stage docs live beside this one, produced iteratively:
 - `stage-1-frame.md` — *implemented.*
 - `stage-2-universes.md` — *implemented.*
 - `stage-3-contract-store.md` — *implemented.*
-- `stage-4-ported-features.md` — *planned.*
+- `stage-4-ported-features.md` — *implemented.*
 - `stage-5-expansion.md` — *to plan.*
 - `stage-6-engine.md` — *to plan.*
 - `stage-7-data-logger-v2.md` — *to plan.*

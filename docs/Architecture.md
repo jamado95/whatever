@@ -13,12 +13,19 @@ Entry Point
 
 Core Architecture
 - internal/domains: domain logic (execution, market, monitor, features, provider, risk, strategy)
+  - internal/domains/featuresv2: the feature types on the feature contract (`sma`, `ema`, `rsi`,
+    `vwap`, `engulfing_candle`), registered in `FeatureTypes`; renamed into `internal/domains/features`
+    when the originals retire
 - internal/engine: orchestration (backtesting, logging, full runtime)
   - internal/engine/data: data layer v2 module — `DataPipeline` is the data layer's pipeline over
     the stream table the composition root injects: FrameBuffer (a `frame.Buffer[proto.Candle]`),
     per-stream lanes (provider, normalise, align), readiness joined with pipe.FanIn, and rolling
     aggregation; API `New` (the stream table, providers initialised by the engine), `Start`, `Next`
     (frames as `frame.View`s), `Close`, as built per `docs/plans/data-layer-v2`
+  - internal/engine/data/datatest: samples the BTCUSDT reference dataset for reference tests
+  - internal/engine/features: the feature engine — the feature graph, a typed result ring per
+    composed ID and coordinate, one candle copy per stream that nodes read through `Input.Last`, and
+    the `View` consumers read results through, as built per `docs/plans/features-layer-v2`
 - internal/flow: data-flow primitives — pipe (generic combinators, fanout), align (cross-stream synchronizers), timing (tickers)
 - internal/protocol: domain interfaces, and the stream table (`Streams`: one entry per direct
   subscription and derived window, built once by the composition root; a stream's index in it is its

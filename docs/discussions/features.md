@@ -311,7 +311,8 @@ Superseded by § Feature graph and § Feature buffer above; kept for context.
 Executed stages of `docs/plans/features-layer-v2/main.md`, iteration 4 of
 `docs/plans/data-layer-v2`: `stage-1-frame.md` (`frame`), `stage-2-universes.md` (the stream table and
 universes), `stage-3-contract-store.md` (`frame` in the protocol layer, the contract, the registry, and
-the feature graph, engine and view).
+the feature graph, engine and view), `stage-4-ported-features.md` (the five feature types ported, read
+from one candle copy per stream, and checked against the originals).
 
 ### Node shape
 
@@ -327,7 +328,7 @@ the feature graph, engine and view).
 | Piece | Job | When | Home |
 |---|---|---|---|
 | Contract | `Feature`, `Bind[T]`, binder and `Input` handles | — | `internal/protocol/feature` |
-| Feature types | Pure maths; a factory returning a `Feature`, registered under the base ID | — | `internal/domains/features` |
+| Feature types | Pure maths; a factory returning a `Feature`, registered under the base ID | — | `internal/domains/featuresv2` until the originals in `internal/domains/features` retire |
 | Stream table | One entry per direct subscription and derived window; the index space of every layer | Composition root | `internal/protocol` |
 | Registry and config | Type → factory; variants decoded strictly; `universes` block, `universe` per feature; universe resolution | Config parse, composition root | `internal/registry`, `internal/config` |
 | Expansion | Variants × dependency variants × coordinates; validation; composed IDs; each variant's value type recovered; every node bound; the `Graph` | Engine construction | `internal/engine/features` (pure function) |
@@ -492,6 +493,11 @@ bound up with the strategy input contract ([[strategy-layer]]).
   view in `internal/engine/features` implemented, tested with hand-built instances and hand-fired
   nodes; nothing registers, expands or schedules yet —
   `docs/plans/features-layer-v2/stage-3-contract-store.md`.
+- `sma`, `ema`, `rsi`, `vwap` and `engulfing_candle` ported in `internal/domains/featuresv2`,
+  registered in `reg.FeatureTypes` and reading candles from the engine's copy per stream; they equal
+  the originals at every column where the bridge evaluates, over a random four-month sample of the
+  reference dataset. Nothing expands them yet —
+  `docs/plans/features-layer-v2/stage-4-ported-features.md`.
 - Registered and working: `sma`, `ema`, `rsi`, `vwap`, `engulfing_candle`.
 - `swing_highlow` is broken behind a `wip` build tag. It duplicates swing-detection logic that also
   exists (also broken) inside `buy_the_dip` — see [[strategy-layer]]. Consolidating swing detection

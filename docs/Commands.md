@@ -86,7 +86,7 @@ block surface on the next run, once the dependency is fixed.
 
 | Command | Description |
 |---|---|
-| `make test` | Run the Go test suite — covers `cmd`, `internal/config`, `internal/engine`, `internal/engine/data`, `internal/engine/features`, `internal/protocol`, `internal/protocol/feature`, `internal/protocol/frame`, `internal/flow/align`, `internal/flow/pipe`, `internal/flow/timing`, features and providers; the remaining packages report "no test files". |
+| `make test` | Run the Go test suite — covers `cmd`, `internal/config`, `internal/engine`, `internal/engine/data`, `internal/engine/features`, `internal/protocol`, `internal/protocol/feature`, `internal/protocol/frame`, `internal/flow/align`, `internal/flow/pipe`, `internal/flow/timing`, features, `internal/domains/featuresv2` and providers; the remaining packages report "no test files". |
 | `make fmt` | Format all Go sources and fix imports with `goimports -w`. |
 | `make tidy` | Prune and sync `go.mod` / `go.sum`. |
 | `make lint` | Run `staticcheck` over every package. |
@@ -97,6 +97,7 @@ block surface on the next run, once the dependency is fixed.
 | `go test -run '^$' -bench Readiness -benchmem ./internal/engine/data/` | Benchmark align → `pipe.FanIn` → readiness at 10, 100 and 1000 1m streams, per released column and per evaluate. |
 | `go test -run '^$' -bench Aggregate -benchmem ./internal/engine/data/` | Benchmark rolling aggregation at 10, 100 and 1000 derived streams, per column and per derivation. |
 | `go test -count=1 -run Reference -v ./internal/engine/data/` | Compare rolling 1h and 1d from 5m with the direct bars of the BTCUSDT reference dataset (`data/BTCUSDT/BTCUSDT-{5m,1h,1d}-2024-01.csv`, all of 2024) over a random four-month sample, logged. Skipped without the files; `-count=1` bypasses the test cache, which would otherwise replay the last sample. |
+| `go test -count=1 -run Reference -v ./internal/engine/features/` | Compare the ported features (`internal/domains/featuresv2`) with the originals over a random four-month sample of the same dataset, logged: BTCUSDT 5m deriving 1h and 1d beside direct 1h and 1d, at every frame and stream where the bridge evaluates. Skipped without the files. |
 
 `make fmt` and `make lint` need the tools on `PATH`:
 
