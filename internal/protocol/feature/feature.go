@@ -34,16 +34,23 @@ error: the engine reads Err after Bind and discards the node.
 type Binder struct {
 	at      [2]int // a stream, or a pair; the second is -1 on a stream
 	candles *frame.View[proto.Candle]
-	deps    map[string]any // by dependency type: the *frame.View[T] its results are read through
+	history [][]proto.Candle // one candle copy per stream, refilled by the engine
+	deps    map[string]any   // by dependency type: the *frame.View[T] its results are read through
 	err     error
 }
 
 /*
 NewBinder places a feature at at. candles and each dependency's view are re-pinned by the engine each
-frame; deps maps a dependency type to a *frame.View[T] of its value type.
+frame; history holds one candle copy per stream, refilled by the engine at each frame its stream
+updates; deps maps a dependency type to a *frame.View[T] of its value type.
 */
-func NewBinder(at [2]int, candles *frame.View[proto.Candle], deps map[string]any) *Binder {
-	return &Binder{at: at, candles: candles, deps: deps}
+func NewBinder(
+	at [2]int,
+	candles *frame.View[proto.Candle],
+	history [][]proto.Candle,
+	deps map[string]any,
+) *Binder {
+	return &Binder{at: at, candles: candles, history: history, deps: deps}
 }
 
 // Err returns the first error of the inputs taken from b.
@@ -57,8 +64,9 @@ func (b *Binder) fail(err error) {
 
 // Input is one ring at a node's coordinate, read at the frame the engine pinned.
 type Input[T any] struct {
-	v *frame.View[T]
-	i int
+	v    *frame.View[T]
+	i    int
+	last *[]T // the engine's copy of a candle input; nil on a dependency's
 }
 
 // Latest returns the value at the ring's latest update at or before the frame, its state and its
@@ -69,12 +77,25 @@ func (in Input[T]) Latest() (T, frame.State, int) { return in.v.Latest(in.i) }
 // latest update at or before the frame.
 func (in Input[T]) Data(n int, dst []T) []T { return in.v.Data(in.i, n, dst) }
 
+/*
+Last returns up to n Fresh values, newest first: the first n of the engine's copy of a candle input,
+filled at the frame. It is valid during the node's call and never written. A dependency input has no
+copy: nil.
+*/
+func (in Input[T]) Last(n int) []T {
+	if in.last == nil || n <= 0 {
+		return nil
+	}
+	l := *in.last
+	return l[:min(n, len(l))]
+}
+
 // Candles returns a single-stream node's candles.
 func Candles(b *Binder) Input[proto.Candle] {
 	if b.at[1] >= 0 {
 		b.fail(errors.New("feature: Candles on a pair node"))
 	}
-	return Input[proto.Candle]{v: b.candles, i: b.at[0]}
+	return b.candleInput(b.at[0])
 }
 
 // PairCandles returns a pair node's candles: its first stream's, then its second's.
@@ -82,7 +103,16 @@ func PairCandles(b *Binder) (Input[proto.Candle], Input[proto.Candle]) {
 	if b.at[1] < 0 {
 		b.fail(errors.New("feature: PairCandles on a single-stream node"))
 	}
-	return Input[proto.Candle]{v: b.candles, i: b.at[0]}, Input[proto.Candle]{v: b.candles, i: b.at[1]}
+	return b.candleInput(b.at[0]), b.candleInput(b.at[1])
+}
+
+// candleInput returns stream s's candles, with its copy when b's history holds one.
+func (b *Binder) candleInput(s int) Input[proto.Candle] {
+	in := Input[proto.Candle]{v: b.candles, i: s}
+	if s >= 0 && s < len(b.history) {
+		in.last = &b.history[s]
+	}
+	return in
 }
 
 // Dep returns a single-stream node's results of its dependency of type typ, read as T.

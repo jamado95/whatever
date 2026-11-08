@@ -257,8 +257,56 @@ func viewErr[T any](v View, id string) error {
 	return err
 }
 
-// TestEngineAllocations checks a frame's hot path: pinning, firing with input reads into scratch, and
-// consumer reads through ViewOf allocate nothing.
+/*
+TestEngineCopies covers the candle copies: pin refills only the streams updated at the frame, and a
+node's Last(n) there reads what Data(s, n) does, on a direct stream coarser than the grid and on a
+rolling one.
+*/
+func TestEngineCopies(t *testing.T) {
+	coords := [][2]int{stream(direct1h), stream(rolling1h)}
+	r := newRun(t, 37, slices.Concat(on(sum(3), coords...), on(last(), coords...)))
+
+	sentinel := proto.Candle{Close: -1}
+	for col := int64(0); col <= 36; col++ {
+		for _, s := range []int{direct1h, rolling1h} {
+			if h := r.g.history[s]; len(h) > 0 {
+				h[0] = sentinel
+			}
+		}
+		v := r.step(col)
+		data := at(r.buf, col)
+
+		for _, s := range []int{direct1h, rolling1h} {
+			h := r.g.history[s]
+			updated := col%ringShape(r.st, stream(s), 1).Period == 0
+			if refilled := len(h) > 0 && h[0] != sentinel; refilled != updated {
+				t.Fatalf("stream %d at %d: refilled %t, updated %t", s, col, refilled, updated)
+			}
+			if !updated {
+				continue
+			}
+
+			candles := data.Data(s, 3, nil)
+			got, state, _ := mustView[float64](t, v, "sum_3").Latest(s)
+			if len(candles) < 3 {
+				if state != frame.Gap {
+					t.Errorf("stream %d at %d: sum_3 %d with %d candles, want Gap", s, col, state, len(candles))
+				}
+				continue
+			}
+			want := candles[0].Close + candles[1].Close + candles[2].Close
+			if got != want || state != frame.Fresh {
+				t.Errorf("stream %d at %d: sum_3 = %v %d, want %v Fresh", s, col, got, state, want)
+			}
+		}
+	}
+}
+
+/*
+TestEngineAllocations checks a frame's hot path: pinning, which refills the candle copies, firing
+with candle reads from the copies and dependency reads into scratch, and consumer reads through
+ViewOf allocate nothing.
+*/
 func TestEngineAllocations(t *testing.T) {
 	coords := [][2]int{stream(btc5m), stream(eth5m)}
 	r := newRun(t, 8, slices.Concat(

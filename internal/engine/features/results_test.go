@@ -26,11 +26,13 @@ func mustColumn[T any](t *testing.T, f feature.Feature, sh []frame.Shape) *resul
 	return r
 }
 
-// bound builds f's column over n rings, binds it on stream i at its ring, and allocates it.
-func bound[T any](t *testing.T, f feature.Feature, n, i int, cv *frame.View[proto.Candle]) *results[T] {
+// bound builds f's column over n rings, binds it on stream i at its ring, reading candle copies from
+// history, and allocates it.
+func bound[T any](t *testing.T, f feature.Feature, n, i int, cv *frame.View[proto.Candle],
+	history [][]proto.Candle) *results[T] {
 	t.Helper()
 	r := mustColumn[T](t, f, shapes(n))
-	if err := r.bind(feature.NewBinder(stream(i), cv, nil), i); err != nil {
+	if err := r.bind(feature.NewBinder(stream(i), cv, history, nil), i); err != nil {
 		t.Fatal(err)
 	}
 	r.alloc()
@@ -58,7 +60,7 @@ func readsBack[T comparable](t *testing.T, name string, bind any, want T) {
 	t.Helper()
 	buf := candles(1, 1)
 	var cv frame.View[proto.Candle]
-	r := bound[T](t, feature.Feature{ID: name, Bind: bind}, 1, 0, &cv)
+	r := bound[T](t, feature.Feature{ID: name, Bind: bind}, 1, 0, &cv, nil)
 	r.pin(at(buf, 0))
 	r.fire(0, 0)
 	if v, s, _ := r.view.Latest(0); v != want || s != frame.Fresh {
@@ -106,10 +108,10 @@ func TestColumnBind(t *testing.T) {
 	diffCol := mustColumn[float64](t, diff(), shapes(2))
 
 	deps := map[string]any{"last": lastCol.cell()}
-	if err := diffCol.bind(feature.NewBinder(stream(1), &cv, deps), 1); err != nil {
+	if err := diffCol.bind(feature.NewBinder(stream(1), &cv, nil, deps), 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := lastCol.bind(feature.NewBinder(stream(1), &cv, nil), 1); err != nil {
+	if err := lastCol.bind(feature.NewBinder(stream(1), &cv, nil, nil), 1); err != nil {
 		t.Fatal(err)
 	}
 	if lastCol.buf != nil || diffCol.buf != nil {
@@ -148,7 +150,7 @@ func TestColumnBind(t *testing.T) {
 			{"the wrong type", map[string]any{"last": signCol.cell()},
 				`feature: dependency "last" is not float64`},
 		} {
-			err := diffCol.bind(feature.NewBinder(stream(0), &cv, c.deps), 0)
+			err := diffCol.bind(feature.NewBinder(stream(0), &cv, nil, c.deps), 0)
 			if err == nil || err.Error() != c.want {
 				t.Errorf("%s: err = %v, want %q", c.name, err, c.want)
 			}
@@ -165,8 +167,8 @@ func TestColumnFire(t *testing.T) {
 	t.Run("Fresh", func(t *testing.T) {
 		buf := candles(1, 2)
 		var cv frame.View[proto.Candle]
-		lastCol := bound[float64](t, last(), 1, 0, &cv)
-		signCol := bound[int](t, sign(), 1, 0, &cv)
+		lastCol := bound[float64](t, last(), 1, 0, &cv, nil)
+		signCol := bound[int](t, sign(), 1, 0, &cv, nil)
 		for col := int64(0); col < 2; col++ {
 			cv = at(buf, col)
 			lastCol.fire(0, col)
@@ -185,7 +187,8 @@ func TestColumnFire(t *testing.T) {
 	})
 
 	t.Run("cannot compute", func(t *testing.T) {
-		// Three bars readable, so the candle gap at column 4 leaves sum_3 short until column 7.
+		// Three bars readable, so the candle gap at column 4 leaves sum_3 short until column 7. As the
+		// engine does, the copy is refilled where the stream updates and the gap column is skipped.
 		buf := frame.NewBuffer[proto.Candle]([]frame.Shape{{Slots: 8, Period: 1, Window: 1, Bars: 3}})
 		for col := int64(0); col < 8; col++ {
 			if col == 4 {
@@ -195,9 +198,15 @@ func TestColumnFire(t *testing.T) {
 			buf.Ring(0).Put(col, proto.Candle{Close: closeAt(0, col)}, frame.Fresh)
 		}
 		var cv frame.View[proto.Candle]
-		r := bound[float64](t, sum(3), 1, 0, &cv)
+		history := [][]proto.Candle{make([]proto.Candle, 0, 3)}
+		r := bound[float64](t, sum(3), 1, 0, &cv, history)
 		for col := int64(0); col < 8; col++ {
 			cv = at(buf, col)
+			refill(history, []int{3}, cv)
+			if col == 4 {
+				r.skip(0, col, frame.Gap)
+				continue
+			}
 			r.fire(0, col)
 		}
 
@@ -224,7 +233,7 @@ func TestColumnFire(t *testing.T) {
 func TestColumnSkip(t *testing.T) {
 	buf := candles(1, 2)
 	var cv frame.View[proto.Candle]
-	r := bound[float64](t, last(), 1, 0, &cv)
+	r := bound[float64](t, last(), 1, 0, &cv, nil)
 	for col := int64(0); col < 2; col++ {
 		cv = at(buf, col)
 		r.fire(0, col)
@@ -255,10 +264,12 @@ func TestColumnSkip(t *testing.T) {
 func TestColumnAllocations(t *testing.T) {
 	buf := candles(1, 6)
 	var cv frame.View[proto.Candle]
-	sumCol := bound[float64](t, sum(3), 1, 0, &cv)
-	signCol := bound[int](t, sign(), 1, 0, &cv)
+	history := [][]proto.Candle{make([]proto.Candle, 0, 3)}
+	sumCol := bound[float64](t, sum(3), 1, 0, &cv, history)
+	signCol := bound[int](t, sign(), 1, 0, &cv, nil)
 	view := at(buf, 5)
 	cv = view
+	refill(history, []int{3}, view)
 
 	var col column = sumCol
 	var ints column = signCol

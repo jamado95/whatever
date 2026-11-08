@@ -49,6 +49,44 @@ func TestGraphNoRings(t *testing.T) {
 	}
 }
 
+/*
+TestGraphDepths covers candle copy sizes: a stream's depth is the longest Lookback among the instances
+reading its candles, a pair's counting for both ends and a dependent's not at all; newGraph allocates
+no copy, and New allocates one per stream with a depth, as deep as it.
+*/
+func TestGraphDepths(t *testing.T) {
+	wide := spread()
+	wide.Lookback = 7
+	g, err := newGraph(testStreams(), slices.Concat(
+		on(sum(5), stream(eth5m)),
+		on(sum(2), stream(eth5m)),
+		on(wide, pair(btc5m, eth5m)),
+		on(last(), stream(btc5m), stream(rolling1h)),
+		over(diff(), "diff-last", map[string]string{"last": "last"}, stream(rolling1h)),
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := make([]int, 4)
+	want[btc5m], want[eth5m], want[rolling1h] = 7, 7, 1 // the dependent diff (2) does not count
+	if !slices.Equal(g.depth, want) {
+		t.Errorf("depths = %v, want %v", g.depth, want)
+	}
+	for s, h := range g.history {
+		if h != nil {
+			t.Errorf("stream %d: newGraph allocated a copy", s)
+		}
+	}
+
+	New(g)
+	for s, h := range g.history {
+		if cap(h) != want[s] || (want[s] == 0) != (h == nil) {
+			t.Errorf("stream %d: copy of capacity %d (nil %t), want %d", s, cap(h), h == nil, want[s])
+		}
+	}
+}
+
 // TestGraphShapes covers ring sizes: a stream's ring holds the longest Lookback in bars at its period
 // and window, and is empty where the ID does not run.
 func TestGraphShapes(t *testing.T) {

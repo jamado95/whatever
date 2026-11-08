@@ -48,19 +48,44 @@ func reads[T any](t *testing.T, name string, in Input[T], value func(T) float64,
 	}
 }
 
-// TestBindInputs covers the inputs a binder hands out: taken before any frame exists, each reads its
-// own ring at the frame its view is pinned at, following the view as the engine re-pins it.
+// lasts fails unless in.Last reads stream i's candle copy at col: its first n candles, newest first,
+// and nothing for n of zero.
+func lasts(t *testing.T, name string, in Input[proto.Candle], i int, col int64) {
+	t.Helper()
+	for _, n := range []int{2, 10} {
+		var got, want []float64
+		for _, c := range in.Last(n) {
+			got = append(got, c.Close)
+		}
+		for c := col; c >= 0 && len(want) < n; c-- {
+			want = append(want, val(i, c))
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s at %d: Last(%d) = %v, want %v", name, col, n, got, want)
+		}
+	}
+	if got := in.Last(0); got != nil {
+		t.Errorf("%s at %d: Last(0) = %v, want nil", name, col, got)
+	}
+}
+
+/*
+TestBindInputs covers the inputs a binder hands out: taken before any frame exists, each reads its
+own ring at the frame its view is pinned at, following the view as the engine re-pins it; candle
+inputs also read their stream's copy as the engine refills it, and dependency inputs have none.
+*/
 func TestBindInputs(t *testing.T) {
 	candles, results := buffers()
 	var cv frame.View[proto.Candle]
 	var rv frame.View[float64]
 	deps := map[string]any{"rsi": &rv}
+	history := make([][]proto.Candle, 3)
 
-	single := NewBinder([2]int{1, -1}, &cv, deps)
+	single := NewBinder([2]int{1, -1}, &cv, history, deps)
 	c := Candles(single)
 	d := Dep[float64](single, "rsi")
 
-	pair := NewBinder([2]int{0, 2}, &cv, deps)
+	pair := NewBinder([2]int{0, 2}, &cv, history, deps)
 	ca, cb := PairCandles(pair)
 	da, db := PairDep[float64](pair, "rsi")
 
@@ -73,12 +98,21 @@ func TestBindInputs(t *testing.T) {
 	for _, col := range []int64{2, 3} {
 		cv = frame.NewView(col, 300_000, frame.Current, true, candles)
 		rv = frame.Pin(cv, results)
+		for i := range history { // the engine's refill
+			history[i] = cv.Data(i, 10, history[i])
+		}
 		reads(t, "Candles", c, closeOf, 1, col)
 		reads(t, "Dep", d, self, 1, col)
 		reads(t, "PairCandles first", ca, closeOf, 0, col)
 		reads(t, "PairCandles second", cb, closeOf, 2, col)
 		reads(t, "PairDep first", da, self, 0, col)
 		reads(t, "PairDep second", db, self, 2, col)
+		lasts(t, "Candles", c, 1, col)
+		lasts(t, "PairCandles first", ca, 0, col)
+		lasts(t, "PairCandles second", cb, 2, col)
+		if d.Last(10) != nil || da.Last(10) != nil || db.Last(10) != nil {
+			t.Errorf("at %d: Last on a dependency input is not nil", col)
+		}
 	}
 }
 
@@ -131,7 +165,7 @@ func TestBindErrors(t *testing.T) {
 			func(b *Binder) { Dep[float64](b, "ema") },
 			`feature: Dep "ema" on a pair node`},
 	} {
-		b := NewBinder(c.at, &cv, deps)
+		b := NewBinder(c.at, &cv, nil, deps)
 		c.bind(b)
 		if err := b.Err(); err == nil || err.Error() != c.want {
 			t.Errorf("%s: Err = %v, want %q", c.name, err, c.want)
@@ -139,12 +173,14 @@ func TestBindErrors(t *testing.T) {
 	}
 }
 
-// TestInputAllocations checks the hot path: with dst capacity, input reads allocate nothing.
+// TestInputAllocations checks the hot path: with dst capacity, input reads allocate nothing, nor do
+// reads of a candle copy.
 func TestInputAllocations(t *testing.T) {
 	candles, results := buffers()
 	cv := frame.NewView(3, 300_000, frame.Current, true, candles)
 	rv := frame.Pin(cv, results)
-	b := NewBinder([2]int{1, -1}, &cv, map[string]any{"rsi": &rv})
+	history := [][]proto.Candle{nil, cv.Data(1, 4, nil), nil}
+	b := NewBinder([2]int{1, -1}, &cv, history, map[string]any{"rsi": &rv})
 	c := Candles(b)
 	d := Dep[float64](b, "rsi")
 
@@ -152,6 +188,7 @@ func TestInputAllocations(t *testing.T) {
 	ddst := make([]float64, 0, 4)
 	allocs := testing.AllocsPerRun(100, func() {
 		cdst = c.Data(4, cdst)
+		c.Last(4)
 		c.Latest()
 		ddst = d.Data(4, ddst)
 		d.Latest()

@@ -22,26 +22,34 @@ type instance struct {
 }
 
 /*
-Graph is a validated feature graph: one column per composed ID with every node bound, and no ring
-allocated. The engine's factory builds it, so --validate-only covers it. It runs once: its nodes hold
-the addresses of its views.
+Graph is a validated feature graph: one column per composed ID with every node bound, and no ring or
+candle copy allocated. The engine's factory builds it, so --validate-only covers it. It runs once: its
+nodes hold the addresses of its views and candle copies.
 */
 type Graph struct {
 	columns map[string]column        // by composed ID
 	all     []column                 // pinned each frame
 	pairs   map[[2]int]int           // the pair table: (a, b), a < b → ring
 	candles frame.View[proto.Candle] // the candles nodes read, re-pinned each frame
+	history [][]proto.Candle         // one candle copy per stream, read through Input.Last; nil until New
+	depth   []int                    // each stream's copy depth; 0 where nothing reads its candles
 }
 
 /*
-newGraph builds the pair table from the pair instances, sizes one column per composed ID and binds
-every instance. Rings hold L bars, L the longest Lookback, at least 1: a stream's at its Period and
-Window, a pair's at max(Pa, Pb) with its coarser end's bar. Every problem is reported, joined.
+newGraph builds the pair table from the pair instances, sizes one column per composed ID and each
+stream's candle copy, and binds every instance. Rings hold L bars, L the longest Lookback, at least 1:
+a stream's at its Period and Window, a pair's at max(Pa, Pb) with its coarser end's bar. Every problem
+is reported, joined.
 */
 func newGraph(streams *proto.Streams, instances []instance) (*Graph, error) {
 	fit, errs := check(streams, instances)
 
-	g := &Graph{columns: make(map[string]column), pairs: pairTable(fit)}
+	g := &Graph{
+		columns: make(map[string]column),
+		pairs:   pairTable(fit),
+		history: make([][]proto.Candle, len(streams.All)),
+		depth:   depths(streams, fit),
+	}
 	shapes := g.shapes(streams, fit)
 	for _, in := range fit {
 		sh, ok := shapes[in.id]
@@ -68,7 +76,7 @@ func newGraph(streams *proto.Streams, instances []instance) (*Graph, error) {
 		if !ok {
 			continue // a dependency's column failed, already reported
 		}
-		b := feature.NewBinder(in.at, &g.candles, deps)
+		b := feature.NewBinder(in.at, &g.candles, g.history, deps)
 		if err := c.bind(b, g.ring(in.at)); err != nil {
 			errs = append(errs, in.wrap(streams, err))
 		}
@@ -230,6 +238,25 @@ func ringShape(st *proto.Streams, at [2]int, bars int64) frame.Shape {
 		window = max(a.Period*a.Window, b.Period*b.Window) / period
 	}
 	return frame.Shape{Slots: bars * window, Period: period, Window: window, Bars: bars}
+}
+
+/*
+depths is each stream's candle copy depth: the longest Lookback among the instances reading its
+candles, those without dependencies, a pair's counting for both ends; 0 where none does.
+*/
+func depths(st *proto.Streams, instances []instance) []int {
+	d := make([]int, len(st.All))
+	for _, in := range instances {
+		if len(in.feature.Deps) > 0 {
+			continue
+		}
+		for _, s := range in.at {
+			if s >= 0 {
+				d[s] = max(d[s], in.feature.Lookback)
+			}
+		}
+	}
+	return d
 }
 
 // ring returns the ring of a coordinate: a stream's index, or its pair's in the pair table.

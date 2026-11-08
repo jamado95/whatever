@@ -36,9 +36,8 @@ func sum(n int) feature.Feature {
 		Lookback: n,
 		Bind: func(b *feature.Binder) func() (float64, bool) {
 			in := feature.Candles(b)
-			candles := make([]proto.Candle, 0, n)
 			return func() (float64, bool) {
-				candles = in.Data(n, candles)
+				candles := in.Last(n)
 				if len(candles) < n {
 					return 0, false
 				}

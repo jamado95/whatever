@@ -466,6 +466,12 @@ bound up with the strategy input contract ([[strategy-layer]]).
 - **How a strategy reads a struct result.** `ViewOf` is in `engine/features` and a struct value type
   in its feature's domain, while a domain imports only `protocol` ([[engine]]). To settle before
   strategies read features.
+- **`Input` reads once dependency results have copies** (iteration 3). Candle inputs read through
+  `Last`; `Data` and `Latest` stay for dependency inputs, which have no copy (stage 4). If dependency
+  results get copies, refilled after a dependency fires and before its dependents, `Input` could
+  become `Last`-only. To assess then: whether copies pay off for dependents reading only the current
+  value, and whether any node needs an input's state or age (`Late` recomputes, a relaxed firing
+  rule), which only `Latest` gives.
 - **Pair features over pair features** (a z-score of a spread) — a node reading a pair result;
   iteration 1 allows single-stream dependencies only.
 - **`Late` revisions** (pinned) — recompute the subgraph reachable from the revised stream over
