@@ -8,6 +8,7 @@ package featv2
 import (
 	"fmt"
 	"math"
+	"reflect"
 	"strconv"
 
 	proto "whatever/internal/protocol"
@@ -23,9 +24,12 @@ const (
 	DirectionalMarkerNoop DirectionalMarker = 0
 )
 
-// PeriodConfig is the config shape shared by the period-parameterised features.
+/*
+PeriodConfig is embedded first in the config of each period-parameterised feature, giving its period,
+the period's place in the ID and its validation. A config with its own Validate calls PeriodConfig's.
+*/
 type PeriodConfig struct {
-	Period int `json:"period"`
+	Period int `json:"period" id:""`
 }
 
 func (c *PeriodConfig) Validate() error {
@@ -35,20 +39,46 @@ func (c *PeriodConfig) Validate() error {
 	return nil
 }
 
-func iDWithPeriod(base string, period int) string {
-	return fmt.Sprintf("%s_%d", base, period)
-}
-
 /*
-iDWithParam extends a feature ID with a non-default parameter, so two variants differing only in it
-cannot collide; a default value is omitted (ema_20). Values are formatted without an exponent, so a
-positive value never puts '-' in the ID.
+variantID builds a feature ID from base and every field of params, a config struct, in field order:
+each adds _<id tag><value> (ema_20_s2), fields of an embedded struct in its place. Defaults are
+included, so an ID states every parameter. Values are formatted without an exponent, so a positive
+value never puts '-' in the ID. It panics on a field without an id tag or of a type other than int or
+float, a programming error in the config struct.
 */
-func iDWithParam(base, param string, value, defaultValue float64) string {
-	if value == defaultValue {
-		return base
+func variantID(base string, params any) string {
+	paramsV := reflect.ValueOf(params)
+	if paramsV.Kind() != reflect.Struct {
+		panic(fmt.Errorf("variantID: can't produce feature %s id from non-struct params", base))
 	}
-	return fmt.Sprintf("%s_%s%s", base, param, strconv.FormatFloat(value, 'f', -1, 64))
+
+	id := base
+	for _, field := range reflect.VisibleFields(paramsV.Type()) {
+		if field.Anonymous {
+			continue
+		}
+
+		fId, ok := field.Tag.Lookup("id")
+		if !ok {
+			panic(fmt.Errorf("variantID: field %s has no id tag", field.Name))
+		}
+
+		fv := paramsV.FieldByIndex(field.Index)
+		var valueS string
+
+		switch {
+		case fv.CanFloat():
+			valueS = strconv.FormatFloat(fv.Float(), 'f', -1, 64)
+		case fv.CanInt():
+			valueS = strconv.FormatInt(fv.Int(), 10)
+		default:
+			panic(fmt.Errorf("variantID: unsupported field %s type", field.Name))
+		}
+
+		id = fmt.Sprintf("%s_%s%s", id, fId, valueS)
+	}
+
+	return id
 }
 
 func roundDecimals(value float64, precision int) float64 {

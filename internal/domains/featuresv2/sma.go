@@ -9,22 +9,26 @@ import (
 
 const SMAID = "sma"
 
+type SMAConfig struct {
+	PeriodConfig
+}
+
 func init() {
 	reg.FeatureTypes.Register(SMAID, newSMA)
 }
 
 // newSMA builds sma_<period>: the simple moving average of the last period closes.
 func newSMA(opts map[string]any) (feature.Feature, error) {
-	cfg := PeriodConfig{}
+	cfg := SMAConfig{}
 	if err := config.Decode(opts, &cfg); err != nil {
 		return feature.Feature{}, err
 	}
-	p := cfg.Period
+
 	return feature.Feature{
-		ID:       iDWithPeriod(SMAID, p),
-		Lookback: p,
-		Bind: overCandles(p, p, func(candles []proto.Candle) (float64, bool) {
-			return sma(candles, p), true
+		ID:       variantID(SMAID, cfg),
+		Lookback: cfg.Period,
+		Bind: overCandles(cfg.Period, cfg.Period, func(candles []proto.Candle) (float64, bool) {
+			return sma(candles, cfg.Period), true
 		}),
 	}, nil
 }

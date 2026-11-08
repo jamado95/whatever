@@ -30,8 +30,8 @@ func TestFeatures(t *testing.T) {
 		isInt    bool
 	}{
 		{SMAID, map[string]any{"period": 20}, "sma_20", 20, false},
-		{EMAID, map[string]any{"period": 20}, "ema_20", 40, false},
-		{EMAID, map[string]any{"period": 20, "smoothing": 2.0}, "ema_20", 40, false},
+		{EMAID, map[string]any{"period": 20}, "ema_20_s2", 40, false},
+		{EMAID, map[string]any{"period": 20, "smoothing": 2.0}, "ema_20_s2", 40, false},
 		{EMAID, map[string]any{"period": 20, "smoothing": 3.0}, "ema_20_s3", 40, false},
 		{EMAID, map[string]any{"period": 20, "smoothing": 2.5}, "ema_20_s2.5", 40, false},
 		{EMAID, map[string]any{"period": 20, "smoothing": 0.00001}, "ema_20_s0.00001", 40, false},

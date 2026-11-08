@@ -7,6 +7,11 @@
     },
     {
       "type": "binance_csv",
+      "name": "btcusdt_1h",
+      "file": "./data/BTCUSDT/BTCUSDT-1h-2024-01.csv"
+    },
+    {
+      "type": "binance_csv",
       "name": "btcusdt_1d",
       "file": "./data/BTCUSDT/BTCUSDT-1d-2024-01.csv"
     }
@@ -56,6 +61,12 @@
     },
     {
       "symbol": "BTCUSDT",
+      "timeframe": "1h",
+      "provider": "btcusdt_1h",
+      "derive": ["1d"]
+    },
+    {
+      "symbol": "BTCUSDT",
       "timeframe": "1d",
       "provider": "btcusdt_1d"
     }
@@ -69,10 +80,10 @@
     },
     "options": {
       "ticker": {
-        "type": "fixed",
+        "type": "realtime",
         "interval": "50ms"
       },
-      "limit": 1000
+      "limit": 10000
     }
   }
 }

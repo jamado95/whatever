@@ -9,22 +9,27 @@ import (
 
 const RSIID = "rsi"
 
+type RSIConfig struct {
+	PeriodConfig
+}
+
 func init() {
 	reg.FeatureTypes.Register(RSIID, newRSI)
 }
 
 // newRSI builds rsi_<period>: the relative strength index of the last period close changes.
 func newRSI(opts map[string]any) (feature.Feature, error) {
-	cfg := PeriodConfig{}
+	cfg := RSIConfig{}
 	if err := config.Decode(opts, &cfg); err != nil {
 		return feature.Feature{}, err
 	}
-	p := cfg.Period
+
+	lb := cfg.Period + 1
 	return feature.Feature{
-		ID:       iDWithPeriod(RSIID, p),
-		Lookback: p + 1, // period changes
-		Bind: overCandles(p+1, p+1, func(candles []proto.Candle) (float64, bool) {
-			return rsi(candles, p), true
+		ID:       variantID(RSIID, cfg),
+		Lookback: lb, // period changes
+		Bind: overCandles(lb, lb, func(candles []proto.Candle) (float64, bool) {
+			return rsi(candles, cfg.Period), true
 		}),
 	}, nil
 }

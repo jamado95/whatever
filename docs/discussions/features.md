@@ -84,9 +84,11 @@ recursive forms possible.
 - **Insufficient history means "absent", not "zero".** A feature that cannot compute returns no
   value; its slot at the column is a `Gap`.
 - **Strict definitions over permissive ones** for pattern features (documented for `engulfing`).
-- **A feature ID encodes every parameter that distinguishes one instance from another.** Defaulted
-  values are omitted (`ema_20`, `vwap_50`); a non-default extends the ID (`ema_20_s3`). A duplicate
-  ID is a construction error. See [[config]].
+- **A feature ID encodes every parameter that distinguishes one instance from another,** defaults
+  included (`ema_20_s2`, `vwap_50`). `variantID` builds every ID from the feature's config struct:
+  each field carries an `id` tag, its prefix, and adds `_<prefix><value>` in field order. A duplicate
+  ID is a construction error. The originals omit defaults (`ema_20`) until they retire. See
+  [[config]].
 - **Cross-asset metrics are features, not strategy internals.** Correlation, spread, beta and
   similar live in the feature layer as pure functions of aligned history, with the reproducibility
   and exporter visibility of every other feature.
@@ -300,11 +302,13 @@ Superseded by § Feature graph, § Feature layer and § Feature buffer above; ke
 
 ### Reversed on 2026-11-08
 
-Superseded by § Feature graph and § Feature buffer above; kept for context.
+Superseded by § Decisions (feature IDs), § Feature graph and § Feature buffer above; kept for
+context.
 
 | Was | Now | Why |
 |---|---|---|
 | A node copies its candle reads into scratch allocated in `Bind`: `Input.Data(n, dst)` | Candle reads are prefixes of one engine copy per stream, `Input.Last(n)`, refilled once per frame at the stream's longest lookback | Scratch held a copy of a stream's history per variant. With the reference variants, a copy per stream read about 3× faster than per-node scratch and 2.2× faster than iterating the ring in place per node, holding the longest lookback per stream |
+| IDs omit defaulted parameters (`ema_20`), built per type by `iDWithPeriod` and `iDWithParam` | Defaults included (`ema_20_s2`), every ID built by `variantID` from the config struct's `id` tags | One helper builds every ID, and an ID states every parameter |
 
 ## Solution
 
@@ -460,10 +464,10 @@ bound up with the strategy input contract ([[strategy-layer]]).
   reference rules and `*`. Proposed: `(stream, reference)` from reference rules, both orders from
   `*`, explicit pairs as written; symmetric features store each pair once, in sorted order. Symmetry
   joins `Feature` with it.
-- **Parameters in IDs** must not emit `-`: `iDWithParam` formats with `'g'` (`ema_20_s1e-05`), and
-  negative values carry a sign. Planned: the ported `iDWithParam` formats with `'f'`
-  (`ema_20_s0.00001`), identical to `'g'` for values in [1e-4, 1e6) (stage 4); `Expand` rejects a
-  variant ID with `-`, as from a negative value (stage 5).
+- **Parameters in IDs** must not emit `-`. The originals' `iDWithParam` formats with `'g'`
+  (`ema_20_s1e-05`); the ports' `variantID` formats with `'f'` (`ema_20_s0.00001`), identical to `'g'`
+  for values in [1e-4, 1e6). Negative values carry a sign: planned, `Expand` rejects a variant ID
+  with `-` (stage 5).
 - **How a strategy reads a struct result.** `ViewOf` is in `engine/features` and a struct value type
   in its feature's domain, while a domain imports only `protocol` ([[engine]]). To settle before
   strategies read features.
@@ -498,6 +502,10 @@ bound up with the strategy input contract ([[strategy-layer]]).
   the originals at every column where the bridge evaluates, over a random four-month sample of the
   reference dataset. Nothing expands them yet —
   `docs/plans/features-layer-v2/stage-4-ported-features.md`.
+- After stage 4, the ports' IDs include defaults (`ema_20_s2`). Each port declares its own config
+  struct, embedding `PeriodConfig` when it takes a period, and `variantID` builds its ID. The
+  originals still omit defaults, so stage 7's comparison with the bridge differs in `ema` keys
+  (main plan § Open items).
 - Registered and working: `sma`, `ema`, `rsi`, `vwap`, `engulfing_candle`.
 - `swing_highlow` is broken behind a `wip` build tag. It duplicates swing-detection logic that also
   exists (also broken) inside `buy_the_dip` — see [[strategy-layer]]. Consolidating swing detection

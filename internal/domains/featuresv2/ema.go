@@ -16,13 +16,13 @@ const EMAID = "ema"
 const DefaultEMASmoothing = 2.0
 
 type EMAConfig struct {
-	Period    int     `json:"period"`
-	Smoothing float64 `json:"smoothing"`
+	PeriodConfig
+	Smoothing float64 `json:"smoothing" id:"s"`
 }
 
 func (c *EMAConfig) Validate() error {
-	if c.Period <= 0 {
-		return fmt.Errorf("'period' is required and must be positive")
+	if err := c.PeriodConfig.Validate(); err != nil {
+		return err
 	}
 	if c.Smoothing <= 0 {
 		return fmt.Errorf("'smoothing' must be positive")
@@ -35,21 +35,21 @@ func init() {
 }
 
 /*
-newEMA builds ema_<period>, or ema_<period>_s<smoothing> off the default smoothing: the exponential
-moving average of the last 2·period closes, seeded with the SMA of the oldest period of them. It needs
-at least period candles.
+newEMA builds ema_<period>_s<smoothing>: the exponential moving average of the last 2·period closes,
+seeded with the SMA of the oldest period of them. It needs at least period candles.
 */
 func newEMA(opts map[string]any) (feature.Feature, error) {
 	cfg := EMAConfig{Smoothing: DefaultEMASmoothing}
 	if err := config.Decode(opts, &cfg); err != nil {
 		return feature.Feature{}, err
 	}
-	p, s := cfg.Period, cfg.Smoothing
+
+	lb := 2 * cfg.Period
 	return feature.Feature{
-		ID:       iDWithParam(iDWithPeriod(EMAID, p), "s", s, DefaultEMASmoothing),
-		Lookback: 2 * p,
-		Bind: overCandles(2*p, p, func(candles []proto.Candle) (float64, bool) {
-			return ema(candles, p, s), true
+		ID:       variantID(EMAID, cfg),
+		Lookback: lb,
+		Bind: overCandles(lb, cfg.Period, func(candles []proto.Candle) (float64, bool) {
+			return ema(candles, cfg.Period, cfg.Smoothing), true
 		}),
 	}, nil
 }

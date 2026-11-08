@@ -53,7 +53,8 @@ originals, and counts what each variant was compared on.
 type ported struct {
 	st      *proto.Streams
 	e       *Engine
-	ids     []string // each variant's ID, the same in both registries
+	ids     []string // each variant's port ID
+	origIDs []string // each variant's original ID, which omits a default smoothing (ema_20)
 	ints    []bool   // the variant's port is a Bind[int]
 	chain   *feat.FeatureChain
 	history []proto.Candle // the bridge's
@@ -80,11 +81,9 @@ func newPorted(t *testing.T, st *proto.Streams, variants []variant) *ported {
 		if err != nil {
 			t.Fatalf("original %s %v: %v", v.typ, v.opts, err)
 		}
-		if port.ID != original.ID().Name {
-			t.Fatalf("%s %v: port ID %q, original %q", v.typ, v.opts, port.ID, original.ID().Name)
-		}
 		_, isInt := port.Bind.(feature.Bind[int])
-		p.ids, p.ints = append(p.ids, port.ID), append(p.ints, isInt)
+		p.ids, p.origIDs = append(p.ids, port.ID), append(p.origIDs, original.ID().Name)
+		p.ints = append(p.ints, isInt)
 		originals = append(originals, original)
 		for s := range st.All {
 			instances = append(instances, on(port, stream(s))...)
@@ -108,7 +107,7 @@ func newPorted(t *testing.T, st *proto.Streams, variants []variant) *ported {
 /*
 compare pins the engine at v's frame and, at each stream updated there (Fresh, age 0), fires every
 port and evaluates the chain as the bridge does. Each port reads Fresh with the original's value where
-the snapshot holds its ID, and Gap where it does not.
+the snapshot holds the original's ID, and Gap where it does not.
 */
 func (p *ported) compare(t *testing.T, v frame.View[proto.Candle]) {
 	t.Helper()
@@ -133,7 +132,7 @@ func (p *ported) compare(t *testing.T, v frame.View[proto.Candle]) {
 				got, state, _ = mustView[float64](t, fv, id).Latest(s)
 			}
 
-			w, ok := want[id]
+			w, ok := want[p.origIDs[i]]
 			switch {
 			case ok && (state != frame.Fresh || got != w):
 				t.Fatalf("%s %s %s: port %v (state %d), original %v",

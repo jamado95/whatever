@@ -52,6 +52,7 @@ func Decode(opts map[string]any, dst any) error {
 	if v, ok := dst.(Validator); ok {
 		return v.Validate()
 	}
+
 	return nil
 }
 

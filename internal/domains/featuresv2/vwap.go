@@ -9,21 +9,25 @@ import (
 
 const VWAPID = "vwap"
 
+type VWAPConfig struct {
+	PeriodConfig
+}
+
 func init() {
 	reg.FeatureTypes.Register(VWAPID, newVWAP)
 }
 
 // newVWAP builds vwap_<period>: the volume-weighted average typical price of the last period candles.
 func newVWAP(opts map[string]any) (feature.Feature, error) {
-	cfg := PeriodConfig{}
+	cfg := VWAPConfig{}
 	if err := config.Decode(opts, &cfg); err != nil {
 		return feature.Feature{}, err
 	}
-	p := cfg.Period
+
 	return feature.Feature{
-		ID:       iDWithPeriod(VWAPID, p),
-		Lookback: p,
-		Bind:     overCandles(p, p, vwap),
+		ID:       variantID(VWAPID, cfg),
+		Lookback: cfg.Period,
+		Bind:     overCandles(cfg.Period, cfg.Period, vwap),
 	}, nil
 }
 

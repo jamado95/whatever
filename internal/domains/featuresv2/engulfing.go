@@ -19,14 +19,16 @@ func init() {
 
 // newEngulfing builds engulfing_candle: the direction of an engulfing pattern on the last two candles.
 func newEngulfing(opts map[string]any) (feature.Feature, error) {
-	var cfg EngulfingConfig
+	cfg := EngulfingConfig{}
 	if err := config.Decode(opts, &cfg); err != nil {
 		return feature.Feature{}, err
 	}
+
+	period := 2
 	return feature.Feature{
-		ID:       EngulfingID,
-		Lookback: 2,
-		Bind:     overCandles(2, 2, engulfing),
+		ID:       variantID(EngulfingID, cfg),
+		Lookback: period,
+		Bind:     overCandles(period, period, engulfing),
 	}, nil
 }
 

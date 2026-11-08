@@ -195,6 +195,8 @@ data_logger_v2 Run:     features.New(graph) ─▶ loop: data.Next ─▶ pacer 
   originals' (`ema_20_s3`); every registered type is in the table and has a case in the switch; nodes
   hold no candle scratch and allocate nothing per call.
 - Plan: `stage-4-ported-features.md`.
+- **Changed after the stage:** IDs include defaults (`ema_20_s2`), built by `variantID` from each
+  port's config struct; the originals' still omit them (`ema_20`). See Open items (stage 7).
 
 ### Stage 5 — expansion
 
@@ -320,3 +322,7 @@ High-level only.
   `Fresh` at the record's column are exported, since a `Gap` carries the last value (stage 7).
 - `FeatureChain.Evaluate` loses its only caller in stage 7: kept as the regression reference, or
   removed with the bridge (stage 7).
+- Stage 7's comparison with the bridge: the ports' `ema` IDs include the default smoothing
+  (`ema_20_s2`, `ema_50_s2` on `configs/data_logger_v2.json`), the originals' omit it, so the
+  exported records differ in those keys. Either the comparison maps the IDs, or the acceptance takes
+  the new keys as intended (stage 7).
