@@ -121,9 +121,11 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   of one type declare the same ones, which expansion checks; symmetry joins them with asymmetric pair
   order (Open Questions). A type's base ID is the name it registers under.
 - **A node is the function `Bind` returns.** `Bind`, a `feature.Bind[T]` held as `any`, takes the
-  node's `Input` handles from a binder, narrowed to one coordinate, allocates its scratch and returns
-  `func() (T, bool)`: the value, or false when it cannot compute. A node never writes. `T` is any type
-  the feature engine supports (§ Feature buffer); a dependency's is checked at `Bind`.
+  node's `Input` handles from a binder, narrowed to one coordinate, and returns `func() (T, bool)`:
+  the value, or false when it cannot compute. A node reads in place: `Input.Data(n, order)` iterates
+  its ring, newest or oldest first, without copying. A node never writes. `T` is any type the feature
+  engine supports (§ Feature buffer); a dependency's is checked at `Bind`. See § Reversed on
+  2026-11-08.
 - **Pair features expand like any other.** `corr` declares `returns` once; each pair gets one
   instance per `returns` variant (`corr_100-returns_1`, `corr_100-returns_5`), reading that variant
   on both of its streams.
@@ -290,6 +292,14 @@ Superseded by § Feature graph, § Feature layer and § Feature buffer above; ke
 | `features.New` allocates the store and binds | `Expand` binds; `New` allocates | `--validate-only` covers every `Bind`; a node needs views' addresses, not rings |
 | Rings, slots and `View` in `internal/flow/frame` | `internal/protocol/frame` | Views are part of the protocol layer, and `protocol` imports nothing outside itself |
 
+### Reversed on 2026-11-08
+
+Superseded by § Feature graph above; kept for context.
+
+| Was | Now | Why |
+|---|---|---|
+| A node copies its reads into scratch allocated in `Bind`: `Input.Data(n, dst)` | `Input.Data(n, order)` iterates the ring in place, newest or oldest first | Scratch held a copy of a stream's history per variant; the rings' one copy is shared, and nothing is allocated |
+
 ## Solution
 
 Executed stages of `docs/plans/features-layer-v2/main.md`, iteration 4 of
@@ -348,8 +358,8 @@ type Bind[T any] = func(b *Binder) func() (T, bool)
   `Fresh`, or `Gap` when the node returns false, and `Gap` / `Ended` at columns it skips.
 - The binder keeps its first error and the engine reads it after `Bind`, so `Bind` returns none and
   never reads an input.
-- Nodes may hold scratch buffers for allocation-free reads, allocated in `Bind`, never carried
-  values.
+- Nodes read in place: `Input.Data(n, order)` yields up to n `Fresh` values, newest or oldest first.
+  Scratch, allocated in `Bind`, is only working memory, never carried values.
 
 ### Scheduling
 

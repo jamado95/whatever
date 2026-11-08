@@ -406,6 +406,14 @@ Superseded by § Subscriptions and the grid above; kept for context.
 |---|---|---|
 | The stream table is built by the data layer (`data.NewStreams`), never by the composition root | A protocol domain (`proto.NewStreams`), built once by the composition root and injected into `data.New` | Config resolves universes over it and the feature layer indexes its buffers by it; inside the data layer it is out of config's reach and rebuilt by the feature layer. Derived IDs keep one source, `NewStreams` |
 
+### Reversed on 2026-11-08
+
+Superseded by Solution § FrameBuffer; kept for context.
+
+| Was | Now | Why |
+|---|---|---|
+| Reads copy into a caller-supplied slice (`dst`) | `Data(i, n, order)` returns an iterator over the ring, newest or oldest first | Feature nodes each held a copy of what they read ([[features]] § Reversed on 2026-11-08); iterating shares the ring's one copy without allocating |
+
 ## Solution
 
 Detail below the decisions; built per `docs/plans/data-layer-v2` as far as WIP lists.
@@ -583,7 +591,7 @@ type View[T any] struct { // pinned: sees only columns ≤ col; also the frame r
 }
 
 func (v View[T]) Latest(i int) (T, State, int) // carried: last Fresh value, its age
-func (v View[T]) Data(i, n int, dst []T) []T   // newest first
+func (v View[T]) Data(i, n int, o Order) iter.Seq[T] // in place, newest or oldest first
 
 // internal/engine/data: the data layer's buffer, its writes and its staging.
 type FrameBuffer struct {
@@ -614,8 +622,11 @@ func Records[T any](v frame.View[proto.Candle], s Section[T]) []T
   slots; align writes a slot only once it holds nothing a view may still read, and reads stop at the
   stream's first column.
 - **A declared depth beyond the 365-day cap** is a construction error, not a silent truncation.
-- **Reads copy into a caller-supplied slice** (`dst`): a ring wrap splits history into two segments,
-  and the hot path should not allocate.
+- **Reads iterate in place:** `Data` yields up to n `Fresh` values from the ring's slots as the caller
+  ranges, newest or oldest first, so the hot path neither copies nor allocates. A caller wanting a
+  slice collects into its own (`slices.AppendSeq`). A slice of the ring is not possible: values sit
+  in slots, a ring wraps, a rolling stream's bars are `Window` slots apart, and `Gap` slots are
+  skipped. See § Reversed on 2026-11-08.
 - **Mixed-timeframe cross reads.** A rolling and a direct stream of one timeframe line up only at the
   direct stream's closes, so a cross feature mixing them samples there ([[pipeline-runtime]] § Features
   phase, sampling clock).

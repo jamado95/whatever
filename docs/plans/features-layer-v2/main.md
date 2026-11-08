@@ -180,16 +180,19 @@ data_logger_v2 Run:     features.New(graph) ─▶ loop: data.Next ─▶ pacer 
 ### Stage 4 — ported features
 
 - **Goal:** `sma`, `ema`, `rsi`, `vwap` and `engulfing_candle` on the new contract.
-- **Touches:** new `internal/domains/featuresv2` (`featv2`) beside `internal/domains/features`,
-  registering in `reg.FeatureTypes`, its IDs formatting floats with `'f'`; the data layer's reference
-  sampling moved into `internal/engine/data/datatest`, shared by both reference tests; tests, among
-  them, in `internal/engine/features`, one building a variant of every registered type from a table
-  of options and checking it against the engine's switch, a comparison with the originals over the
-  reference dataset, and a check that a lookback beyond the data layer's cap fails `data.New`.
+- **Touches:** `Data` in `internal/protocol/frame` and `feature` an iterator over the ring, newest or
+  oldest first, its callers following; new `internal/domains/featuresv2` (`featv2`) beside
+  `internal/domains/features`, registering in `reg.FeatureTypes`, its nodes reading in place, its IDs
+  formatting floats with `'f'`; the data layer's reference sampling moved into
+  `internal/engine/data/datatest`, shared by both reference tests; tests, among them, in
+  `internal/engine/features`, one building a variant of every registered type from a table of options
+  and checking it against the engine's switch, a comparison with the originals over the reference
+  dataset, and a check that a lookback beyond the data layer's cap fails `data.New`.
 - **Acceptance:** each ported feature produces the original's value at every column where the bridge
   evaluates, over a random four-month sample of the BTCUSDT reference dataset per run (skipped without
   it, like the data layer's), on direct and rolling streams, including warm-up absence; IDs match the
-  originals' (`ema_20_s3`); every registered type is in the table and has a case in the switch.
+  originals' (`ema_20_s3`); every registered type is in the table and has a case in the switch; nodes
+  read in place, allocating nothing.
 - Plan: `stage-4-ported-features.md`.
 
 ### Stage 5 — expansion

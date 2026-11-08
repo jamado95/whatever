@@ -8,8 +8,10 @@ and the engine's columns, graph and view, tested with test-only features; nothin
 
 This stage ports `sma`, `ema`, `rsi`, `vwap` and `engulfing_candle` onto the contract, in a new
 package `internal/domains/featuresv2` (`featv2`) beside `internal/domains/features` (`feat`). Each is
-registered under the original's type name, with its maths copied unchanged. The ports are then
-checked against the originals at every column where the bridge evaluates:
+registered under the original's type name, with the original's config and maths. Before the ports,
+`Data` becomes an iterator over the ring, newest or oldest first, so nodes read the one copy of
+history the rings hold instead of each copying what it reads into scratch. The ports are then checked
+against the originals at every column where the bridge evaluates:
 
 - a table of every registered type, checked against the engine's switch;
 - a comparison over the BTCUSDT reference dataset, on a random four-month sample per run and
@@ -19,24 +21,28 @@ checked against the originals at every column where the bridge evaluates:
 ```
 featv2 init   reg.FeatureTypes.Register("sma", newSMA) … five types
 factory       config.Decode ─▶ feature.Feature{ID, Lookback, Bind: Bind[float64] | Bind[int]}
-node          in.Data(n, scratch) ─▶ the original's maths ─▶ (value, true) | (0, false)
+node          in.Data(n, order) ─▶ the original's maths, in its order ─▶ (value, true) | (0, false)
 checked       newGraph ─▶ New ─▶ pin ─▶ fire ─▶ ViewOf  ==  FeatureChain.Evaluate(sub, view.Data(s, L))
 ```
 
-Outside the new package and the tests, only the data layer's reference sampling changes: it moves
-into a helper package. `cmd` does not import `featv2` until stage 5.
+Outside the new package and the tests, the data layer's reference sampling moves into a helper
+package, and `Data` in `frame` and `feature` becomes an iterator, its callers following. `cmd` does not
+import `featv2` until stage 5.
 
 The plan, with the decisions it records in [main.md](main.md) and
-[features.md](../../discussions/features.md), is committed before step 1. The stage is then
-implemented in three steps, in order. Each step is a review checkpoint: its changes stay unstaged
-for review, are committed once approved, and the next step starts from that commit. Every step
-leaves the tree building, tested and `make check` clean.
+[features.md](../../discussions/features.md), is committed before step 1. It was amended after step 1
+to read through iterators (step 2); the amendment, with the decisions it records in features.md and
+[data-layer-v2.md](../../discussions/data-layer-v2.md), is committed before step 2. The stage is
+implemented in four steps, in order. Each step is a review checkpoint: its changes stay unstaged for
+review, are committed once approved, and the next step starts from that commit. Every step leaves the
+tree building, tested and `make check` clean.
 
 | Step | Adds | Commit |
 |---|---|---|
 | 1 | The reference sample shared | `refactor(data): share the reference sample` |
-| 2 | The five ported features | `feat(features): port the five features to the feature contract` |
-| 3 | Checks against the originals; the stage's documentation | `test(features): check the ported features against the originals` |
+| 2 | `Data` as an ordered iterator | `refactor(frame): read ring data through an ordered iterator` |
+| 3 | The five ported features | `feat(features): port the five features to the feature contract` |
+| 4 | Checks against the originals; the stage's documentation | `test(features): check the ported features against the originals` |
 
 ## Decisions
 
@@ -50,25 +56,43 @@ leaves the tree building, tested and `make check` clean.
   originals retire.
 - **Same config schemas.** The factories decode the originals' config structs strictly, so one config
   entry builds in both registries (stage 5).
-- **Maths copied unchanged, including the iteration order.** A node runs the original's loops over
-  `[]proto.Candle` in the same order, so floating-point sums match bit for bit. Rounding to 6 decimals
-  stays, as does `rsi`'s unrounded 100.
+- **`Data` iterates in place.** `Ring.Data(col, n, o)`, `View.Data(i, n, o)` and `Input.Data(n, o)`
+  return an `iter.Seq[T]` over up to n `Fresh` values, the values the slice read returned, walking the
+  ring's slots as the loop ranges: `frame.NewestFirst`, or `frame.OldestFirst`, which walks back to
+  the n-th value, then forward from it. One method with an order, not one per direction. Nothing is
+  copied or allocated, and values come out by value, so a reader cannot write the ring. A caller
+  wanting a slice collects into its own: `slices.AppendSeq(dst[:0], v.Data(i, n, o))`. A slice of the
+  ring itself is not possible: values sit inside slots, a ring wraps, a rolling stream's bars are
+  `Window` slots apart, and `Gap` slots are skipped.
+- **The walk runs while the node ranges,** under the guarantee the slice read relied on: align writes
+  a slot only once it holds nothing a view may still read ([data-layer-v2.md](../../discussions/data-layer-v2.md)
+  Solution § FrameBuffer). A node ranges its inputs within its call and keeps no iterator.
+- **Allocation-free is checked, not assumed.** An iterator ranged where it is made stays on the stack
+  with its loop body, as the compiler handles it today; the language does not promise it.
+  `frame`'s and `featv2`'s allocation tests check it. If either allocates, implementation stops for a
+  decision (a cursor type, `for it.Next()`, cannot allocate).
+- **Maths in the originals' order.** Each port's loop runs over the iterator and accumulates in the
+  order the original's loop does, so floating-point results match bit for bit: newest first for
+  `sma`, `vwap`, `rsi` (each change from the previous close) and `engulfing_candle`; oldest first for
+  `ema`, seeding with the first p values, then the recurrence. Each counts what it read for its
+  warm-up. Rounding to 6 decimals stays, as does `rsi`'s unrounded 100.
 - **Reads equal the bridge's.** `Ring.Data` walks back at most the ring's bars and stops at n `Fresh`
-  values. A node's `in.Data(n)` is therefore the prefix of the bridge's `view.Data(s, lookback)` that
-  `SortedWindow.Last(n)` takes, and close times strictly increase, so the window's sort changes
-  nothing. Values compare with `==`.
-- **One read shape.** Every port reads its last `n` candles and needs at least `min` of them. A
-  package helper `overCandles[T](n, min, f)` returns the `feature.Bind[T]`: it takes `Candles`,
-  allocates `make([]proto.Candle, 0, n)` as scratch, and its node returns false below `min`, otherwise
-  `f(candles)`. Nodes allocate nothing per call, as stage 6's `Step` requires.
+  values. A node's `in.Data(n, o)` therefore yields the prefix of the bridge's
+  `view.Data(s, lookback, NewestFirst)` that `SortedWindow.Last(n)` takes, newest first or reversed,
+  and close times strictly increase, so the window's sort changes nothing. Values compare with `==`.
+- **One read shape.** Every port reads its stream's last `n` candles in one order and needs at least
+  `min` of them. A package helper `overCandles[T](n, o, f)` returns the `feature.Bind[T]`: it takes
+  `Candles`, and its node returns `f(in.Data(n, o))`. `f`, the maths over an `iter.Seq[proto.Candle]`,
+  counts the candles and returns false below `min`. Nodes hold no scratch and allocate nothing per
+  call, as stage 6's `Step` requires.
 
-  | Type | Lookback | `n` | `min` | `f` returns false | Value |
-  |---|---|---|---|---|---|
-  | `sma` | p | p | p | — | `float64` |
-  | `ema` | 2p | 2p | p | — | `float64` |
-  | `rsi` | p+1 | p+1 | p+1 | — | `float64` |
-  | `vwap` | p | p | p | zero total volume | `float64` |
-  | `engulfing_candle` | 2 | 2 | 2 | — | `int` |
+  | Type | Lookback | `n` | Order | `min` | Also false | Value |
+  |---|---|---|---|---|---|---|
+  | `sma` | p | p | newest first | p | — | `float64` |
+  | `ema` | 2p | 2p | oldest first | p | — | `float64` |
+  | `rsi` | p+1 | p+1 | newest first | p+1 | — | `float64` |
+  | `vwap` | p | p | newest first | p | zero total volume | `float64` |
+  | `engulfing_candle` | 2 | 2 | newest first | 2 | — | `int` |
 
 - **Absent is false.** Wherever the original writes nothing (warm-up, and `vwap`'s zero volume), the
   node returns false and the engine writes `Gap`.
@@ -104,6 +128,8 @@ leaves the tree building, tested and `make check` clean.
   four months add roughly 1.3 s, or 10 s under `-race`, on top of the data layer's run.
 
 ## Step 1 — the reference sample
+
+Committed: `23a5c5a`.
 
 ### Changes — new `internal/engine/data/datatest/datatest.go`
 
@@ -147,7 +173,63 @@ exercise it.
 - `go test -race -count=1 -run Reference -v ./internal/engine/data/` passes with the dataset and skips
   without it; `make check` clean.
 
-## Step 2 — the five ported features
+## Step 2 — `Data` as an ordered iterator
+
+### Changes — `internal/protocol/frame/frame.go`
+
+```go
+// Order is the order Data yields values in.
+type Order uint8
+
+const (
+	NewestFirst Order = iota
+	OldestFirst
+)
+
+/*
+Data yields up to n Fresh values, one bar (window slots) per step back from the latest update at or
+before col, in order o. Gap and Ended slots are skipped. The walk covers at most the ring's bars and
+stops where At finds no slot: below the first column, or a bar overwritten. OldestFirst walks back to
+the n-th value, then forward from it. Slots are read as the caller ranges.
+*/
+func (r *Ring[T]) Data(col int64, n int, o Order) iter.Seq[T]
+
+// Data yields up to n of entry i's Fresh values, in order o, one bar per step back from its latest
+// update at or before the view's column.
+func (v View[T]) Data(i, n int, o Order) iter.Seq[T]
+```
+
+### Changes — `internal/protocol/feature/feature.go`
+
+```go
+// Data yields up to n Fresh values, in order o, one bar per step back from the ring's latest update
+// at or before the frame.
+func (in Input[T]) Data(n int, o frame.Order) iter.Seq[T]
+```
+
+### Changes — callers
+
+- `internal/engine/data_logger_v2.go`: the bridge collects into its history,
+  `slices.AppendSeq(history[:0], view.Data(s, lookback, frame.NewestFirst))`.
+- Tests that read `Data` into a slice collect the iterator, with `slices.Collect`, or
+  `slices.AppendSeq` into a buffer where they check allocations: `frame`, `feature`,
+  `internal/engine/data` (`buffer_test.go`, `data_test.go`) and `internal/engine/features`
+  (`engine_test.go`, `results_test.go`, and the test features in `features_test.go`). Their
+  expectations do not change.
+
+### Tests — `internal/protocol/frame/frame_test.go`
+
+- The `Data` table (gaps, wrap, rolling stride, the first column, an overwritten bar) runs in both
+  orders: `OldestFirst` yields `NewestFirst`'s values reversed.
+- Breaking out of the loop stops the walk, in both orders.
+- Ranging `Data` in either order allocates nothing.
+
+### Acceptance
+
+- `go test -race ./internal/protocol/... ./internal/engine/...` passes; with the dataset,
+  `go test -race -count=1 -run Reference -v ./internal/engine/data/` passes; `make check` clean.
+
+## Step 3 — the five ported features
 
 ### Changes — new `internal/domains/featuresv2`
 
@@ -157,7 +239,7 @@ exercise it.
   - its base-ID constant, and its config struct where it has its own (`EMAConfig`,
     `EngulfingConfig`);
   - a factory registered in `init` with `reg.FeatureTypes.Register`;
-  - its maths as a function over `[]proto.Candle`, newest first.
+  - its maths as a function over an `iter.Seq[proto.Candle]`, returning false below its `min`.
 
 For example:
 
@@ -171,10 +253,44 @@ func newSMA(opts map[string]any) (feature.Feature, error) {
 	return feature.Feature{
 		ID:       iDWithPeriod(SMAID, p),
 		Lookback: p,
-		Bind: overCandles(p, p, func(candles []proto.Candle) (float64, bool) {
-			return sma(candles), true
+		Bind: overCandles(p, frame.NewestFirst, func(candles iter.Seq[proto.Candle]) (float64, bool) {
+			return sma(candles, p)
 		}),
 	}, nil
+}
+
+// sma is the mean close of period candles; false with fewer.
+func sma(candles iter.Seq[proto.Candle], period int) (float64, bool) {
+	sum, n := 0.0, 0
+	for c := range candles {
+		sum += c.Close
+		n++
+	}
+	if n < period {
+		return 0, false
+	}
+	return roundDecimals(sum/float64(period), 6), true
+}
+
+// ema reads oldest first: the SMA of the first period candles, then the recurrence over the rest.
+func ema(candles iter.Seq[proto.Candle], period int, smoothing float64) (float64, bool) {
+	multiplier := smoothing / float64(period+1)
+	sum, ema, n := 0.0, 0.0, 0
+	for c := range candles {
+		if n < period {
+			sum += c.Close
+			if n == period-1 {
+				ema = sum / float64(period)
+			}
+		} else {
+			ema = (c.Close * multiplier) + (ema * (1 - multiplier))
+		}
+		n++
+	}
+	if n < period {
+		return 0, false
+	}
+	return roundDecimals(ema, 6), true
 }
 ```
 
@@ -189,13 +305,13 @@ Features are built through `reg.FeatureTypes.Create`, as the originals' tests do
 - **`TestConfigErrors`**: a missing, zero or negative `period` for each period type; a zero or
   negative `smoothing`; an unknown key; and any key on `engulfing_candle`.
 - **`TestNodeAllocations`**: every type's node, bound with `feature.NewBinder` over a candle buffer
-  pinned with `frame.NewView`, allocates nothing per call.
+  pinned with `frame.NewView`, returns a value and allocates nothing per call.
 
 ### Acceptance
 
 - `go test -race ./internal/domains/featuresv2/` passes; `make check` clean.
 
-## Step 3 — checks against the originals
+## Step 4 — checks against the originals
 
 ### Changes — new `internal/engine/features/ported_test.go`
 
@@ -205,7 +321,8 @@ helper takes a pinned engine and a `FeatureChain` of the originals. At each stre
 frame's column (`Fresh`, age 0) it:
 
 1. fires every port;
-2. evaluates the chain like the bridge, `Evaluate(sub, view.Data(s, chain.Lookback()))`;
+2. evaluates the chain like the bridge,
+   `Evaluate(sub, slices.AppendSeq(history[:0], view.Data(s, chain.Lookback(), frame.NewestFirst)))`;
 3. checks that `ViewOf` reads `Fresh` with the original's value where the snapshot holds the ID, and
    `Gap` where it does not.
 
@@ -245,7 +362,8 @@ values and absences each variant was compared on.
   `go test -count=1 -run Reference -v ./internal/engine/features/` passes; `make check` clean.
 - Stage acceptance ([main.md](main.md)): each port produces the original's value at every column
   where the bridge evaluates, on direct and rolling streams, warm-up absence included; IDs match the
-  originals' (`ema_20_s3`); every registered type is in the table and has a case in the switch.
+  originals' (`ema_20_s3`); every registered type is in the table and has a case in the switch; nodes
+  read in place, allocating nothing.
 
 ## Documentation recorded at planning
 
@@ -260,6 +378,20 @@ Committed with this plan, before step 1:
 - [features.md](../../discussions/features.md) § Open Questions, *Parameters in IDs*: the ported
   `iDWithParam` formats with `'f'`; negative values are left to `Expand` (stage 5).
 
+Committed with the amendment, before step 2:
+
+- [main.md](main.md): stage 4's touches and acceptance: `Data` an ordered iterator, nodes reading in
+  place.
+- [features.md](../../discussions/features.md):
+  - § Feature graph, *A node is the function `Bind` returns*: nodes read in place through
+    `Data(n, order)`; `Bind` allocates no scratch for reads;
+  - § Contract sketch: scratch only for working memory;
+  - § Reversed on 2026-11-08: reads copied into per-node scratch.
+- [data-layer-v2.md](../../discussions/data-layer-v2.md):
+  - Solution § FrameBuffer: `View.Data`'s signature, and *Reads iterate in place* replacing *Reads
+    copy into a caller-supplied slice*;
+  - § Reversed on 2026-11-08: reads copied into `dst`.
+
 ## Out of scope
 
 - `cmd`'s import of `featv2`, `Spec`, `Expand` and rejecting `-` in variant IDs (stage 5).
@@ -267,6 +399,7 @@ Committed with this plan, before step 1:
 - Exact recursion (iteration 4), and checking the maths against textbook values: the originals are
   the reference.
 - Exporting `Gap` results (stage 7).
+- Dependency reads beyond `Input.Data`'s new signature: no feature reads a dependency yet.
 
 ## Verification
 
@@ -274,8 +407,11 @@ Committed with this plan, before step 1:
 # step 1
 go test -race -count=1 -run Reference -v ./internal/engine/data/
 # step 2
-go test -race ./internal/domains/featuresv2/
+go test -race ./internal/protocol/... ./internal/engine/...
+go test -race -count=1 -run Reference -v ./internal/engine/data/
 # step 3
+go test -race ./internal/domains/featuresv2/
+# step 4
 go test -race ./internal/engine/features/ ./internal/domains/featuresv2/
 go test -count=1 -run Reference -v ./internal/engine/features/
 # every step
