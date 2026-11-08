@@ -1,14 +1,10 @@
 package data
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"math"
-	"math/rand/v2"
-	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -17,11 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"whatever/internal/domains/provider"
+	"whatever/internal/engine/data/datatest"
 	"whatever/internal/logger"
 	proto "whatever/internal/protocol"
 	"whatever/internal/protocol/frame"
-	reg "whatever/internal/registry"
 )
 
 // fakeBuffer is a fake provider's output capacity, matching binance_csv.
@@ -607,36 +602,6 @@ func TestDataPipelineLongGap(t *testing.T) {
 	}
 }
 
-// sampleCSV copies the rows of src whose OpenTs (ms, first column) lies in [from, to) to dst.
-func sampleCSV(t *testing.T, src, dst string, from, to int64) {
-	t.Helper()
-	in, err := os.Open(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer in.Close()
-
-	var out bytes.Buffer
-	sc := bufio.NewScanner(in)
-	for sc.Scan() {
-		line := sc.Text()
-		ts, err := strconv.ParseInt(line[:strings.IndexByte(line, ',')], 10, 64)
-		if err != nil {
-			t.Fatalf("%s: %v", src, err)
-		}
-		if ts >= from && ts < to {
-			out.WriteString(line)
-			out.WriteByte('\n')
-		}
-	}
-	if err := sc.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(dst, out.Bytes(), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 /*
 TestDataPipelineReference compares rolling 1h and 1d legs over BTCUSDT 5m with the direct 1h and 1d
 bars of the reference dataset — all of 2024, agreeing exactly in decimal — over four months sampled
@@ -645,18 +610,7 @@ volume within 1e-9 relative. Rolling 1d over 5m equals rolling 1d over the rolli
 derivation's match follows. Skipped without data/BTCUSDT.
 */
 func TestDataPipelineReference(t *testing.T) {
-	const dir = "../../../data/BTCUSDT"
-	tfs := []proto.Timeframe{proto.Timeframe5m, proto.Timeframe1h, proto.Timeframe1d}
-	for _, tf := range tfs {
-		if _, err := os.Stat(filepath.Join(dir, "BTCUSDT-"+string(tf)+"-2024-01.csv")); err != nil {
-			t.Skipf("reference dataset missing: %v", err)
-		}
-	}
-
-	year := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	start := year.AddDate(0, 0, rand.IntN(245)) // 2024-01-01 … 2024-09-01
-	end := start.AddDate(0, 4, 0)
-	t.Logf("sample %s … %s", start.Format(time.DateOnly), end.Format(time.DateOnly))
+	sample := datatest.Reference(t, proto.Timeframe5m, proto.Timeframe1h, proto.Timeframe1d)
 
 	subs := []proto.Subscription{
 		sub("BTCUSDT", proto.Timeframe5m, "btc_5m", proto.Timeframe1h, proto.Timeframe1d),
@@ -664,18 +618,8 @@ func TestDataPipelineReference(t *testing.T) {
 		sub("BTCUSDT", proto.Timeframe1d, "btc_1d"),
 	}
 	provs := make(map[proto.Subscription]proto.DataProvider, len(subs))
-	for i, tf := range tfs {
-		file := filepath.Join(t.TempDir(), string(tf)+".csv")
-		sampleCSV(t, filepath.Join(dir, "BTCUSDT-"+string(tf)+"-2024-01.csv"), file,
-			start.UnixMilli(), end.UnixMilli())
-		p, err := reg.Providers.Create(provider.BinanceCSVID, map[string]any{"file": file})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := p.Init(subs[i]); err != nil { // the engine's part
-			t.Fatal(err)
-		}
-		provs[subs[i]] = p
+	for _, s := range subs {
+		provs[s] = sample.Provider(t, s)
 	}
 
 	dp, err := New(proto.NewStreams(subs), provs, 1, quiet())
@@ -719,7 +663,7 @@ func TestDataPipelineReference(t *testing.T) {
 		}
 	}
 
-	days := int(end.Sub(start).Hours() / 24)
+	days := int(sample.End.Sub(sample.Start).Hours() / 24)
 	if pairs[0].seen != 24*days || pairs[1].seen != days {
 		t.Errorf("compared %d hours and %d days, want %d and %d", pairs[0].seen, pairs[1].seen, 24*days, days)
 	}
