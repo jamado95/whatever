@@ -289,6 +289,22 @@ func TestRingData(t *testing.T) {
 		expect(t, r, 7, 10, vals(7, 6, 5, 4))
 	})
 
+	t.Run("a rolling ring across the slot index wrap", func(t *testing.T) {
+		r := newRing(12, 1, 4, 3)
+		for col := int64(0); col <= 17; col++ {
+			fresh(r, col)
+		}
+		// at 17: slots 5, 1, then 9
+		expect(t, r, 17, 3, vals(17, 13, 9))
+	})
+
+	t.Run("a coarse ring across the slot index wrap", func(t *testing.T) {
+		r := newRing(4, 12, 1, 3)
+		fresh(r, 0, 12, 24, 36, 48, 60)
+		// at 65: slots 1, 0, then 3
+		expect(t, r, 65, 3, vals(60, 48, 36))
+	})
+
 	t.Run("a ring filled from its first column reads nothing below it", func(t *testing.T) {
 		r := newRing(4, 1, 1, 4)
 		r.Start(100)

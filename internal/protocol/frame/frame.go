@@ -132,7 +132,8 @@ func (r *Ring[T]) Latest(col int64) (v T, s State, age int) {
 /*
 Data appends up to n Fresh values to dst[:0], newest first, one bar (window slots) per step back
 from the latest update at or before col. Gap and Ended slots are skipped. The walk covers at most the
-ring's bars and stops where At finds no slot: below the first column, or a bar overwritten.
+ring's bars and stops below the first column or at a slot holding another column: a bar overwritten.
+It steps the slot index rather than computing it per slot.
 */
 func (r *Ring[T]) Data(col int64, n int, dst []T) []T {
 	dst = dst[:0]
@@ -141,14 +142,19 @@ func (r *Ring[T]) Data(col int64, n int, dst []T) []T {
 		return dst
 	}
 
-	step := r.period * r.window
-	for i, c := int64(0), sl.Col; i < r.bars && len(dst) < n; i, c = i+1, c-step {
-		s := r.At(c)
-		if s == nil {
+	first, size := r.first.Load(), int64(len(r.slots))
+	step, back := r.period*r.window, r.window%size
+	j := (sl.Col / r.period) % size
+	for i, c := int64(0), sl.Col; i < r.bars && len(dst) < n && c >= first; i, c = i+1, c-step {
+		s := &r.slots[j]
+		if s.Col != c {
 			break
 		}
 		if s.State == Fresh {
 			dst = append(dst, s.Val)
+		}
+		if j -= back; j < 0 {
+			j += size
 		}
 	}
 	return dst
