@@ -225,8 +225,8 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   switch names — `float64` and `int` today. A multi-output feature (MACD) or recursive state declares
   its own struct in its feature's domain package, which the engine imports for its case and
   consumers for `ViewOf`. A compile-time list of the types would put domain types in `protocol`, an
-  import cycle, so a missing case or a malformed `Bind` is caught by a test over every registered type
-  and by expansion (`--validate-only`), not the compiler.
+  import cycle, so a missing case or a malformed `Bind` is caught by expansion (`--validate-only`)
+  once a config enables the type, not the compiler.
 - **Only the feature engine creates feature buffers.** It switches on a feature's `Bind`
   (`case feature.Bind[float64]`), which hands it the typed function, and instantiates
   `frame.Buffer[T]` there — Go instantiates it only where `T` is known. Registering through the
@@ -260,6 +260,9 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
 - **Every feature binds to a universe**, single-stream and pair alike, so each stream has its own
   feature set. A single-stream feature without one runs on every stream; a pair feature must name
   one, and a universe without pairs is a validation error for it.
+- **A type may repeat across feature entries,** each with its own universe (`rsi_14` on one,
+  `rsi_21` on another). A variant ID configured twice is an error, not a union of universes. A
+  dependent composes with every variant of its dependency type, across entries.
 - **Dependencies follow their dependents.** A feature instantiates its dependency variants on its
   own streams, also where the dependency's universe does not reach.
 - **A universe is a list of self-contained rules.** Its streams are those its rules select or name;
@@ -466,8 +469,8 @@ bound up with the strategy input contract ([[strategy-layer]]).
   joins `Feature` with it.
 - **Parameters in IDs** must not emit `-`. The originals' `iDWithParam` formats with `'g'`
   (`ema_20_s1e-05`); the ports' `variantID` formats with `'f'` (`ema_20_s0.00001`), identical to `'g'`
-  for values in [1e-4, 1e6). Negative values carry a sign: planned, `Expand` rejects a variant ID
-  with `-` (stage 5).
+  for values in [1e-4, 1e6). Negative values carry a sign: planned, `Feature.Validate` rejects a
+  variant ID with `-`, called by the composition root on each variant (stage 5).
 - **How a strategy reads a struct result.** `ViewOf` is in `engine/features` and a struct value type
   in its feature's domain, while a domain imports only `protocol` ([[engine]]). To settle before
   strategies read features.
@@ -478,7 +481,9 @@ bound up with the strategy input contract ([[strategy-layer]]).
   value, and whether any node needs an input's state or age (`Late` recomputes, a relaxed firing
   rule), which only `Latest` gives.
 - **Pair features over pair features** (a z-score of a spread) — a node reading a pair result;
-  iteration 1 allows single-stream dependencies only.
+  iteration 1 allows single-stream dependencies only, and `Expand` rejects a pair dependency type
+  until then (stage 5). Supporting it touches the binder, `newGraph`'s dependency check and the
+  ordering of pair nodes.
 - **`Late` revisions** (pinned) — recompute the subgraph reachable from the revised stream over
   `[c, now]`, pair nodes included.
 - **Strategies as graph nodes**, run as soon as their inputs are ready — pending measurements.

@@ -69,8 +69,9 @@ From [features.md](../../discussions/features.md):
   `func() (T, bool)`. The feature engine recovers `T` with a type switch on `Bind`, one case per
   supported type — `float64` and `int` — so only it creates `frame.Buffer[T]`. A struct value type
   (MACD) is declared in its feature's domain package and adds a case. A missing case or a malformed
-  `Bind` is caught by a test over the registered types and by `Expand`, not the compiler: a
-  compile-time list of the types would put domain types in `protocol`. Nodes never write: the engine
+  `Bind` is caught by `Expand` (`--validate-only`) once a config enables the type, not the compiler:
+  a compile-time list of the types would put domain types in `protocol`. Stage 4's test over the
+  registered types was removed in stage 5. Nodes never write: the engine
   writes what the node returns — `Fresh`, or `Gap` when it cannot compute.
 - **`Bind` runs once, before any ring exists.** A node needs the addresses of its inputs' views, not
   rings. `Expand` binds every instance, so `--validate-only` covers dependency value types and arity,
@@ -102,7 +103,7 @@ Tiered. Stage docs live beside this one, produced iteratively:
 - `stage-2-universes.md` — *implemented.*
 - `stage-3-contract-store.md` — *implemented.*
 - `stage-4-ported-features.md` — *implemented.*
-- `stage-5-expansion.md` — *to plan.*
+- `stage-5-expansion.md` — *planned.*
 - `stage-6-engine.md` — *to plan.*
 - `stage-7-data-logger-v2.md` — *to plan.*
 
@@ -203,18 +204,24 @@ data_logger_v2 Run:     features.New(graph) ─▶ loop: data.Next ─▶ pacer 
 - **Goal:** the pure function that turns configuration into a validated feature graph.
 - **Touches:** `internal/engine/features` (`Expand(streams, universes, specs) (*Graph, error)`:
   variants × dependency variants × coordinates, dependencies pulled onto their dependents' streams,
-  composed IDs, validation, ending in stage 3's `newGraph`, which binds every instance; the `Graph`
-  holds the instances, the columns, the pair table and the lookback); the composition root (`cmd`)
-  builds the new registry's variants beside today's features and injects them as specs — the config
-  entry's type, the variant, the resolved universe; `data_logger_v2`'s factory calls `Expand`; tests
-  with test-only features.
+  composed IDs, the graph checks, ending in stage 3's `newGraph`, which binds every instance; the
+  `Graph` holds the columns, the pair table and the lookback, the instances left to stage 6;
+  stage 4's registered-types test removed); `internal/protocol/feature` (`Feature.Validate`, the
+  checks on one variant); `internal/config` (`ResolveUniverses` returns only the universes that
+  resolved); the composition root (`cmd`) builds the new registry's variants beside today's features,
+  validates them and injects them as specs — the config entry's type, its universe's name, the
+  variant — with the resolved universes, and `wire` splits a joined engine error per part;
+  `data_logger_v2`'s factory calls `Expand`; tests with test-only features.
 - **Boundary:** the graph is built in `data_logger_v2`'s factory but not run yet.
-- **Acceptance:** expansion over chains, several dependency types and pairs; errors for an unknown
-  dependency type or one with no variant, type-level cycles, a pair feature without a universe or
-  with a universe without pairs, duplicate composed IDs, a variant ID containing `-`, variants of one
-  type declaring different `Pair` or `Deps`, a value type the engine does not support, and a bind
-  error; `--validate-only` reports them all in one pass; `data_logger` and its feature instantiation
-  unchanged.
+- **Acceptance:** expansion over chains, several dependency types and pairs; a type in several
+  entries, each with its own universe; errors for an unknown dependency type or one with no variant,
+  a pair dependency type, type-level cycles, a pair feature without a universe or with a universe
+  without pairs, a variant ID configured twice, variants of one type declaring different `Pair` or
+  `Deps`, a value type the engine does not support, and a bind error, all from `Expand`; a variant
+  ID containing `-` from `Feature.Validate`; `--validate-only` reports them all in one pass, one line
+  each; any error fails the build; `data_logger` unchanged but for an unregistered type or a bad
+  option reported once per registry.
+- Plan: `stage-5-expansion.md`.
 
 ### Stage 6 — serial engine
 
@@ -326,3 +333,6 @@ High-level only.
   (`ema_20_s2`, `ema_50_s2` on `configs/data_logger_v2.json`), the originals' omit it, so the
   exported records differ in those keys. Either the comparison maps the IDs, or the acceptance takes
   the new keys as intended (stage 7).
+- Variants are built in both registries, `_features` from `reg.Features` and the specs from
+  `reg.FeatureTypes`, from the same entries, so an unregistered type or a bad option is reported
+  twice. Accepted until `data_logger` and the originals retire (stage 5).

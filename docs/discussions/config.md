@@ -92,6 +92,8 @@ stop the run, so `build`'s surface on the next one.
 - **Feature IDs encode every identity-bearing field**, defaults included (`ema_20_s2`), built from
   the config struct ([[features]]). The original features omit defaults (`ema_20`) until they
   retire. A duplicate ID is therefore an error, not a deduplication.
+- **A feature type may appear in several entries**, each with its own universe ([[features]]
+  § Universes); an ID configured twice, in one entry or across entries, is still an error.
 - **Disabled blocks are not validated**, keeping them usable as scratch space.
 - **An engine with an unresolved dependency is skipped, not constructed.** Constructing it would
   only restate an error already reported. Accepted cost: errors inside that engine's own options
