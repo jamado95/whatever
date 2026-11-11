@@ -27,13 +27,18 @@ candle copy allocated. The engine's factory builds it, so --validate-only covers
 nodes hold the addresses of its views and candle copies.
 */
 type Graph struct {
-	columns map[string]column        // by composed ID
-	all     []column                 // pinned each frame
-	pairs   map[[2]int]int           // the pair table: (a, b), a < b → ring
-	candles frame.View[proto.Candle] // the candles nodes read, re-pinned each frame
-	history [][]proto.Candle         // one candle copy per stream, read through Input.Last; nil until New
-	depth   []int                    // each stream's copy depth; 0 where nothing reads its candles
+	columns  map[string]column        // by composed ID
+	all      []column                 // pinned each frame
+	pairs    map[[2]int]int           // the pair table: (a, b), a < b → ring
+	candles  frame.View[proto.Candle] // the candles nodes read, re-pinned each frame
+	history  [][]proto.Candle         // one candle copy per stream, read through Input.Last; nil until New
+	depth    []int                    // each stream's copy depth; 0 where nothing reads its candles
+	lookback int                      // bars every ring holds: the longest Lookback, at least 1
 }
+
+// Lookback is the longest Lookback across the graph's instances, at least 1: the bars every result
+// ring holds, and the lookback the data layer keeps.
+func (g *Graph) Lookback() int { return g.lookback }
 
 /*
 newGraph builds the pair table from the pair instances, sizes one column per composed ID and each
@@ -45,10 +50,11 @@ func newGraph(streams *proto.Streams, instances []instance) (*Graph, error) {
 	fit, errs := check(streams, instances)
 
 	g := &Graph{
-		columns: make(map[string]column),
-		pairs:   pairTable(fit),
-		history: make([][]proto.Candle, len(streams.All)),
-		depth:   depths(streams, fit),
+		columns:  make(map[string]column),
+		pairs:    pairTable(fit),
+		history:  make([][]proto.Candle, len(streams.All)),
+		depth:    depths(streams, fit),
+		lookback: lookback(fit),
 	}
 	shapes := g.shapes(streams, fit)
 	for _, in := range fit {
@@ -203,11 +209,6 @@ func pairTable(instances []instance) map[[2]int]int {
 // shapes sizes every composed ID's rings: one per stream of the table, or per pair of the pair table,
 // empty where the ID does not run.
 func (g *Graph) shapes(st *proto.Streams, instances []instance) map[string][]frame.Shape {
-	lookback := 1
-	for _, in := range instances {
-		lookback = max(lookback, in.feature.Lookback)
-	}
-
 	shapes := make(map[string][]frame.Shape)
 	for _, in := range instances {
 		sh, ok := shapes[in.id]
@@ -219,9 +220,18 @@ func (g *Graph) shapes(st *proto.Streams, instances []instance) map[string][]fra
 			sh = make([]frame.Shape, n)
 			shapes[in.id] = sh
 		}
-		sh[g.ring(in.at)] = ringShape(st, in.at, int64(lookback))
+		sh[g.ring(in.at)] = ringShape(st, in.at, int64(g.lookback))
 	}
 	return shapes
+}
+
+// lookback is the longest Lookback across instances, at least 1.
+func lookback(instances []instance) int {
+	l := 1
+	for _, in := range instances {
+		l = max(l, in.feature.Lookback)
+	}
+	return l
 }
 
 /*

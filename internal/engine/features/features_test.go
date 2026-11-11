@@ -6,6 +6,7 @@ import (
 	proto "whatever/internal/protocol"
 	"whatever/internal/protocol/feature"
 	"whatever/internal/protocol/frame"
+	reg "whatever/internal/registry"
 )
 
 const testStride = 300_000
@@ -52,13 +53,19 @@ func sum(n int) feature.Feature {
 }
 
 // diff is the change between the last two values of its dependency last.
-func diff() feature.Feature {
+func diff() feature.Feature { return diffOf("diff", "last") }
+
+// ddiff is the change between the last two values of its dependency diff.
+func ddiff() feature.Feature { return diffOf("ddiff", "diff") }
+
+// diffOf is the change between the last two values of its dependency of type dep, under ID id.
+func diffOf(id, dep string) feature.Feature {
 	return feature.Feature{
-		ID:       "diff",
+		ID:       id,
 		Lookback: 2,
-		Deps:     []string{"last"},
+		Deps:     []string{dep},
 		Bind: func(b *feature.Binder) func() (float64, bool) {
-			in := feature.Dep[float64](b, "last")
+			in := feature.Dep[float64](b, dep)
 			vals := make([]float64, 0, 2)
 			return func() (float64, bool) {
 				vals = in.Data(2, vals)
@@ -144,6 +151,54 @@ func pdiff() feature.Feature {
 		},
 	}
 }
+
+// ratio is its dependency sum's value over its dependency last's.
+func ratio() feature.Feature {
+	return feature.Feature{
+		ID:       "ratio",
+		Lookback: 1,
+		Deps:     []string{"sum", "last"},
+		Bind: func(b *feature.Binder) func() (float64, bool) {
+			s, l := feature.Dep[float64](b, "sum"), feature.Dep[float64](b, "last")
+			return func() (float64, bool) {
+				vs, _, _ := s.Latest()
+				vl, _, _ := l.Latest()
+				return vs / vl, true
+			}
+		},
+	}
+}
+
+// follow is its dependency of type dep's value, under ID id.
+func follow(id, dep string) feature.Feature {
+	return feature.Feature{
+		ID:       id,
+		Lookback: 1,
+		Deps:     []string{dep},
+		Bind: func(b *feature.Binder) func() (float64, bool) {
+			in := feature.Dep[float64](b, dep)
+			return func() (float64, bool) {
+				v, s, _ := in.Latest()
+				return v, s == frame.Fresh
+			}
+		},
+	}
+}
+
+// The test-only types, registered so Expand finds them; each factory returns its base variant.
+func init() {
+	for typ, f := range map[string]feature.Feature{
+		"last": last(), "sum": sum(2), "diff": diff(), "ddiff": ddiff(), "sign": sign(),
+		"seen": seen(), "spread": spread(), "pdiff": pdiff(), "ratio": ratio(), "label": label(),
+		"loop_a": follow("loop_a", "loop_b"), "loop_b": follow("loop_b", "loop_a"),
+		"loop_self": follow("loop_self", "loop_self"),
+	} {
+		reg.FeatureTypes.Register(typ, func(map[string]any) (feature.Feature, error) { return f, nil })
+	}
+}
+
+// spec is f as a variant of typ on universe u, "" for none.
+func spec(typ, u string, f feature.Feature) Spec { return Spec{Type: typ, Universe: u, Feature: f} }
 
 // label has a value type the engine does not support.
 func label() feature.Feature {

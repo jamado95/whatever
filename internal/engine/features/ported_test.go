@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"maps"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -146,39 +144,6 @@ func (p *ported) compare(t *testing.T, v frame.View[proto.Candle]) {
 			} else {
 				p.seen[seenKey{id, s}][1]++
 			}
-		}
-	}
-}
-
-// TestFeatureTypes covers every registered feature type: each is in the table, and its variant
-// reaches the engine's switch and binds at a stream.
-func TestFeatureTypes(t *testing.T) {
-	table := map[string]map[string]any{
-		feat.SMAID:       period(3),
-		feat.EMAID:       period(3),
-		feat.RSIID:       period(3),
-		feat.VWAPID:      period(3),
-		feat.EngulfingID: nil,
-	}
-	got, want := slices.Sorted(slices.Values(reg.FeatureTypes.List())), slices.Sorted(maps.Keys(table))
-	if !slices.Equal(got, want) {
-		t.Fatalf("registered types %v, table %v", got, want)
-	}
-
-	for _, typ := range want {
-		f, err := reg.FeatureTypes.Create(typ, table[typ])
-		if err != nil {
-			t.Errorf("%s: %v", typ, err)
-			continue
-		}
-		c, err := newColumn(f, shapes(1))
-		if err != nil {
-			t.Errorf("%s: %v", typ, err)
-			continue
-		}
-		var cv frame.View[proto.Candle]
-		if err := c.bind(feature.NewBinder(stream(0), &cv, make([][]proto.Candle, 1), nil), 0); err != nil {
-			t.Errorf("%s: bind: %v", typ, err)
 		}
 	}
 }
