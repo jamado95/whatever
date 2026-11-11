@@ -2,11 +2,14 @@ package main
 
 import (
 	"errors"
+	"reflect"
 	"slices"
 	"testing"
 
 	"whatever/internal/config"
+	"whatever/internal/engine/features"
 	proto "whatever/internal/protocol"
+	"whatever/internal/protocol/feature"
 	reg "whatever/internal/registry"
 )
 
@@ -56,19 +59,6 @@ func TestWireUnresolvedSubscriptionProvider(t *testing.T) {
 	}
 }
 
-func TestWireExporterFailedSkipsEngine(t *testing.T) {
-	c := stubComponents()
-	c.exporterFailed = true
-
-	eng, errs := wire(wireConfig(), c, testLogger())
-	if len(errs) != 0 {
-		t.Fatalf("expected no wiring errors, got: %v", errs)
-	}
-	if eng != nil {
-		t.Fatal("expected engine construction to be skipped")
-	}
-}
-
 // TestWireSplitsEngineErrors covers an engine factory's error: a joined one becomes one error per
 // part, each prefixed with the engine's type, and a single one stays one.
 func TestWireSplitsEngineErrors(t *testing.T) {
@@ -97,6 +87,32 @@ func TestWireSplitsEngineErrors(t *testing.T) {
 		if eng != nil {
 			t.Errorf("%s: expected no engine", engine)
 		}
+	}
+}
+
+// TestWireInjectsSpecs covers the feature engine's inputs: the components' specs reach the engine's
+// options as _featuresv2, and their universes as _universes.
+func TestWireInjectsSpecs(t *testing.T) {
+	var opts map[string]any
+	reg.Engines.Register("recording_test", func(o map[string]any) (reg.Runnable, error) {
+		opts = o
+		return nil, nil
+	})
+
+	c := stubComponents()
+	c.featuresV2 = []features.Spec{{Type: "rsi", Universe: "btc", Feature: feature.Feature{ID: "rsi_14"}}}
+	c.universes = map[string]config.Resolved{"btc": {Streams: []int{0}}}
+	cfg := wireConfig()
+	cfg.Engine.Type = "recording_test"
+
+	if _, errs := wire(cfg, c, testLogger()); len(errs) != 0 {
+		t.Fatalf("wire errors: %v", errs)
+	}
+	if !reflect.DeepEqual(opts["_featuresv2"], c.featuresV2) {
+		t.Errorf("_featuresv2 = %v, want %v", opts["_featuresv2"], c.featuresV2)
+	}
+	if !reflect.DeepEqual(opts["_universes"], c.universes) {
+		t.Errorf("_universes = %v, want %v", opts["_universes"], c.universes)
 	}
 }
 

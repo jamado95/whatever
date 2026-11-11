@@ -16,6 +16,7 @@ import (
 	_ "whatever/internal/domains/execution"
 	_ "whatever/internal/domains/exporter"
 	_ "whatever/internal/domains/features"
+	_ "whatever/internal/domains/featuresv2"
 	_ "whatever/internal/domains/market"
 	_ "whatever/internal/domains/provider"
 	_ "whatever/internal/domains/risk"

@@ -207,10 +207,11 @@ data_logger_v2 Run:     features.New(graph) ─▶ loop: data.Next ─▶ pacer 
   composed IDs, the graph checks, ending in stage 3's `newGraph`, which binds every instance; the
   `Graph` holds the columns, the pair table and the lookback, the instances left to stage 6;
   stage 4's registered-types test removed); `internal/protocol/feature` (`Feature.Validate`, the
-  checks on one variant); `internal/config` (`ResolveUniverses` returns only the universes that
-  resolved); the composition root (`cmd`) builds the new registry's variants beside today's features,
-  validates them and injects them as specs — the config entry's type, its universe's name, the
-  variant — with the resolved universes, and `wire` splits a joined engine error per part;
+  checks on one variant); the composition root (`cmd`) resolves each universe with `config.Resolve`,
+  keeping only those that resolve (`config.ResolveUniverses` removed), builds the new registry's
+  variants beside today's features, validates them and injects them as specs — the config entry's
+  type, its universe's name, the variant — with the resolved universes, and `wire` splits a joined
+  engine error per part;
   `data_logger_v2`'s factory calls `Expand`; tests with test-only features.
 - **Boundary:** the graph is built in `data_logger_v2`'s factory but not run yet.
 - **Acceptance:** expansion over chains, several dependency types and pairs; a type in several

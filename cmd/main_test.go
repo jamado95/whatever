@@ -118,6 +118,32 @@ func TestBuildDataLoggerV2AcceptsDerivations(t *testing.T) {
 	}
 }
 
+// TestBuildReportsExporterAndEngineErrors covers a failed exporter: the engine is still built,
+// without it, so its own option errors are reported in the same pass.
+func TestBuildReportsExporterAndEngineErrors(t *testing.T) {
+	cfg := &config.Config{
+		Providers:     []config.ComponentConfig{csvProvider("binance_csv")},
+		Subscriptions: []proto.Subscription{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "binance_csv"}},
+		Engine: config.EngineConfig{
+			Type:     "data_logger_v2",
+			Exporter: map[string]any{"type": "ghost_exporter"},
+			Options:  map[string]any{"limit": float64(-1)},
+		},
+	}
+	eng, errs := build(cfg, testLogger())
+	for _, want := range []string{
+		`exporter "ghost_exporter" not registered`,
+		`engine "data_logger_v2": limit must not be negative`,
+	} {
+		if !hasError(errs, want) {
+			t.Errorf("missing error %q, got: %v", want, errs)
+		}
+	}
+	if eng != nil {
+		t.Error("expected no engine")
+	}
+}
+
 func TestReportErrorsSplitsJoined(t *testing.T) {
 	var out bytes.Buffer
 	log := logger.NewLogger(logger.LoggerConfig{Level: "debug", Output: &out})
@@ -147,7 +173,7 @@ func TestBuildReportsUniverseErrors(t *testing.T) {
 	}
 	_, errs := build(cfg, testLogger())
 	for _, want := range []string{
-		`universes[0] (btc): rules[0].references[0]: no stream has ID "BTCUSDT:1h:ghost"`,
+		`universe "btc": rules[0].references[0]: no stream has ID "BTCUSDT:1h:ghost"`,
 		`feature "ghost_feature" not registered`,
 	} {
 		if !hasError(errs, want) {

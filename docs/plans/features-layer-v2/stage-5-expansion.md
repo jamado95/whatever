@@ -14,8 +14,8 @@ injects them, with the resolved universes, into the engine factory; `data_logger
 ```
 config        features[i]: type, universe, variants
 cmd           reg.FeatureTypes.Create ─▶ Feature.Validate ─▶ Spec{Type, Universe, Feature}
-              cfg.ResolveUniverses ─▶ the universes resolved without error, by name
-wire          _feature_specs, _universes ─▶ engine factory; a joined factory error split per part
+              config.Resolve per universe ─▶ the universes resolved without error, by name
+wire          _featuresv2, _universes ─▶ engine factory; a joined factory error split per part
 factory       features.Expand(streams, universes, specs)
                 types ─▶ dependencies, cycles ─▶ compositions ─▶ placement ─▶ newGraph ─▶ *Graph
 ```
@@ -91,11 +91,13 @@ the next step starts from that commit. Every step leaves the tree building, test
 - **The graph holds the lookback.** `newGraph` computes the longest `Lookback`, at least 1, once, and
   `Graph.Lookback` returns it: `data.New`'s lookback from stage 7. The instances stay out of the
   `Graph` until stage 6's schedules read them.
-- **Universes that fail are left out.** `ResolveUniverses` returns only the universes resolved
-  without error; its errors cover the rest, and fail the build. The composition root drops a spec
-  whose universe is missing, its error already reported. A dependent of a dropped type's last variant
-  would then also report it unconfigured, reachable only once a type with dependencies is registered
-  (iteration 3).
+- **Universes that fail are left out.** The composition root resolves each universe with
+  `config.Resolve` and keeps only those resolved without error; their errors, prefixed
+  `universe "name":`, cover the rest and fail the build. `config.ResolveUniverses` is removed, so
+  config keeps the pure resolver and the composition root its own state. The composition root drops
+  a spec whose universe is missing, its error already reported. A dependent of a dropped type's last
+  variant would then also report it unconfigured, reachable only once a type with dependencies is
+  registered (iteration 3).
 - **`wire` splits a joined factory error,** prefixing each part with `engine "<type>":`, so
   `reportErrors` logs and counts each. Each splits inline, no helper shared across files:
   `reportErrors` splits `Load`'s joined error, `wire` the engine's.
@@ -231,32 +233,49 @@ Errors: `feature: empty ID`, `feature: ID "x-1" contains '-'`, `feature: x_1: em
 
 ### Changes — `internal/config/universe.go`
 
-- `ResolveUniverses` keeps a universe in its map only when it resolved without error and, if used,
-  selects a stream. Its doc says so.
+- `ResolveUniverses` is removed: the composition root resolves each universe with `Resolve`.
 
 ### Changes — `cmd`
 
-- `instantiate.go`: `components` gains `specs []features.Spec` and `universes map[string]config.Resolved`,
-  the latter from `ResolveUniverses`. For each enabled entry, a type `reg.FeatureTypes` does not have
-  is reported `feature %q not registered`; otherwise each variant is created and validated, errors
-  reported as `feature %q variant %d: %w`, and a spec whose universe is not in `universes` is dropped.
-  Nothing is logged per spec: the original's line stays.
+- `instantiate.go`: `instantiate` builds each kind of component through a `components` method —
+  `addUniverse`, `addProvider`, `addFeature` (the originals, deprecated), `addFeatureV2`,
+  `addStrategy` and `addExporter`, the last taking the engine block — and universes first, since
+  the specs read them. `components` gains `featuresV2 []features.Spec` and
+  `universes map[string]config.Resolved`, and loses
+  `exporterFailed`: a failed exporter no longer skips the engine, which is built without it, so its
+  own option errors are reported in the same pass.
+  - `addUniverse` resolves a universe with `config.Resolve` and keeps it only when it resolves
+    without error and, if an enabled feature names it, selects a stream; errors are prefixed
+    `universe "name":`, the name validated by `Load`.
+  - `addFeatureV2`: for an enabled entry, a type `reg.FeatureTypes` does not have is reported
+    `feature %q not registered`; otherwise each variant is created and validated, errors reported
+    as `feature %q variant %d: %w`, and a spec whose universe is not in `universes` is dropped. Each
+    spec is logged `created feature: <ID>`; the originals no longer are.
 - `main.go`: blank-imports `internal/domains/featuresv2`, so `reg.FeatureTypes` holds the ported
   types.
-- `wire.go`: injects `_feature_specs` and `_universes`. Nothing reads them until step 4.
+- `wire.go`: injects `_featuresv2` and `_universes`. Nothing reads them until step 4. `depsOK`
+  starts true.
 
 ### Tests
 
 - `internal/protocol/feature/feature_test.go` — **`TestValidate`**: each error above; a valid
   variant, with and without `Deps`, passes.
-- `internal/config/config_test.go` — **`TestResolveUniverses`**: the map holds `btc`, `unused` and
-  `disabled_only`, not `typo` and `empty`.
+- `internal/config/config_test.go` — `TestResolveUniverses` moves to `cmd` as
+  `TestInstantiateUniverses`.
+- `cmd/instantiate_test.go` — **`TestInstantiateUniverses`**: an unmatched name and a used universe
+  selecting nothing are errors, the latter once however many features name it; the map holds `btc`,
+  `unused` and `disabled_only`, not `typo` and `empty`.
+- `cmd/main_test.go` — `TestBuildReportsUniverseErrors` expects the `universe "btc":` prefix.
+- `cmd/main_test.go` — **`TestBuildReportsExporterAndEngineErrors`**: an unregistered exporter and a
+  negative `limit` are both reported by one `build`.
+- `cmd/wire_test.go` — `TestWireExporterFailedSkipsEngine` removed; `cmd/instantiate_test.go` —
+  `TestInstantiateExporterFailure` checks the exporter is nil.
 - `cmd/instantiate_test.go` — **`TestInstantiateSpecs`**: one spec per enabled variant, with its type
   and universe; disabled entries build none; a spec on a universe that failed is dropped; a type
   missing from `reg.FeatureTypes` (a test type registered in `reg.Features` only) is reported; a
   variant failing `Validate` (a test type registered with a `-` in its ID) is reported, path-named.
 - `cmd/wire_test.go` — **`TestWireInjectsSpecs`**: a stub engine recording its options receives the
-  components' specs as `_feature_specs` and universes as `_universes`.
+  components' specs as `_featuresv2` and universes as `_universes`.
 
 ### Acceptance
 
@@ -266,7 +285,7 @@ Errors: `feature: empty ID`, `feature: ID "x-1" contains '-'`, `feature: x_1: em
 
 ### Changes — `internal/engine/data_logger_v2.go`
 
-- The factory reads `_feature_specs` (`[]features.Spec`) and `_universes`
+- The factory reads `_featuresv2` (`[]features.Spec`) and `_universes`
   (`map[string]config.Resolved`), both required, and calls `features.Expand` before
   `feat.NewFeatureChain`, returning its error unwrapped. `DataLoggerV2` gains `graph *features.Graph`.
   `Run` does not read it: stage 7 runs it.
@@ -274,7 +293,7 @@ Errors: `feature: empty ID`, `feature: ID "x-1" contains '-'`, `feature: x_1: em
 ### Tests
 
 - `internal/engine/data_logger_v2_test.go` — **`TestDataLoggerV2Factory`**: options carry specs and
-  universes; missing `_feature_specs` or `_universes` is an error; a variant configured twice is
+  universes; missing `_featuresv2` or `_universes` is an error; a variant configured twice is
   `Expand`'s error; a valid spec's graph has its `Lookback`.
 - `cmd/main_test.go` — **`TestBuildReportsExpandErrors`**: a `data_logger_v2` config with `rsi` 14 in
   two entries and `sma` 20 twice in one reports two errors, `engine "data_logger_v2": features:
@@ -286,7 +305,7 @@ Errors: `feature: empty ID`, `feature: ID "x-1" contains '-'`, `feature: x_1: em
   - WIP: expansion implemented; `data_logger_v2`'s factory builds the graph, which nothing runs yet.
   - Solution: references this stage.
 - [config.md](../../discussions/config.md) — WIP, universes: consumed by `data_logger_v2`'s factory
-  through `Expand`; `ResolveUniverses` returns only the universes that resolved.
+  through `Expand`.
 - [main.md](main.md) — stage 5 marked implemented.
 - `docs/Architecture.md` — `internal/engine/features`: `Expand`, from the composition root's specs and
   universes; `internal/protocol/feature`: `Feature.Validate`.
@@ -343,6 +362,17 @@ Committed with the amendment, before step 1:
   - § Reversed on 2026-11-11: one pass replaced by stages.
 - [config.md](../../discussions/config.md) — § Dry run: `Expand`'s stages, like `Load`'s errors
   preceding `build`'s.
+
+Committed with step 3, after the composition root's refactor:
+
+- [main.md](main.md) — stage 5 touches: universes resolved in the composition root,
+  `config.ResolveUniverses` removed.
+- [config.md](../../discussions/config.md) — the pieces table and WIP, universes: each universe
+  resolved by `addUniverse` with `Resolve`, only those resolving kept; resolution errors
+  prefixed `universe "name":`.
+- `configs/README.md` — § Examples: resolution errors prefixed `universe "name":`.
+- [config.md](../../discussions/config.md) — Decisions, *An engine with an unresolved dependency is
+  skipped*: a failed optional dependency, the exporter, does not skip it.
 
 ## Out of scope
 

@@ -48,8 +48,10 @@ func wire(cfg *config.Config, c *components, log *logger.Logger) (reg.Runnable, 
 	// under "options"; only resolved instances are injected here.
 	engineOpts := cfg.Engine.Opts()
 	engineOpts["_features"] = c.features
+	engineOpts["_featuresv2"] = c.featuresV2
+	engineOpts["_universes"] = c.universes
 
-	depsOK := !c.exporterFailed // exporter error already recorded by instantiate
+	depsOK := true
 
 	// one provider instance per subscription
 	subProviders := make(map[proto.Subscription]proto.DataProvider, len(cfg.Subscriptions))

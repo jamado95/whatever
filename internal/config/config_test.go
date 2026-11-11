@@ -3,7 +3,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -306,44 +305,6 @@ func TestUniverseErrors(t *testing.T) {
 			}
 			wantErrs(t, err.(interface{ Unwrap() []error }).Unwrap(), tc.want...)
 		})
-	}
-}
-
-func TestResolveUniverses(t *testing.T) {
-	named := func(name string, rules ...string) Universe {
-		u := universe(t, rules...)
-		u.Name = name
-		return u
-	}
-	cfg := &Config{
-		Universes: []Universe{
-			named("btc", `{"symbol": ["BTC*"], "timeframe": ["1h"]}`),
-			named("typo", `{"references": ["BTCUSDT:1h:binance"]}`),
-			named("empty", `{"symbol": ["SOL*"]}`),
-			named("unused", `{"symbol": ["SOL*"]}`),
-			named("disabled_only", `{"symbol": ["SOL*"]}`),
-		},
-		Features: []FeatureConfig{
-			{Type: "rsi", Universe: "btc"},
-			{Type: "sma", Universe: "typo"},
-			{Type: "ema", Universe: "empty"},
-			{Type: "vwap", Universe: "disabled_only", Disabled: true},
-		},
-	}
-	st := testStreams()
-
-	got, errs := cfg.ResolveUniverses(st)
-	wantErrs(t, errs,
-		`universes[1] (typo): rules[0].references[0]: no stream has ID "BTCUSDT:1h:binance"`,
-		"universes[2] (empty): selects no streams")
-
-	if len(got) != len(cfg.Universes) {
-		t.Fatalf("got %d universes, want one per name", len(got))
-	}
-	want := []int{index(t, st, btc1h), index(t, st, btc1hD)}
-	slices.Sort(want)
-	if !slices.Equal(got["btc"].Streams, want) {
-		t.Errorf("btc = %s, want BTC 1h streams", render(st, got["btc"]))
 	}
 }
 

@@ -248,8 +248,8 @@ Any other key is the strategy's own option. No strategy is registered in the def
 | An empty list in a rule | `universes[0] (btc): rules[0].symbol: empty list` |
 | `references` and `pairs` in one rule | `universes[0] (btc): rules[1]: references and pairs are exclusive` |
 | A filter on explicit pairs | `universes[0] (btc): rules[1]: explicit pairs take no filter` |
-| A name that is no stream's ID | `universes[0] (btc): rules[1].references[0]: no stream has ID "BTCUSDT:1h:btc_5m"` |
-| A used universe selecting nothing | `universes[0] (btc): selects no streams` |
+| A name that is no stream's ID | `universe "btc": rules[1].references[0]: no stream has ID "BTCUSDT:1h:btc_5m"` |
+| A used universe selecting nothing | `universe "btc": selects no streams` |
 | A subscription naming an unknown provider | `subscriptions[1] (BTCUSDT:1d:ghost) references provider "ghost", which was not instantiated (disabled or missing)` |
 | An unregistered feature type | `feature "macd" not registered` |
 | A misspelt feature option | `feature "rsi" variant 0: json: unknown field "periodd"` |

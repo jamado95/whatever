@@ -98,7 +98,8 @@ the same way in stages: the first check stage with errors stops it ([[features]]
 - **Disabled blocks are not validated**, keeping them usable as scratch space.
 - **An engine with an unresolved dependency is skipped, not constructed.** Constructing it would
   only restate an error already reported. Accepted cost: errors inside that engine's own options
-  surface on the next run.
+  surface on the next run. A failed optional dependency, the exporter, does not skip it: the engine
+  is built without it, so its own errors are reported in the same pass.
 
 ## Solution
 
@@ -116,7 +117,8 @@ As implemented:
 |---|---|
 | `Decode`, `DecodeOptions`, `Dep`, `OptDep`, `Duration`, `Validator` | `internal/config/decode.go` |
 | File shape, strict `Load`, `EngineConfig.Opts()` | `internal/config/config.go` |
-| `Universe`, `Rule`, `Pairs`, `Resolve`, `ResolveUniverses` | `internal/config/universe.go` |
+| `Universe`, `Rule`, `Pairs`, `Resolve` | `internal/config/universe.go` |
+| Resolving each universe over the stream table, `addUniverse` | `cmd/instantiate.go` |
 | `Timeframe.UnmarshalJSON` | `internal/protocol/provider.go` |
 | `TickerType`, `TickerConfig`, `newTicker` | `internal/engine/ticker.go` |
 | Per-component config structs | beside each factory |
@@ -167,8 +169,11 @@ Resolved by this work: silent ticker fallback, triplicated engine parsers, untyp
     [features § Solution — Universes](features.md#universes-1).
   - **Universe resolution is config's** — `Resolve`, a pure function of rules over the stream table
     (`proto.Streams`). `Load` checks universes' shape only; the composition root builds the table
-    once in `instantiate`, resolves universes over it through `ResolveUniverses`, and injects the
-    table as `_streams`. See [features § Feature layer](features.md#feature-layer).
+    once in `instantiate`, resolves each universe over it with `Resolve` (`addUniverse`),
+    keeping only those that resolve without error, and injects the table as `_streams`. A used
+    universe selecting no stream is an error there. Resolution errors are prefixed
+    `universe "name":`, `Load`'s shape errors `universes[i] (name):`. See
+    [features § Feature layer](features.md#feature-layer).
   - **Rules name streams by their stream IDs**, derived ones included, so a name matches at most one
     stream and subscriptions need no new rule. Lookup is the only check on a name. See
     [features § Universes](features.md#universes).

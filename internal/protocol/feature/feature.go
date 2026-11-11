@@ -3,6 +3,8 @@ package feature
 import (
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
 	proto "whatever/internal/protocol"
 	"whatever/internal/protocol/frame"
@@ -18,6 +20,27 @@ type Feature struct {
 	Pair     bool     // runs on a pair of streams, unordered; otherwise on one stream
 	Deps     []string // feature types read, each once, in composition order; none reads candles
 	Bind     any      // a Bind[T], T its value type: what the feature engine switches on
+}
+
+// Validate checks what the contract requires of any variant: an ID, without '-', and Deps naming
+// each type once.
+func (f Feature) Validate() error {
+	if f.ID == "" {
+		return errors.New("feature: empty ID")
+	}
+	if strings.Contains(f.ID, "-") {
+		return fmt.Errorf("feature: ID %q contains '-'", f.ID)
+	}
+	for i, d := range f.Deps {
+		if d == "" {
+			return fmt.Errorf("feature: %s: empty dependency type", f.ID)
+		}
+		if slices.Contains(f.Deps[:i], d) {
+			return fmt.Errorf("feature: %s: dependency type %q listed twice", f.ID, d)
+		}
+	}
+
+	return nil
 }
 
 /*

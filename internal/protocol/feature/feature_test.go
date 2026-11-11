@@ -173,6 +173,33 @@ func TestBindErrors(t *testing.T) {
 	}
 }
 
+// TestValidate covers the checks on one variant: an empty ID, a '-' in it, and an empty or repeated
+// dependency type; a valid variant passes, with and without Deps.
+func TestValidate(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		f    Feature
+		want string // "" when valid
+	}{
+		{"valid, without Deps", Feature{ID: "rsi_14"}, ""},
+		{"valid, with Deps", Feature{ID: "zscore_50", Deps: []string{"rsi", "vwap"}}, ""},
+		{"an empty ID", Feature{}, "feature: empty ID"},
+		{"a '-' in the ID", Feature{ID: "x-1"}, `feature: ID "x-1" contains '-'`},
+		{"an empty dependency type", Feature{ID: "x_1", Deps: []string{"rsi", ""}},
+			"feature: x_1: empty dependency type"},
+		{"a dependency type twice", Feature{ID: "x_1", Deps: []string{"rsi", "vwap", "rsi"}},
+			`feature: x_1: dependency type "rsi" listed twice`},
+	} {
+		err := c.f.Validate()
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%s: %v", c.name, err)
+		case c.want != "" && (err == nil || err.Error() != c.want):
+			t.Errorf("%s: Validate = %v, want %q", c.name, err, c.want)
+		}
+	}
+}
+
 // TestInputAllocations checks the hot path: with dst capacity, input reads allocate nothing, nor do
 // reads of a candle copy.
 func TestInputAllocations(t *testing.T) {
