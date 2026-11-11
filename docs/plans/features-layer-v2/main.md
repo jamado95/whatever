@@ -218,8 +218,9 @@ data_logger_v2 Run:     features.New(graph) ─▶ loop: data.Next ─▶ pacer 
   a pair dependency type, type-level cycles, a pair feature without a universe or with a universe
   without pairs, a variant ID configured twice, variants of one type declaring different `Pair` or
   `Deps`, a value type the engine does not support, and a bind error, all from `Expand`; a variant
-  ID containing `-` from `Feature.Validate`; `--validate-only` reports them all in one pass, one line
-  each; any error fails the build; `data_logger` unchanged but for an unregistered type or a bad
+  ID containing `-` from `Feature.Validate`; `--validate-only` reports them one line each, `Expand`
+  stopping at its first check stage with errors and reporting all of that stage's; any error fails
+  the build; `data_logger` unchanged but for an unregistered type or a bad
   option reported once per registry.
 - Plan: `stage-5-expansion.md`.
 

@@ -22,9 +22,11 @@ factory       features.Expand(streams, universes, specs)
 
 The plan, with the decisions it records in [main.md](main.md),
 [features.md](../../discussions/features.md) and [config.md](../../discussions/config.md), is
-committed before step 1. The stage is then implemented in four steps, in order. Each step is a
-review checkpoint: its changes stay unstaged for review, are committed once approved, and the next
-step starts from that commit. Every step leaves the tree building, tested and `make check` clean.
+committed before step 1. It was amended during step 1 to stop expansion at its first check stage
+with errors (`c9ada60` had it report every problem in one pass); the amendment, with the decisions
+it records, is committed before step 1. The stage is then implemented in four steps, in order. Each
+step is a review checkpoint: its changes stay unstaged for review, are committed once approved, and
+the next step starts from that commit. Every step leaves the tree building, tested and `make check` clean.
 
 | Step | Adds | Commit |
 |---|---|---|
@@ -46,13 +48,13 @@ step starts from that commit. Every step leaves the tree building, tested and `m
   it. With `variantID`, a `-` can only come from a negative value, which every port's config rejects,
   so the check guards future types.
 - **Graph checks belong to `Expand`:** everything that needs more than one variant.
-  - Variants of one type declare the same `Pair` and `Deps`; a variant that does not fails its type.
-  - A variant ID is configured once, across every entry and type; the later spec is dropped. Since
-    variant IDs hold no `-` and composition is fixed per type, unique variant IDs make composed IDs
-    unique: main.md's "duplicate composed IDs".
+  - Variants of one type declare the same `Pair` and `Deps`.
+  - A variant ID is configured once, across every entry and type. Since variant IDs hold no `-` and
+    composition is fixed per type, unique variant IDs make composed IDs unique: main.md's "duplicate
+    composed IDs".
   - A dependency type is registered (`reg.FeatureTypes.Has`), has a configured variant and is not a
-    pair feature; otherwise its dependent type fails.
-  - Type-level cycles, each reported once with its path; the types on it fail.
+    pair feature.
+  - Type-level cycles, each reported once with its path.
   - A pair spec names a universe, and that universe has pairs; a spec's universe is in the map.
 - **A type may repeat across entries,** each entry with its own universe: `rsi_14` on one universe and
   `rsi_21` on another. A variant ID in two entries is an error, not a union of universes: a duplicate
@@ -70,11 +72,14 @@ step starts from that commit. Every step leaves the tree building, tested and `m
 - **Any error fails the build.** `Expand` returns a graph only when it found no error; otherwise the
   factory fails, the engine is not constructed and nothing runs. No configured feature or dependency
   is ever left out of a run that starts.
-- **Each error is reported once, at its cause.** Within a failing pass, checking goes on past an
-  error so every problem is reported: a type whose dependency type failed is set aside without
-  restating it, and a spec whose universe is wrong is not placed but still counts as its type's
-  variant, so its dependents are not reported unconfigured. `newGraph` runs on what is left, so value
-  types and bind errors are reported in the same pass.
+- **Expansion stops at its first check stage with errors,** returning all of that stage's errors,
+  joined. The stages run in order: grouping, dependencies, cycles, placement, then `newGraph`'s
+  sizing and binding. Each relies on those before it, the cycle walk on every dependency type being
+  configured and composition on the types being acyclic, so no stage tracks failed types or reasons
+  about a partial graph. Fixing one stage's errors surfaces the next stage's on the next run, as
+  `Load`'s errors precede `build`'s ([config.md](../../discussions/config.md) § Dry run). Reverses
+  main.md's "all in one pass": the type-level errors are mostly code bugs, and the config mistakes
+  `Expand` can catch are few.
 - **Composed IDs are a depth-first walk.** A variant's ID, then each dependency's composed ID in `Deps`
   order: `ratio_1` over `zscore` and `vwap`, `zscore` over `rsi`, gives `ratio_1-zscore_50-rsi_14-vwap_20`.
   One composition per combination of dependency variants, memoised per type.
@@ -118,29 +123,26 @@ type Spec struct {
 Expand turns specs into a validated Graph over st. Each variant is composed with every variant of its
 dependency types and placed on its universe's streams, every stream without one, or its universe's
 pairs; its dependencies are pulled onto the streams it runs on, both ends for a pair. newGraph then
-sizes and binds them. Specs are assumed to have passed Feature.Validate. Every problem is reported,
-joined.
+sizes and binds them. Specs are assumed to have passed Feature.Validate. It stops at the first check
+stage with errors, returning all of that stage's, joined.
 */
 func Expand(st *proto.Streams, universes map[string]config.Resolved, specs []Spec) (*Graph, error)
 ```
 
-In order:
+In order, each stage returning its errors, joined, when it finds any:
 
 1. **Types.** Specs grouped by `Type`, in order of first appearance. A variant ID seen before, in any
-   type, is reported and its spec dropped. A variant declaring a `Pair` or `Deps` unlike its type's
-   first fails the type.
+   type, and a variant declaring a `Pair` or `Deps` unlike its type's first are reported.
 2. **Dependencies.** For each type, each `Deps` entry in order: not registered, registered with no
-   spec, or a pair type fails the dependent.
-3. **Cycles.** A depth-first walk over the configured types' `Deps`, each back edge reported as its
-   path; the types on it fail.
-4. **Propagation.** A type depending on a failed type fails, with no error of its own.
-5. **Compositions.** Per surviving type, memoised: each variant crossed with every composition of each
-   dependency type, in `Deps` order; the composed ID joins their IDs with `-`.
-6. **Placement.** Per surviving spec: a pair spec with no universe, a universe without pairs, or a
-   universe not in the map is reported, and the spec places nothing. Otherwise each of its variant's
-   compositions goes on each coordinate, ascending, and recursively each dependency's at the stream,
-   or each end. Placements are deduplicated by composed ID and coordinate.
-7. **Graph.** `newGraph(st, instances)`; its error joins `Expand`'s.
+   spec, or a pair type is reported.
+3. **Cycles.** A depth-first walk over the types' `Deps`, each back edge reported as its path.
+4. **Placement.** Each spec's coordinates: a pair spec with no universe, a universe without pairs, or
+   a universe not in the map is reported. Then each of its variant's compositions goes on each
+   coordinate, ascending, and recursively each dependency's at the stream, or each end; placements
+   are deduplicated by composed ID and coordinate. Compositions are memoised per type: each variant
+   crossed with every composition of each dependency type, in `Deps` order, the composed ID their IDs
+   joined with `-`.
+5. **Graph.** `newGraph(st, instances)`, reporting value types and bind errors.
 
 Errors, each prefixed `features:`:
 
@@ -181,10 +183,12 @@ in `init`, each factory returning its base variant, so `Expand` finds them. New 
   own, and a dependent composes with both.
 - **`TestExpandLookback`** — the longest `Lookback` across placed instances, dependencies included; 1
   with no specs.
-- **`TestExpandErrors`** — each row of the error table, by message; a dependent of a failed type adds
-  no error; a spec with a wrong universe still serves its dependents.
-- **`TestExpandOnePass`** — one call with an `Expand` error, an unsupported value type (`label`) and a
-  bind error (`diff` over `sign`) reports all three; two calls give the same errors in the same order.
+- **`TestExpandErrors`** — each row of the error table, by message; a dependent of a type with an
+  error adds none of its own.
+- **`TestExpandStages`** — a stage's errors arrive together and stop expansion: two placement errors
+  together, hiding a bind error; a duplicate hiding a cycle, and a dependency error hiding a
+  placement error; `newGraph`'s unsupported value type (`label`) and bind error (`diff` over `sign`)
+  together. Two calls give the same errors in the same order.
 
 **`internal/engine/features/ported_test.go`** — `TestFeatureTypes` removed, with what only it used.
 
@@ -301,8 +305,9 @@ Errors: `feature: empty ID`, `feature: ID "x-1" contains '-'`, `feature: x_1: em
 - `make validate` passes on `configs/data_logger_v2.json` and `configs/data_logger.json`.
 - Stage acceptance ([main.md](main.md), as amended): expansion over chains, several dependency types
   and pairs; each error of the table, `Feature.Validate`'s, an unsupported value type and a bind
-  error reported in one `--validate-only` pass, one line each; `data_logger`'s behaviour unchanged
-  but for an unregistered type or a bad option reported twice.
+  error reported by `--validate-only`, one line each, `Expand` stopping at its first check stage
+  with errors; `data_logger`'s behaviour unchanged but for an unregistered type or a bad option
+  reported twice.
 
 ## Documentation recorded at planning
 
@@ -326,6 +331,17 @@ Committed with this plan, before step 1:
     features* — `Expand` rejects a pair dependency type until then.
 - [config.md](../../discussions/config.md) — Decisions: a feature type may appear in several entries;
   an ID configured twice is still an error.
+
+Committed with the amendment, before step 1:
+
+- [main.md](main.md) — stage 5 acceptance: `--validate-only` reports one line per error, `Expand`
+  stopping at its first check stage with errors.
+- [features.md](../../discussions/features.md):
+  - § Feature layer, *Expansion and binding at construction*: expansion stops at its first check
+    stage with errors, not all in one pass.
+  - § Reversed on 2026-11-11: one pass replaced by stages.
+- [config.md](../../discussions/config.md) — § Dry run: `Expand`'s stages, like `Load`'s errors
+  preceding `build`'s.
 
 ## Out of scope
 

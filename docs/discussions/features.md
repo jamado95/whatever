@@ -157,7 +157,9 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   resolved universes, and knows nothing of expansion. The engine's factory calls `features.Expand`,
   a pure function turning them and the stream table into a validated `Graph` — instances with
   composed IDs, every node bound, the pair table, the lookback — so `--validate-only` reports
-  expansion and bind errors, all in one pass. A node needs the addresses of its inputs' views, not
+  expansion and bind errors. Expansion stops at its first check stage with errors (grouping,
+  dependencies, cycles, placement, binding), reporting all of that stage's; each stage relies on
+  those before it. See § Reversed on 2026-11-11. A node needs the addresses of its inputs' views, not
   rings, so `features.New(graph)`, in `Run` beside `data.New`, only allocates the rings and builds
   the schedules; `Step(view)` runs one frame. A `Graph` runs once: it holds bound nodes and the views
   they read. See § Reversed on 2026-11-07.
@@ -312,6 +314,14 @@ context.
 |---|---|---|
 | A node copies its candle reads into scratch allocated in `Bind`: `Input.Data(n, dst)` | Candle reads are prefixes of one engine copy per stream, `Input.Last(n)`, refilled once per frame at the stream's longest lookback | Scratch held a copy of a stream's history per variant. With the reference variants, a copy per stream read about 3× faster than per-node scratch and 2.2× faster than iterating the ring in place per node, holding the longest lookback per stream |
 | IDs omit defaulted parameters (`ema_20`), built per type by `iDWithPeriod` and `iDWithParam` | Defaults included (`ema_20_s2`), every ID built by `variantID` from the config struct's `id` tags | One helper builds every ID, and an ID states every parameter |
+
+### Reversed on 2026-11-11
+
+Superseded by § Feature layer above; kept for context.
+
+| Was | Now | Why |
+|---|---|---|
+| `--validate-only` reports expansion and bind errors all in one pass, a failed type set aside so later checks still run | Expansion stops at its first check stage with errors, reporting all of that stage's | Each stage relies on those before it, so none tracks failed types or reasons about a partial graph; the errors it can hide are few, mostly code bugs |
 
 ## Solution
 

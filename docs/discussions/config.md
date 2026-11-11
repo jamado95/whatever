@@ -73,7 +73,8 @@ validation machinery because `main.go` already builds everything before running 
 factory performs I/O. Errors are accumulated rather than fatal, so one pass reports every
 independent problem: `Load` collects its validation errors, universes' shape included, and `build`
 collects construction errors, universe resolution over the stream table among them. `Load`'s errors
-stop the run, so `build`'s surface on the next one.
+stop the run, so `build`'s surface on the next one. Feature expansion, in the engine's factory, works
+the same way in stages: the first check stage with errors stops it ([[features]] § Feature layer).
 
 ## Decisions
 
