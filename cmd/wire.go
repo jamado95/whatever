@@ -97,9 +97,16 @@ func wire(cfg *config.Config, c *components, log *logger.Logger) (reg.Runnable, 
 		return nil, errs
 	}
 
+	// a joined error is reported per part, each its own config error
 	eng, err := reg.Engines.Create(cfg.Engine.Type, engineOpts)
 	if err != nil {
-		errs = append(errs, fmt.Errorf("engine %q: %w", cfg.Engine.Type, err))
+		parts := []error{err}
+		if joined, ok := err.(interface{ Unwrap() []error }); ok {
+			parts = joined.Unwrap()
+		}
+		for _, e := range parts {
+			errs = append(errs, fmt.Errorf("engine %q: %w", cfg.Engine.Type, e))
+		}
 		return nil, errs
 	}
 

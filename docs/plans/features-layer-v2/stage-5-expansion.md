@@ -97,7 +97,8 @@ the next step starts from that commit. Every step leaves the tree building, test
   would then also report it unconfigured, reachable only once a type with dependencies is registered
   (iteration 3).
 - **`wire` splits a joined factory error,** prefixing each part with `engine "<type>":`, so
-  `reportErrors` logs and counts each. `reportErrors` and `wire` share the split.
+  `reportErrors` logs and counts each. Each splits inline, no helper shared across files:
+  `reportErrors` splits `Load`'s joined error, `wire` the engine's.
 - **`Expand` runs before the feature chain** in `data_logger_v2`'s factory and its error is returned
   unwrapped. A duplicate variant is then reported once, by `Expand`, not again by the chain.
 - **Variants are built in both registries until the originals retire.** The composition root builds
@@ -200,8 +201,8 @@ in `init`, each factory returning its base variant, so `Expand` finds them. New 
 
 ### Changes — `cmd`
 
-- `main.go`: the split `reportErrors` does moves into a helper `reportErrors` and `wire` both use.
-- `wire.go`: a joined error from the engine factory is split, each part prefixed `engine %q:`.
+- `wire.go`: a joined error from the engine factory is split inline, each part prefixed
+  `engine %q:`. `reportErrors` is unchanged.
 
 No engine returns a joined error yet: `Expand`'s arrive in step 4.
 
