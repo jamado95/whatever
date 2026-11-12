@@ -104,7 +104,7 @@ Tiered. Stage docs live beside this one, produced iteratively:
 - `stage-3-contract-store.md` — *implemented.*
 - `stage-4-ported-features.md` — *implemented.*
 - `stage-5-expansion.md` — *implemented.*
-- `stage-6-engine.md` — *to plan.*
+- `stage-6-engine.md` — *planned.*
 - `stage-7-data-logger-v2.md` — *to plan.*
 
 Ordering: 1 and 2 are independent; 3 depends on 1; 4 on 3; 5 on 2 and 3; 6 on 1, 3 and 5; 7 on 4
@@ -120,9 +120,9 @@ is unchanged.
 ```
 composition root:       config ─▶ registry v2 (variants) + resolved universes ─▶ injected
 data_logger_v2 factory: features.Expand(streams, universes, specs) ─▶ graph         (--validate-only)
-data_logger_v2 Run:     features.New(graph) ─▶ loop: data.Next ─▶ pacer ─▶ fe.Step(view) ─▶ exporter
-                                                         │                     │
-                                                         └───── frame.View ────┘ data rings + result rings
+data_logger_v2 Run:     features.New(graph, log) ─▶ loop: data.Next ─▶ pacer ─▶ fe.Step(view) ─▶ exporter
+                                                              │                     │
+                                                              └───── frame.View ────┘ data rings + result rings
 ```
 
 ### Stage 1 — `flow/frame` ✅ implemented
@@ -228,23 +228,31 @@ data_logger_v2 Run:     features.New(graph) ─▶ loop: data.Next ─▶ pacer 
 ### Stage 6 — serial engine
 
 - **Goal:** the feature engine runs a frame.
-- **Touches:** `internal/engine/features` — `New(graph, …)`, called in `Run`: memory estimate and
-  warning, counting the candle copies (stage 4), the rings, due-pattern schedules; `Step(view)`: pick
-  the pattern, drop nodes whose inputs are not `Fresh`, run the serial topological order; tests with
-  test-only features.
+- **Touches:** `internal/engine/features` — the graph keeps its nodes, each linked to its
+  dependencies'; `New(graph, log)`, called in `Run`: the memory estimate and warning, isolated in
+  `memoryWarning`, counting the candle copies (stage 4), the rings, the serial order and one schedule
+  per due pattern; `Step(view)`: pick the pattern, run the serial order, firing a node only when its
+  leg is `Fresh` and each dependency fired with a value; the engine tests' hand-firing and the ported
+  comparison through `Step`; tests with test-only features. `internal/protocol` — a test of the
+  timeframes' invariants over `ValidTimeframes`, the divisibility chain the due patterns rely on
+  among them.
 - **Acceptance:** dependencies computed before their dependents; a coarse stream's nodes fire only at
-  its due columns; `Gap` and `Ended` legs fire nothing, and their nodes' results are written `Gap` /
-  `Ended` carrying the last value; `Partial` frames compute their `Fresh` streams; pairs fire at their
-  ends' larger period only when both ends are `Fresh`; a run equals a brute-force evaluation over the
-  same frames; the warning fires above 1 GB; no allocation per `Step`.
+  its due columns; `Gap` and `Ended` legs fire nothing, and their nodes' results are written `Gap`, or
+  `Ended` once, at the first due column at or after the end, carrying the last value; a dependent of
+  a dependency that cannot compute is written `Gap` without firing; `Partial` frames compute their
+  `Fresh` streams; pairs fire at their ends' larger period only when both ends are `Fresh`, and end
+  when either end does; a run equals a brute-force evaluation over the same frames; the warning fires
+  above 1 GiB, naming the lookback and the composed IDs holding the most memory; no allocation per
+  `Step`.
+- Plan: `stage-6-engine.md`.
 
 ### Stage 7 — `data_logger_v2` integration
 
 - **Goal:** `data_logger_v2` runs the feature engine; the bridge is gone.
-- **Touches:** `internal/engine/data_logger_v2.go` (`features.New(graph)` in `Run`, `Step` after the
-  pacer, the exported record filled from the feature layer's view, `data.New` sized from the graph's
-  lookback); its tests; a serial `Step` benchmark at N = 10, 100, 1000
-  streams; `docs/Commands.md`.
+- **Touches:** `internal/engine/data_logger_v2.go` (`features.New(graph, log)` in `Run`, `Step` after
+  the pacer, the exported record filled from the feature layer's view, `data.New` sized from the
+  graph's lookback); its tests; a serial `Step` benchmark at N = 10, 100, 1000 streams;
+  `docs/Commands.md`.
 - **Acceptance:** on `configs/data_logger_v2.json`, records and feature values identical to the
   bridge's output; `--validate-only` valid for both configs; `make check` clean; benchmark checked
   in.

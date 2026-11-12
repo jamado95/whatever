@@ -196,8 +196,10 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   input — a `Gap`, `Pending` or `Ended` leg at a due column, or a coarse stream between its due
   columns — does not fire it. `Partial` frames compute over their `Fresh` streams. A skipped column
   is a `Gap` slot carrying the last value, and history reads skip it, like `Gap` candle slots. A
-  node that runs but cannot compute (warm-up) is written `Gap` too, and still releases its
-  dependents.
+  node that runs but cannot compute (warm-up) is written `Gap` too; it still releases its
+  dependents, which, reading a non-`Fresh` input, are written `Gap` without firing. A coordinate
+  whose leg ends is written `Ended` once, at its first due column at or after the end, and nothing
+  after, so its history stays readable; a pair ends when either end does.
 - **A pair's sampling clock** defaults to the least common multiple of its streams' periods, so both
   ends are due where it fires.
 - **Due-pattern schedules.** Which nodes may fire at `c` depends only on which periods divide `c`, a
@@ -255,7 +257,9 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   features never look anything up — their inputs' views and ring indices are taken at `Bind` — and
   consumers resolve a composed ID once with `ViewOf` and a pair with `View.Pair`.
 - **Memory warning.** `features.New` estimates the feature buffer's memory (results × slots × slot
-  size, and the candle copies) and logs a warning above 1 GB, naming the largest universes.
+  size, and the candle copies) and logs a warning above 1 GiB, naming the lookback and the composed
+  IDs holding the most memory. Not universes: a result is stored once per composed ID and
+  coordinate, so universes sharing a pulled dependency cannot each be charged for it.
 
 ### Universes
 
