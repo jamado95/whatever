@@ -17,6 +17,8 @@ import (
 
 	"whatever/internal/config"
 	feat "whatever/internal/domains/features"
+	featv2 "whatever/internal/domains/featuresv2"
+	"whatever/internal/engine/features"
 	"whatever/internal/logger"
 	proto "whatever/internal/protocol"
 	reg "whatever/internal/registry"
@@ -257,20 +259,30 @@ var (
 	sub1d = proto.Subscription{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1d, Provider: "p1d"}
 )
 
-// TestDataLoggerV2Factory covers construction through the registry: derivations are accepted, a
-// missing stream table, bad options and duplicate features are errors, and no provider is
-// initialised.
+/*
+TestDataLoggerV2Factory covers construction through the registry: derivations are accepted and the
+feature graph is expanded; a missing stream table, feature specs or universes, bad options, a variant
+configured twice and duplicate original features are errors; no provider is initialised.
+*/
 func TestDataLoggerV2Factory(t *testing.T) {
 	sma, err := reg.Features.Create(feat.SMAID, map[string]any{"period": 3})
 	if err != nil {
 		t.Fatalf("create sma: %v", err)
 	}
+	smaV2, err := reg.FeatureTypes.Create(featv2.SMAID, map[string]any{"period": 3})
+	if err != nil {
+		t.Fatalf("create sma v2: %v", err)
+	}
+	spec := features.Spec{Type: featv2.SMAID, Feature: smaV2}
+
 	p := &barProvider{}
-	opts := func(features []proto.Feature, options map[string]any) map[string]any {
+	opts := func(originals []proto.Feature, specs []features.Spec, options map[string]any) map[string]any {
 		o := map[string]any{
-			"_streams":   proto.NewStreams([]proto.Subscription{sub5mDerive1h}),
-			"_providers": map[proto.Subscription]proto.DataProvider{sub5mDerive1h: p},
-			"_features":  features,
+			"_streams":    proto.NewStreams([]proto.Subscription{sub5mDerive1h}),
+			"_providers":  map[proto.Subscription]proto.DataProvider{sub5mDerive1h: p},
+			"_features":   originals,
+			"_featuresv2": specs,
+			"_universes":  map[string]config.Resolved{},
 		}
 		if options != nil {
 			o[config.OptionsKey] = options
@@ -278,19 +290,34 @@ func TestDataLoggerV2Factory(t *testing.T) {
 		return o
 	}
 
-	if _, err := reg.Engines.Create(DataLoggerV2ID, opts([]proto.Feature{sma}, nil)); err != nil {
+	eng, err := reg.Engines.Create(DataLoggerV2ID, opts([]proto.Feature{sma}, []features.Spec{spec}, nil))
+	if err != nil {
 		t.Fatalf("derived subscription: %v", err)
 	}
-	noStreams := opts(nil, nil)
-	delete(noStreams, "_streams")
-	for name, o := range map[string]map[string]any{
-		"no stream table":    noStreams,
-		"negative limit":     opts(nil, map[string]any{"limit": float64(-1)}),
-		"invalid ticker":     opts(nil, map[string]any{"ticker": map[string]any{"type": "fixedinterval"}}),
-		"duplicate features": opts([]proto.Feature{sma, sma}, nil),
+	if lb := eng.(*DataLoggerV2).graph.Lookback(); lb != 3 {
+		t.Errorf("graph lookback %d, want 3", lb)
+	}
+
+	without := func(key string) map[string]any {
+		o := opts(nil, nil, nil)
+		delete(o, key)
+		return o
+	}
+	for name, c := range map[string]struct {
+		opts map[string]any
+		want string // "" for any error
+	}{
+		"no stream table":    {without("_streams"), ""},
+		"no feature specs":   {without("_featuresv2"), ""},
+		"no universes":       {without("_universes"), ""},
+		"negative limit":     {opts(nil, nil, map[string]any{"limit": float64(-1)}), ""},
+		"invalid ticker":     {opts(nil, nil, map[string]any{"ticker": map[string]any{"type": "fixedinterval"}}), ""},
+		"a variant twice":    {opts(nil, []features.Spec{spec, spec}, nil), "features: sma_3 is configured twice"},
+		"duplicate features": {opts([]proto.Feature{sma, sma}, nil, nil), ""},
 	} {
-		if _, err := reg.Engines.Create(DataLoggerV2ID, o); err == nil {
-			t.Errorf("%s: no error", name)
+		_, err := reg.Engines.Create(DataLoggerV2ID, c.opts)
+		if err == nil || (c.want != "" && err.Error() != c.want) {
+			t.Errorf("%s: error %v, want %q", name, err, c.want)
 		}
 	}
 	if n := p.inits.Load(); n != 0 {

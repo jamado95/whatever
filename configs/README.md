@@ -105,11 +105,14 @@ Every stream has an ID, the name universes and strategies use:
 | `vwap` | `period`, required | `vwap_20` |
 | `engulfing_candle` | none | `engulfing_candle` |
 
-Two instances with the same ID are an error: they are configured identically.
+Two instances with the same ID are an error: they are configured identically. A type may appear in
+several entries, each with its own universe (`rsi` 14 on one, 21 on another); an ID configured
+twice, in one entry or across entries, is still an error.
 
 ## Universes
 
-Validated, but not yet used: no engine reads them until the feature engine lands.
+`data_logger_v2` places its features on them when it is built, so `make validate` checks the
+placement; the features themselves do not run on the feature engine yet.
 
 A universe is a `name` and a list of `rules`. Its streams and pairs are the union of what its rules
 select. Names are unique; a universe needs at least one rule; an unused universe is valid.
@@ -138,8 +141,10 @@ an empty list or value is an error.
 - Pairs are unordered; a stream is never paired with itself; duplicates collapse.
 
 **Binding.** `universe` on a feature entry runs it on the universe's streams; without one, a
-single-stream feature runs on every stream. Pairs serve pair features, none registered yet. A
-universe a feature uses must select at least one stream.
+single-stream feature runs on every stream. A pair feature runs on the universe's pairs, so it must
+name a universe that has pairs; none is registered yet. A feature's dependencies run on every
+stream it runs on, both ends of a pair included, beyond their own universe. A universe a feature
+uses must select at least one stream.
 
 ### Examples
 
@@ -253,9 +258,12 @@ Any other key is the strategy's own option. No strategy is registered in the def
 | A subscription naming an unknown provider | `subscriptions[1] (BTCUSDT:1d:ghost) references provider "ghost", which was not instantiated (disabled or missing)` |
 | An unregistered feature type | `feature "macd" not registered` |
 | A misspelt feature option | `feature "rsi" variant 0: json: unknown field "periodd"` |
-| Two identical variants | `engine "data_logger_v2": duplicate feature "rsi_14": two variants are configured identically` |
+| Two identical variants | `engine "data_logger_v2": features: rsi_14 is configured twice` |
 | `fixed` pacing without an interval | `engine "data_logger_v2": ticker: 'interval' is required and must be positive when type is "fixed"` |
 | `derive` on `data_logger` | `engine "data_logger": data_logger: subscription "BTCUSDT:5m:btc_5m": derived subscriptions are not supported` |
+
+Until the original features retire, an unregistered feature type and a bad feature option are
+reported twice, once per feature registry.
 
 Two mistakes pass `make validate` and fail when the run starts:
 

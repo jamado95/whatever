@@ -162,7 +162,9 @@ Resolved by this work: silent ticker fallback, triplicated engine parsers, untyp
 - `swing_highlow` was updated but sits behind a `//go:build wip` tag, so it is not in the default
   build and its `Validate()` (even period) is unexercised.
 - **Universes implemented**, agreed in [[features]] —
-  `docs/plans/features-layer-v2/stage-2-universes.md`; nothing consumes them yet:
+  `docs/plans/features-layer-v2/stage-2-universes.md`; consumed by `data_logger_v2`'s factory,
+  whose `features.Expand` places each feature on its universe
+  (`docs/plans/features-layer-v2/stage-5-expansion.md`):
   - **`universes` block, and `universe` per feature** — named stream and pair sets built from
     self-contained rules (references, explicit pairs, `*`) with filters on symbol, timeframe,
     provider and kind. See [features § Universes](features.md#universes); example config in

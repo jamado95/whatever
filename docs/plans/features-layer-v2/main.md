@@ -103,7 +103,7 @@ Tiered. Stage docs live beside this one, produced iteratively:
 - `stage-2-universes.md` — *implemented.*
 - `stage-3-contract-store.md` — *implemented.*
 - `stage-4-ported-features.md` — *implemented.*
-- `stage-5-expansion.md` — *planned.*
+- `stage-5-expansion.md` — *implemented.*
 - `stage-6-engine.md` — *to plan.*
 - `stage-7-data-logger-v2.md` — *to plan.*
 
@@ -199,7 +199,7 @@ data_logger_v2 Run:     features.New(graph) ─▶ loop: data.Next ─▶ pacer 
 - **Changed after the stage:** IDs include defaults (`ema_20_s2`), built by `variantID` from each
   port's config struct; the originals' still omit them (`ema_20`). See Open items (stage 7).
 
-### Stage 5 — expansion
+### Stage 5 — expansion ✅ implemented
 
 - **Goal:** the pure function that turns configuration into a validated feature graph.
 - **Touches:** `internal/engine/features` (`Expand(streams, universes, specs) (*Graph, error)`:

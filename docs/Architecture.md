@@ -23,9 +23,11 @@ Core Architecture
     aggregation; API `New` (the stream table, providers initialised by the engine), `Start`, `Next`
     (frames as `frame.View`s), `Close`, as built per `docs/plans/data-layer-v2`
   - internal/engine/data/datatest: samples the BTCUSDT reference dataset for reference tests
-  - internal/engine/features: the feature engine — the feature graph, a typed result ring per
-    composed ID and coordinate, one candle copy per stream that nodes read through `Input.Last`, and
-    the `View` consumers read results through, as built per `docs/plans/features-layer-v2`
+  - internal/engine/features: the feature engine — `Expand`, turning the composition root's specs
+    (one per configured variant) and resolved universes into the feature graph; a typed result ring
+    per composed ID and coordinate, one candle copy per stream that nodes read through
+    `Input.Last`, and the `View` consumers read results through, as built per
+    `docs/plans/features-layer-v2`
 - internal/flow: data-flow primitives — pipe (generic combinators, fanout), align (cross-stream synchronizers), timing (tickers)
 - internal/protocol: domain interfaces, and the stream table (`Streams`: one entry per direct
   subscription and derived window, built once by the composition root; a stream's index in it is its
@@ -34,8 +36,8 @@ Core Architecture
     that layers hand each other and consumers
   - internal/protocol/feature: the feature contract — `Feature` (what a factory configures: `ID`,
     `Lookback`, `Pair`, `Deps`, `Bind`) and `Bind[T]`, which takes a node's `Input[T]` handles from a
-    `Binder` and returns the node, a function computing its value. Holds no buffer: results live in
-    the feature engine
+    `Binder` and returns the node, a function computing its value; `Feature.Validate` checks what
+    the contract requires of any variant. Holds no buffer: results live in the feature engine
 - internal/registry: registers all internal component factories; `FeatureTypes` holds the feature
   contract's factories by base ID, beside `Features`, `FeatureChain`'s
 

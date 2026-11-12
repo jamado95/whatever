@@ -12,6 +12,7 @@ import (
 	"whatever/internal/config"
 	feat "whatever/internal/domains/features"
 	"whatever/internal/engine/data"
+	"whatever/internal/engine/features"
 	"whatever/internal/flow/timing"
 	"whatever/internal/idgen"
 	"whatever/internal/logger"
@@ -38,7 +39,17 @@ func init() {
 			return nil, err
 		}
 
-		features, err := config.Dep[[]proto.Feature](opts, "_features")
+		originals, err := config.Dep[[]proto.Feature](opts, "_features")
+		if err != nil {
+			return nil, err
+		}
+
+		specs, err := config.Dep[[]features.Spec](opts, "_featuresv2")
+		if err != nil {
+			return nil, err
+		}
+
+		universes, err := config.Dep[map[string]config.Resolved](opts, "_universes")
 		if err != nil {
 			return nil, err
 		}
@@ -53,8 +64,16 @@ func init() {
 			return nil, err
 		}
 
+		// no I/O: expansion validates and binds the feature graph; its joined errors are returned
+		// unwrapped, so each is reported on its own. A duplicate variant is reported here, not again by
+		// the chain.
+		graph, err := features.Expand(streams, universes, specs)
+		if err != nil {
+			return nil, err
+		}
+
 		// no I/O: duplicate and cyclic features fail validation
-		chain, err := feat.NewFeatureChain(features)
+		chain, err := feat.NewFeatureChain(originals)
 		if err != nil {
 			return nil, err
 		}
@@ -64,6 +83,7 @@ func init() {
 			streams:   streams,
 			providers: providers,
 			chain:     chain,
+			graph:     graph,
 			exporter:  exporter,
 			logger:    log,
 			cfg:       cfg,
@@ -77,14 +97,16 @@ DataLoggerV2 runs the data layer in replay and exports every stream update with 
 initialises each provider with its subscription, then builds and starts the data layer; each frame
 is paced, every stream updated at its column is evaluated by the feature chain over its history and
 exported, and the frame is logged. The run ends with the data, at limit frames, or when ctx is done
-or Close is called; the data layer is then closed, then the exporter.
+or Close is called; the data layer is then closed, then the exporter. Its factory also expands the
+feature graph, which Run does not run yet.
 */
 type DataLoggerV2 struct {
 	id        string
 	streams   *proto.Streams
 	providers map[proto.Subscription]proto.DataProvider
 	chain     *feat.FeatureChain
-	exporter  proto.Exporter // nil: frames are logged only
+	graph     *features.Graph // validated and bound by the factory; not run yet
+	exporter  proto.Exporter  // nil: frames are logged only
 	logger    *logger.Logger
 	cfg       DataLoggerOptions
 

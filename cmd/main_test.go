@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -115,6 +116,38 @@ func TestBuildDataLoggerV2AcceptsDerivations(t *testing.T) {
 	eng, errs := build(cfg, testLogger())
 	if len(errs) > 0 || eng == nil {
 		t.Fatalf("expected data_logger_v2 to build with derivations, got: %v", errs)
+	}
+}
+
+// TestBuildReportsExpandErrors covers the feature graph's errors reaching build through the engine's
+// factory, a variant configured twice across entries or within one, each its own error.
+func TestBuildReportsExpandErrors(t *testing.T) {
+	period := func(p int) map[string]any { return map[string]any{"period": p} }
+	cfg := &config.Config{
+		Providers:     []config.ComponentConfig{csvProvider("binance_csv")},
+		Subscriptions: []proto.Subscription{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "binance_csv"}},
+		Features: []config.FeatureConfig{
+			{Type: "rsi", Variants: []map[string]any{period(14)}},
+			{Type: "rsi", Variants: []map[string]any{period(14)}},
+			{Type: "sma", Variants: []map[string]any{period(20), period(20)}},
+		},
+		Engine: config.EngineConfig{Type: "data_logger_v2"},
+	}
+	eng, errs := build(cfg, testLogger())
+
+	got := make([]string, len(errs))
+	for i, err := range errs {
+		got[i] = err.Error()
+	}
+	want := []string{
+		`engine "data_logger_v2": features: rsi_14 is configured twice`,
+		`engine "data_logger_v2": features: sma_20 is configured twice`,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("errors %q, want %q", got, want)
+	}
+	if eng != nil {
+		t.Error("expected no engine")
 	}
 }
 
