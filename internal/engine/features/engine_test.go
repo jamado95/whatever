@@ -8,13 +8,12 @@ import (
 	"whatever/internal/protocol/frame"
 )
 
-// run is an engine over the test stream table, its nodes fired by hand until stage 6.
+// run is an engine over the test stream table.
 type run struct {
-	st        *proto.Streams
-	g         *Graph
-	e         *Engine
-	buf       *frame.Buffer[proto.Candle]
-	instances []instance
+	st  *proto.Streams
+	g   *Graph
+	e   *Engine
+	buf *frame.Buffer[proto.Candle]
 }
 
 func newRun(t *testing.T, cols int64, instances []instance) *run {
@@ -24,22 +23,14 @@ func newRun(t *testing.T, cols int64, instances []instance) *run {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &run{st: st, g: g, e: New(g), buf: streamCandles(st, cols), instances: instances}
+	return &run{st: st, g: g, e: New(g), buf: streamCandles(st, cols)}
 }
 
 // pin pins the engine at col.
 func (r *run) pin(col int64) View { return r.e.pin(at(r.buf, col)) }
 
-// step pins the engine at col and fires every instance due there, in order.
-func (r *run) step(col int64) View {
-	v := r.pin(col)
-	for _, in := range r.instances {
-		if col%ringShape(r.st, in.at, 1).Period == 0 {
-			r.g.columns[in.id].fire(r.g.ring(in.at), col)
-		}
-	}
-	return v
-}
+// step steps the engine at col.
+func (r *run) step(col int64) View { return r.e.Step(at(r.buf, col)) }
 
 // mustView is ViewOf, failing the test on an error.
 func mustView[T any](t *testing.T, v View, id string) frame.View[T] {
@@ -215,8 +206,9 @@ func TestEnginePairs(t *testing.T) {
 		t.Errorf("pdiff = %v %d, want %v Fresh", x, s, gap(24, direct1h))
 	}
 
-	// Between its due columns the coarse pair carries; the fine one has moved on.
-	v = r.step(23)
+	// Between its due columns the coarse pair carries; the fine one has moved on. Column 23 is read,
+	// not stepped again: Step takes increasing columns.
+	v = r.pin(23)
 	spreads = mustView[float64](t, v, "spread")
 	if x, _, age := spreads.Latest(c); x != gap(12, direct1h) || age != 11 {
 		t.Errorf("coarse pair between updates = %v age %d, want its value at 12, age 11", x, age)
@@ -303,38 +295,28 @@ func TestEngineCopies(t *testing.T) {
 }
 
 /*
-TestEngineAllocations checks a frame's hot path: pinning, which refills the candle copies, firing
-with candle reads from the copies and dependency reads into scratch, and consumer reads through
-ViewOf allocate nothing.
+TestEngineAllocations checks a frame's hot path: Step, which pins, refills the candle copies and fires
+every due node with candle reads from the copies and dependency reads into scratch, and consumer reads
+through ViewOf allocate nothing.
 */
 func TestEngineAllocations(t *testing.T) {
 	coords := [][2]int{stream(btc5m), stream(eth5m)}
-	r := newRun(t, 8, slices.Concat(
+	r := newRun(t, 120, slices.Concat(
 		on(last(), coords...),
 		on(sum(3), coords...),
 		on(sign(), coords...),
 		over(diff(), "diff-last", map[string]string{"last": "last"}, coords...),
 		on(spread(), pair(btc5m, eth5m)),
 	))
-	for col := int64(0); col < 7; col++ {
+	col := int64(0)
+	for ; col < 7; col++ {
 		r.step(col)
 	}
 
-	data := at(r.buf, 7)
-	type firing struct {
-		c    column
-		ring int
-	}
-	var fires []firing
-	for _, in := range r.instances {
-		fires = append(fires, firing{r.g.columns[in.id], r.g.ring(in.at)})
-	}
 	dst := make([]float64, 0, 3)
-	allocs := testing.AllocsPerRun(100, func() {
-		v := r.e.pin(data)
-		for _, f := range fires {
-			f.c.fire(f.ring, 7)
-		}
+	allocs := testing.AllocsPerRun(100, func() { // 101 runs, up to column 107
+		v := r.step(col)
+		col++
 		view, _ := ViewOf[float64](v, "last")
 		view.Latest(btc5m)
 		dst = view.Data(btc5m, 3, dst)

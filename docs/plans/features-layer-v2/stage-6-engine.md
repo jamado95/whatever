@@ -220,6 +220,8 @@ start):
 **`internal/engine/features/ported_test.go`** — `compare` steps the engine with `Step` instead of
 firing each port by hand at each updated stream.
 
+**`internal/engine/features/results_test.go`** — its direct calls to `refill` pass the stream's leg.
+
 ### Acceptance
 
 - `go test -race ./internal/engine/features/ ./internal/protocol/` passes; `make check` clean.

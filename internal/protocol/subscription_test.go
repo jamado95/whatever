@@ -2,6 +2,7 @@ package proto
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +12,28 @@ func TestTimeframeMs(t *testing.T) {
 	for _, tf := range ValidTimeframes() {
 		if got, want := tf.TimeframeMs(), int64(tf.TimeframeS())*1000; got != want {
 			t.Errorf("%s: TimeframeMs = %d, want %d", tf, got, want)
+		}
+	}
+}
+
+/*
+TestTimeframeInvariants checks what code relies on across ValidTimeframes: strictly ascending
+durations, as TimeframeDerivationSet.List assumes; no more timeframes than a TimeframeDerivationSet has
+bits; and each duration dividing the next, so each divides every longer one: the divisibility chain
+stream periods, pair rings and the feature engine's due patterns rely on.
+*/
+func TestTimeframeInvariants(t *testing.T) {
+	tfs := ValidTimeframes()
+	if bits := reflect.TypeFor[TimeframeDerivationSet]().Bits(); len(tfs) > bits {
+		t.Errorf("%d timeframes, more than a TimeframeDerivationSet's %d bits", len(tfs), bits)
+	}
+	for i := 1; i < len(tfs); i++ {
+		prev, cur := tfs[i-1].TimeframeMs(), tfs[i].TimeframeMs()
+		switch {
+		case prev >= cur:
+			t.Errorf("%s (%d ms) is not shorter than %s (%d ms)", tfs[i-1], prev, tfs[i], cur)
+		case cur%prev != 0:
+			t.Errorf("%s (%d ms) does not divide %s (%d ms)", tfs[i-1], prev, tfs[i], cur)
 		}
 	}
 }

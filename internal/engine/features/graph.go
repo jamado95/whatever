@@ -21,6 +21,16 @@ type instance struct {
 	deps    map[string]string // dependency type → composed ID
 }
 
+// node is a bound instance: its column's ring at its coordinate, due every period columns, and the
+// nodes of its dependencies there: at its stream, or at each end of its pair.
+type node struct {
+	c      column
+	ring   int
+	at     [2]int
+	period int64
+	deps   []int // indices in Graph.nodes
+}
+
 /*
 Graph is a validated feature graph: one column per composed ID with every node bound, and no ring or
 candle copy allocated. The engine's factory builds it, so --validate-only covers it. It runs once: its
@@ -29,6 +39,7 @@ nodes hold the addresses of its views and candle copies.
 type Graph struct {
 	columns  map[string]column        // by composed ID
 	all      []column                 // pinned each frame
+	nodes    []node                   // every bound instance, in newGraph's order
 	pairs    map[[2]int]int           // the pair table: (a, b), a < b → ring
 	candles  frame.View[proto.Candle] // the candles nodes read, re-pinned each frame
 	history  [][]proto.Candle         // one candle copy per stream, read through Input.Last; nil until New
@@ -91,7 +102,35 @@ func newGraph(streams *proto.Streams, instances []instance) (*Graph, error) {
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
+	g.nodes = g.link(streams, fit)
 	return g, nil
+}
+
+// link returns one node per instance, each with its dependencies' nodes at its stream, or at each end
+// of its pair, in sorted dependency type order. check has found every dependency there.
+func (g *Graph) link(st *proto.Streams, instances []instance) []node {
+	type placed struct {
+		id string
+		at [2]int
+	}
+	index := make(map[placed]int, len(instances))
+	for i, in := range instances {
+		index[placed{in.id, in.at}] = i
+	}
+
+	nodes := make([]node, len(instances))
+	for i, in := range instances {
+		n := node{c: g.columns[in.id], ring: g.ring(in.at), at: in.at, period: ringShape(st, in.at, 1).Period}
+		for _, typ := range slices.Sorted(maps.Keys(in.deps)) {
+			for _, end := range in.at {
+				if end >= 0 {
+					n.deps = append(n.deps, index[placed{in.deps[typ], [2]int{end, -1}}])
+				}
+			}
+		}
+		nodes[i] = n
+	}
+	return nodes
 }
 
 // wrap names the instance's composed ID and coordinate on err.

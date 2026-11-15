@@ -103,19 +103,16 @@ func newPorted(t *testing.T, st *proto.Streams, variants []variant) *ported {
 }
 
 /*
-compare pins the engine at v's frame and, at each stream updated there (Fresh, age 0), fires every
-port and evaluates the chain as the bridge does. Each port reads Fresh with the original's value where
-the snapshot holds the original's ID, and Gap where it does not.
+compare steps the engine at v's frame and, at each stream updated there (Fresh, age 0), evaluates the
+chain as the bridge does. Each port reads Fresh with the original's value where the snapshot holds the
+original's ID, and Gap where it does not.
 */
 func (p *ported) compare(t *testing.T, v frame.View[proto.Candle]) {
 	t.Helper()
-	fv := p.e.pin(v)
+	fv := p.e.Step(v)
 	for s, stream := range p.st.All {
 		if _, state, age := v.Latest(s); state != frame.Fresh || age != 0 {
 			continue
-		}
-		for _, id := range p.ids {
-			p.e.g.columns[id].fire(s, v.Col())
 		}
 
 		p.history = v.Data(s, p.chain.Lookback(), p.history)

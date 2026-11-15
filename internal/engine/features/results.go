@@ -14,7 +14,7 @@ type column interface {
 	bind(b *feature.Binder, ring int) error  // the feature at b's coordinate, its node writing ring
 	alloc()                                  // the buffer, one ring per shape; New calls it once
 	pin(v frame.View[proto.Candle])          // view at v's frame; every read follows it
-	fire(ring int, col int64)                // the node; writes Fresh, or Gap when it cannot compute
+	fire(ring int, col int64) bool           // the node; writes Fresh and returns true, or Gap
 	skip(ring int, col int64, s frame.State) // writes s, Gap or Ended, carrying the last Fresh value
 }
 
@@ -64,13 +64,14 @@ func (r *results[T]) alloc() { r.buf = frame.NewBuffer[T](r.shapes) }
 
 func (r *results[T]) pin(v frame.View[proto.Candle]) { r.view = frame.Pin(v, r.buf) }
 
-func (r *results[T]) fire(ring int, col int64) {
+func (r *results[T]) fire(ring int, col int64) bool {
 	v, ok := r.nodes[ring]()
 	if !ok {
 		r.skip(ring, col, frame.Gap)
-		return
+		return false
 	}
 	r.buf.Ring(ring).Put(col, v, frame.Fresh)
+	return true
 }
 
 func (r *results[T]) skip(ring int, col int64, s frame.State) {

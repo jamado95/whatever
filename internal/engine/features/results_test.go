@@ -202,7 +202,7 @@ func TestColumnFire(t *testing.T) {
 		r := bound[float64](t, sum(3), 1, 0, &cv, history)
 		for col := int64(0); col < 8; col++ {
 			cv = at(buf, col)
-			refill(history, []int{3}, cv)
+			refill(history, []int{3}, []frame.State{streamLeg(cv, 0)}, cv)
 			if col == 4 {
 				r.skip(0, col, frame.Gap)
 				continue
@@ -269,7 +269,7 @@ func TestColumnAllocations(t *testing.T) {
 	signCol := bound[int](t, sign(), 1, 0, &cv, nil)
 	view := at(buf, 5)
 	cv = view
-	refill(history, []int{3}, view)
+	refill(history, []int{3}, []frame.State{streamLeg(view, 0)}, view)
 
 	var col column = sumCol
 	var ints column = signCol
