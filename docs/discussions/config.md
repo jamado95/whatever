@@ -175,7 +175,9 @@ Resolved by this work: silent ticker fallback, triplicated engine parsers, untyp
     keeping only those that resolve without error, and injects the table as `_streams`. A used
     universe selecting no stream is an error there. Resolution errors are prefixed
     `universe "name":`, `Load`'s shape errors `universes[i] (name):`. See
-    [features § Feature layer](features.md#feature-layer).
+    [features § Feature layer](features.md#feature-layer). To move into protocol, config keeping
+    the block's cross-entry checks: decided in [[protocol]], planned in
+    `docs/plans/protocol-types.md`.
   - **Rules name streams by their stream IDs**, derived ones included, so a name matches at most one
     stream and subscriptions need no new rule. Lookup is the only check on a name. See
     [features § Universes](features.md#universes).

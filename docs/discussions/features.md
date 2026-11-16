@@ -168,7 +168,8 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   feature layer: a stream's index in it is its index in the data rings, the feature buffers and
   resolved universes ([[data-layer-v2]] § Subscriptions and the grid).
 - **Universe resolution belongs to config** — a pure function of rules over the stream table,
-  independent of the feature engine.
+  independent of the feature engine. To move into protocol, resolution unchanged: decided in
+  [[protocol]], planned in `docs/plans/protocol-types.md`.
 - **Views are part of the protocol layer**, in `internal/protocol/frame`. Generic, concrete rings
   (`frame.Ring[T]`, one per entry, reads stepped by `Period × Window`) in a `frame.Buffer[T]`, read
   through a `frame.View[T]` pinned at a frame: a read-only snapshot for consumers, with direct calls.
@@ -489,7 +490,9 @@ bound up with the strategy input contract ([[strategy-layer]]).
   variant ID with `-`, called by the composition root on each variant (stage 5).
 - **How a strategy reads a struct result.** `ViewOf` is in `engine/features` and a struct value type
   in its feature's domain, while a domain imports only `protocol` ([[engine]]). To settle before
-  strategies read features.
+  strategies read features. `ViewOf` moves to `internal/protocol/feature`, beside `View` renamed
+  `FeaturesView`: decided in [[protocol]], planned in `docs/plans/protocol-types.md`. Where the
+  struct value type lives is still open.
 - **`Input` reads once dependency results have copies** (iteration 3). Candle inputs read through
   `Last`; `Data` and `Latest` stay for dependency inputs, which have no copy (stage 4). If dependency
   results get copies, refilled after a dependency fires and before its dependents, `Input` could
