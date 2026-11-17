@@ -17,7 +17,7 @@ A subscription's own invariants are also checked in `config.validate`, not on th
 
 ```
 Load       cfg.Universes []proto.Universe ── u.Validate()            config prefixes universes[i] (name)
-           cfg.Subscriptions ── s.Validate(), s.Complete()           config prefixes subscriptions[i] (ID)
+           cfg.Subscriptions ── s.Validate()                         config prefixes subscriptions[i]
 cmd        u.Resolve(streams) ─▶ map[string]proto.ResolvedUniverse   _universes
            reg.FeatureTypes ─▶ []feature.Spec                         _featuresv2
 engine     features.Expand(streams, universes, specs) ─▶ Graph
@@ -46,7 +46,8 @@ stay unstaged for review; the step is committed once approved, then the next sta
   `UniversePairs.explicit`, `emptyList`, `globAny`, `checkGlob`. `universePath` stays in config,
   moved into `config.go`: it names a config path.
 - **Every error message is unchanged.** Config and `cmd` keep their prefixes
-  (`universes[i] (name):`, `universe "name":`, `subscriptions[i] (ID):`), except `ViewOf`'s, below.
+  (`universes[i] (name):`, `universe "name":`, `subscriptions[i]`), except `ViewOf`'s and a derived
+  window's, below.
 - **`FeaturesView` holds each result's buffer, and `ViewOf` pins it at the view's own frame**, as
   today's `View` does through the graph. The index maps a composed ID to its column's
   `*frame.Buffer[T]` (`column.buffer()`), in an unexported field, so consumers still get only
@@ -59,10 +60,16 @@ stay unstaged for review; the step is committed once approved, then the next sta
   `feature: result "x" is not int`, as `feature: dependency "last" is not float64` does.
 - **`Spec` sits beside `Feature`** in `internal/protocol/feature/feature.go`, unchanged.
 - **A subscription validates itself.** `Validate() []error` returns each missing field; with none
-  missing, it returns each derived window not coarser than the timeframe or not a multiple of it.
-  `Complete() bool` reports whether `ID` names the subscription. Config needs it for the path and
-  the duplicate check. Config keeps the duplicate check, the at-least-one check and the provider
-  name rules, which span entries.
+  missing, an unknown timeframe; otherwise each derived window not coarser than the timeframe or not
+  a multiple of it. The timeframe check was added at implementation: `Validate` is public, and an
+  unknown timeframe's zero length would divide by zero in the multiple check.
+  Only `Validate` knows whether `ID` names the subscription, so a derived window's error names it
+  (`derive "5m" of BTCUSDT:1h:p must be coarser than "1h"`), in place of config's
+  `subscriptions[i] (ID)` prefix. Config prefixes every error `subscriptions[i]`. An invalid entry
+  gets only its own errors, never a duplicate's, but its ID is recorded, so a later valid copy of it
+  is still a duplicate in the same run. Config keeps the duplicate check, the at-least-one check and
+  the provider name rules, which span entries. Amended at implementation: the plan first added
+  `Complete() bool` for config's prefix and duplicate check.
 
 ## Step 1 — universes in `internal/protocol`
 
@@ -290,33 +297,25 @@ func (v FeaturesView) Pair(a, b int) (int, bool)
 **`internal/protocol/subscription.go`**
 
 ```go
-// Complete reports whether s has every field ID reads: a symbol, a timeframe and a provider.
-func (s Subscription) Complete() bool
-
 /*
-Validate returns s's errors: each missing field; or, with none missing, each derived window not
-coarser than the timeframe or not a multiple of it.
+Validate returns s's errors: each missing field, or a timeframe outside the known set; otherwise each
+derived window not coarser than the timeframe or not a multiple of it, naming s by its ID.
 */
-func (s Subscription) Validate() []error
-
-// missing returns the names of s's empty string fields, lowercased: config.validate's loop, moved.
-func (s Subscription) missing() []string
+func (s Subscription) Validate() []error // config.validate's field loop, moved
 ```
 
-Messages, as config's without their prefix: `missing required 'timeframe' field`,
-`derive "5m" must be coarser than "1h"`, `derive "…" must be a multiple of "…"`.
+Messages, as config's without their prefix: `missing required 'timeframe' field`; a derived window's
+naming the subscription, `derive "5m" of BTCUSDT:1h:p must be coarser than "1h"`,
+`derive "…" of … must be a multiple of "…"`; an unknown timeframe takes `UnmarshalJSON`'s,
+`invalid timeframe "7m", want one of […]`.
 
 **`internal/config/config.go`** — `validate`'s subscription loop:
 
 ```go
 for i, s := range c.Subscriptions {
 	at := fmt.Sprintf("subscriptions[%d]", i)
-	if !s.Complete() { // no ID, and no timeframe to derive from
-		// each of s.Validate(), prefixed at
-		continue
-	}
-	// duplicate check on s.ID(), unchanged
-	// each of s.Validate(), prefixed at (ID)
+	// each of s.Validate(), prefixed at; an invalid entry records its ID in seen and goes no further
+	// duplicate check on s.ID()
 }
 ```
 
@@ -326,17 +325,20 @@ The `reflect` import goes; `strings` stays for the provider name check.
 
 - `internal/protocol/subscription_test.go` — **`TestSubscriptionValidate`**:
   - A complete subscription without derivations has no error.
-  - Each missing field gives its own error; a missing timeframe with derivations gives the missing
-    field only.
-  - A derived window that is equal, finer or not a multiple gives its error.
-  - `Complete` is true exactly when no field is missing.
-- `internal/config/config_test.go` — unchanged. `TestMissingSubscriptionTimeframe`,
-  `TestDeriveNotCoarserRejected`, `TestDuplicateSubscriptionRejected` and `TestValidateCollectsErrors`
-  pin the prefixed messages and their order.
+  - Each missing field gives its own error; a missing or unknown timeframe with derivations gives
+    that error only.
+  - A derived window that is equal or finer gives its error, naming the subscription.
+- `internal/config/config_test.go`:
+  - `TestValidateCollectsErrors` wants the derived window's new message.
+    `TestMissingSubscriptionTimeframe`, `TestDeriveNotCoarserRejected` and
+    `TestDuplicateSubscriptionRejected` are unchanged.
+  - New **`TestInvalidSubscriptionNotCheckedForDuplicates`**: invalid and incomplete entries get no
+    duplicate error, and a valid entry after an invalid copy of it does.
+- `configs/README.md` — the common-errors row for a derived window not coarser.
 
 ### Documentation
 
-- [config.md](../discussions/config.md) — Solution table: `Subscription.Validate` and `Complete` in
+- [config.md](../discussions/config.md) — Solution table: `Subscription.Validate` in
   `internal/protocol/subscription.go`; config keeps the checks that span entries.
 - [protocol.md](../discussions/protocol.md):
   - Solution lists this plan as executed.
@@ -347,7 +349,8 @@ The `reflect` import goes; `strings` stays for the provider name check.
 
 - `go test -race ./internal/protocol/ ./internal/config/ ./cmd/` passes; `make check` clean.
 - `--validate-only` on a config with a missing provider, a bad derivation and a duplicate reports
-  the same lines as before the step.
+  the same lines as before the step, but the derived window's, which names the subscription in its
+  message instead of its prefix.
 
 ## Documentation recorded at planning
 

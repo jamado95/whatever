@@ -125,3 +125,36 @@ func TestSubscriptionWithDeriveIsMapKey(t *testing.T) {
 		t.Fatal("lookup by an equal Subscription failed")
 	}
 }
+
+/*
+TestSubscriptionValidate covers a subscription's own invariants: each missing field alone, then an
+unknown timeframe, then each derived window not coarser than its source, named by the subscription's
+ID. Every valid timeframe divides the coarser ones (TestTimeframeInvariants), so no derivation can fail
+as a non-multiple.
+*/
+func TestSubscriptionValidate(t *testing.T) {
+	cases := []struct {
+		name string
+		s    Subscription
+		want []string
+	}{
+		{"complete", sub("BTCUSDT", Timeframe1h, "p"), nil},
+		{"coarser derivations", sub("BTCUSDT", Timeframe5m, "p", Timeframe1h, Timeframe1d), nil},
+		{"missing fields", Subscription{Timeframe: Timeframe1h},
+			[]string{"missing required 'symbol' field", "missing required 'provider' field"}},
+		{"a missing timeframe, derivations unchecked", sub("BTCUSDT", "", "p", Timeframe1h),
+			[]string{"missing required 'timeframe' field"}},
+		{"an unknown timeframe, derivations unchecked", sub("BTCUSDT", "7m", "p", Timeframe1h),
+			[]string{`invalid timeframe "7m"`}},
+		{"derivations not coarser", sub("BTCUSDT", Timeframe1h, "p", Timeframe5m, Timeframe1h, Timeframe1d),
+			[]string{
+				`derive "5m" of BTCUSDT:1h:p must be coarser than "1h"`,
+				`derive "1h" of BTCUSDT:1h:p must be coarser than "1h"`,
+			}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wantErrs(t, tc.s.Validate(), tc.want...)
+		})
+	}
+}

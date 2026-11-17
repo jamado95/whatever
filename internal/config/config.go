@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"reflect"
 	"strings"
 
 	proto "whatever/internal/protocol"
@@ -160,34 +159,26 @@ func (c *Config) validate() []error {
 	if len(c.Subscriptions) == 0 {
 		fail("subscriptions: at least one subscription is required")
 	}
+
 	seen := make(map[string]bool, len(c.Subscriptions))
 	for i, s := range c.Subscriptions {
-		missing := len(errs)
-
-		sv := reflect.ValueOf(s)
-		for f := 0; f < sv.NumField(); f++ {
-			if field := sv.Field(f); field.Kind() == reflect.String && field.String() == "" {
-				fail("subscriptions[%d]: missing required '%s' field", i, strings.ToLower(sv.Type().Field(f).Name))
-			}
+		var subErrs []error
+		at := fmt.Sprintf("subscriptions[%d]", i)
+		for _, err := range s.Validate() {
+			subErrs = append(subErrs, fmt.Errorf("%s: %w", at, err))
 		}
-		// an incomplete subscription has no ID, and no timeframe to derive from
-		if len(errs) > missing {
+
+		// an invalid subscription is not checked for duplicates, but a later valid copy of it is
+		if len(subErrs) > 0 {
+			errs = append(errs, subErrs...)
+			seen[s.ID()] = true
 			continue
 		}
 
 		if seen[s.ID()] {
-			fail("subscriptions[%d]: duplicate subscription %q", i, s.ID())
+			fail("%s: duplicate subscription %q", at, s.ID())
 		}
 		seen[s.ID()] = true
-
-		// Each derived window must be coarser than its source and a multiple of it.
-		for _, tf := range s.Derive.List() {
-			if tf.TimeframeMs() <= s.Timeframe.TimeframeMs() {
-				fail("subscriptions[%d] (%s): derive %q must be coarser than %q", i, s.ID(), tf, s.Timeframe)
-			} else if tf.TimeframeMs()%s.Timeframe.TimeframeMs() != 0 {
-				fail("subscriptions[%d] (%s): derive %q must be a multiple of %q", i, s.ID(), tf, s.Timeframe)
-			}
-		}
 	}
 
 	// Provider instance names must be unique so a subscription's provider

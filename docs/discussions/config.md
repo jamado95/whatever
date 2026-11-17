@@ -110,8 +110,8 @@ Executed implementation plans:
 - [`docs/plans/features-layer-v2/stage-2-universes.md`](../plans/features-layer-v2/stage-2-universes.md)
   — universes, their resolver over the stream table, and collected validation errors. Executed
   2026-11-02.
-- [`docs/plans/protocol-types.md`](../plans/protocol-types.md) — step 1, universes moved into
-  protocol. Executed 2026-11-17.
+- [`docs/plans/protocol-types.md`](../plans/protocol-types.md) — universes and a subscription's own
+  checks moved into protocol; config keeps the checks that span entries. Executed 2026-11-17.
 
 As implemented:
 
@@ -121,6 +121,8 @@ As implemented:
 | File shape, strict `Load`, `EngineConfig.Opts()` | `internal/config/config.go` |
 | `Universe`, `UniverseRule`, `UniversePairs`, `Universe.Validate`, `Universe.Resolve` | `internal/protocol/universe.go` |
 | Universe names and feature → universe references, `universePath` | `internal/config/config.go` |
+| `Subscription.Validate`: required fields, a known timeframe, derived windows named by the subscription's ID | `internal/protocol/subscription.go` |
+| Duplicate subscriptions, provider names, the path prefixes | `internal/config/config.go` |
 | Resolving each universe over the stream table, `addUniverse` | `cmd/instantiate.go` |
 | `Timeframe.UnmarshalJSON` | `internal/protocol/provider.go` |
 | `TickerType`, `TickerConfig`, `newTicker` | `internal/engine/ticker.go` |

@@ -246,7 +246,7 @@ Any other key is the strategy's own option. No strategy is registered in the def
 | `pairs` neither `"*"` nor a list | `failed to parse config: pairs must be "*" or a list of pairs, got "all"` |
 | A subscription without a provider | `subscriptions[1]: missing required 'provider' field` |
 | The same subscription twice | `subscriptions[2]: duplicate subscription "BTCUSDT:1d:btc_1d"` |
-| A derived window not coarser | `subscriptions[1] (BTCUSDT:1d:btc_1d): derive "1h" must be coarser than "1d"` |
+| A derived window not coarser | `subscriptions[1]: derive "1h" of BTCUSDT:1d:btc_1d must be coarser than "1d"` |
 | Two providers with one name | `providers[1]: duplicate provider name "btc_5m"` |
 | A provider named `derived_…` | `providers[1]: name "derived_1d" must not start with "derived_"` |
 | A feature naming an unknown universe | `features[0] (rsi): unknown universe "usdt"` |

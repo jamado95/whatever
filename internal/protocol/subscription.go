@@ -3,6 +3,8 @@ package proto
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"strings"
 )
 
 type Timeframe string
@@ -139,4 +141,35 @@ type Subscription struct {
 // It is the reference handle strategies use and the key the seam events carry.
 func (s Subscription) ID() string {
 	return s.Symbol + ":" + string(s.Timeframe) + ":" + s.Provider
+}
+
+/*
+Validate returns s's errors: each missing field, or a timeframe outside the known set; otherwise each
+derived window not coarser than the timeframe or not a multiple of it, naming s by its ID.
+*/
+func (s Subscription) Validate() []error {
+	var errs []error
+	sv := reflect.ValueOf(s)
+	for f := 0; f < sv.NumField(); f++ {
+		if field := sv.Field(f); field.Kind() == reflect.String && field.String() == "" {
+			errs = append(errs, fmt.Errorf("missing required '%s' field", strings.ToLower(sv.Type().Field(f).Name)))
+		}
+	}
+
+	if len(errs) > 0 {
+		return errs // no ID, and no timeframe to derive from
+	}
+
+	if !s.Timeframe.IsValid() {
+		return []error{fmt.Errorf("invalid timeframe %q, want one of %v", s.Timeframe, ValidTimeframes())}
+	}
+
+	for _, tf := range s.Derive.List() {
+		if tf.TimeframeMs() <= s.Timeframe.TimeframeMs() {
+			errs = append(errs, fmt.Errorf("derive %q of %s must be coarser than %q", tf, s.ID(), s.Timeframe))
+		} else if tf.TimeframeMs()%s.Timeframe.TimeframeMs() != 0 {
+			errs = append(errs, fmt.Errorf("derive %q of %s must be a multiple of %q", tf, s.ID(), s.Timeframe))
+		}
+	}
+	return errs
 }

@@ -20,37 +20,27 @@ More than interfaces:
 | Kind | Examples |
 |---|---|
 | Interfaces | `DataProvider`, `Strategy`, `RiskManager`, `Executor`, `Exporter`, the originals' `Feature` |
-| Config-decoded value types | `Subscription`; `Timeframe`, `TimeframeDerivationSet` and `StreamKind`, with validating `UnmarshalJSON` |
-| Structures with logic | `Streams` and `NewStreams`, `SortedWindow`, `Snapshot` |
-| Contracts as concrete types | `feature.Feature` with `Validate`, `Binder`, `Input[T]`; `frame` rings, buffers and views |
+| Config-decoded value types | `Subscription` with `Validate`; `Universe` with `Validate` and `Resolve`; `Timeframe`, `TimeframeDerivationSet`, `StreamKind` and `UniversePairs`, with validating `UnmarshalJSON` |
+| Structures with logic | `Streams` and `NewStreams`, `ResolvedUniverse`, `SortedWindow`, `Snapshot` |
+| Contracts as concrete types | `feature.Feature` with `Validate`, `Spec`, `Binder`, `Input[T]`, `FeaturesView` and `ViewOf`; `frame` rings, buffers and views |
 
-`docs/Architecture.md` still describes it as "domain interfaces, and the stream table", with the
-design rule "Protocol defines contracts; implementations live in domains".
+`docs/Architecture.md` § Design Rules states the rule in § Decisions.
 
 ### Import graph
 
-`config` imports only `protocol`. `cmd` imports `config`, `registry`, `protocol` and `logger`, and
-blank-imports the domains and `engine` so their factories register. The edges into or out of the
-core:
+`config` imports only `protocol`. `cmd` imports `config`, `registry`, `protocol`,
+`protocol/feature` and `logger`, and blank-imports the domains and `engine` so their factories
+register. The core imports `config` only for the factory helpers — `Decode`, `DecodeOptions`,
+`Dep`, `OptDep`, `Duration` — never for the file's shape.
 
-| Edge | Files | Carries |
-|---|---|---|
-| `cmd` → `engine/features` | `cmd/instantiate.go` | `features.Spec`, the composition root's handoff to the engine |
-| core → `config`, universes | `engine/features/expand.go`, `engine/data_logger_v2.go` | `config.Resolved` |
-| core → `config`, factory mechanism | 19 of the 20 non-test files importing `config` | `Decode`, `DecodeOptions`, `Dep`, `OptDep`, `Duration` — Architecture.md § Design Rules |
+### Config-decoded types
 
-### Universes
-
-`Universe`, `Rule` and `Pairs` (the block's schema and shape check), `Resolve` (a pure function of
-rules over `proto.Streams`) and `Resolved` (indices into the stream table) live in
-`internal/config/universe.go`. `Load` checks their shape and the feature → universe references; the
-composition root resolves them (`addUniverse`) and injects them; `Expand` consumes `Resolved`.
-[[features]] § Feature layer placed them in config: "a pure function of rules over the stream table,
-independent of the feature engine".
-
-They have the shape of `proto.Subscription`: decoded from the file into `Config`, consumed by the
-core. A subscription's own invariants — required fields, each derived window coarser than and a
-multiple of its source — are still checked in `config.validate`, not on the type.
+Universes and subscriptions are decoded from the file into `Config` and consumed by the core. Each
+checks its own invariants: `Universe.Validate` its rules' shape, `Subscription.Validate` its fields,
+timeframe and derived windows. Config adds the checks that span entries — names required and unique,
+feature → universe references, duplicate subscriptions, provider names — and prefixes each error
+with its path. The composition root resolves universes over the stream table
+(`Universe.Resolve`) and injects them; `Expand` consumes `ResolvedUniverse`.
 
 ### Embedding versus protocol values
 
@@ -90,15 +80,15 @@ Agreed 2026-11-15.
 
 ## Solution
 
-Planned in [`docs/plans/protocol-types.md`](../plans/protocol-types.md); steps 1 and 2 executed:
+Executed: [`docs/plans/protocol-types.md`](../plans/protocol-types.md), 2026-11-17.
 
-| Piece | Now | Proposed |
+| Piece | Was | Now |
 |---|---|---|
 | `Universe`, `Rule`, `Pairs`, `Resolve`, `Resolved` | `internal/config/universe.go` | `internal/protocol/universe.go`: `Universe`, `UniverseRule`, `UniversePairs`, `ResolvedUniverse`; `Universe.Validate`, `Universe.Resolve` |
-| `View`, `ViewOf`, `Pair` | `internal/engine/features/view.go` | `internal/protocol/feature`, `View` renamed `FeaturesView`. It holds the engine's `*Graph` today; in protocol it holds an index `New` builds once — each composed ID's `*frame.Buffer[T]`, type-erased and unexported, and the pair table. `Step` still returns it; `ViewOf` asserts `*frame.Buffer[T]` and pins it at the view's own frame, so a view kept past the next `Step` still reads its frame |
+| `View`, `ViewOf`, `Pair` | `internal/engine/features/view.go`, holding the engine's `*Graph` | `internal/protocol/feature`, `View` renamed `FeaturesView`. It holds an index `New` builds once — each composed ID's `*frame.Buffer[T]`, type-erased and unexported — and the pair table; `ViewOf` pins a buffer at the view's own frame, so a view kept past the next `Step` still reads its frame |
 | Universe names required and unique, feature → universe references, error paths | `config.validate`, `universePath` | Unchanged |
-| `Spec` | `internal/engine/features` | `internal/protocol/feature`; `cmd` then imports no engine package |
-| A subscription's required fields, derived windows coarser and a multiple | `config.validate` | `proto.Subscription.Validate` and `Complete`; duplicates stay in config |
+| `Spec` | `internal/engine/features` | `internal/protocol/feature`; `cmd` imports no engine package |
+| A subscription's required fields and derived windows | `config.validate` | `proto.Subscription.Validate`, which also rejects an unknown timeframe and names the subscription in a derived window's error; duplicates stay in config, which reports none for an invalid entry |
 | Protocol's description and design rule | `docs/Architecture.md` | The rule in § Decisions |
 
 ## Open Questions
@@ -107,15 +97,12 @@ None.
 
 ## WIP
 
-- Steps 1 and 2 implemented: universes in `internal/protocol/universe.go`, so
-  `internal/engine/features` no longer imports `config`; `Spec`, `FeaturesView` and `ViewOf` in
-  `internal/protocol/feature`, so `cmd` imports no engine package. Step 3
-  (`Subscription.Validate`) remains — `docs/plans/protocol-types.md`.
+- Implemented — `docs/plans/protocol-types.md`, steps 1 to 3. Nothing pending.
 
 ## Resources
 
-- `internal/protocol/`, `internal/config/universe.go`, `internal/config/config.go`,
-  `internal/engine/features/expand.go`, `cmd/instantiate.go`
+- `internal/protocol/universe.go`, `internal/protocol/subscription.go`,
+  `internal/protocol/feature/view.go`, `internal/config/config.go`, `cmd/instantiate.go`
 - `docs/Architecture.md` § Design Rules, `docs/Protocol.md`
 - Related: [[features]] (§ Feature layer, § Universes), [[config]], [[engine]] (composition root),
   [[strategy-layer]]
