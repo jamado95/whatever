@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	proto "whatever/internal/protocol"
+	"whatever/internal/protocol/feature"
 )
 
 // names are the test table's streams, short.
@@ -48,7 +49,7 @@ func rendered(instances []instance) []string {
 }
 
 // mustExpand is specs' instances, rendered, failing the test on any error from Expand.
-func mustExpand(t *testing.T, specs ...Spec) []string {
+func mustExpand(t *testing.T, specs ...feature.Spec) []string {
 	t.Helper()
 	if _, err := Expand(testStreams(), testUniverses, specs); err != nil {
 		t.Fatal(err)
@@ -80,7 +81,7 @@ func every(id string) []string {
 // TestExpandPlacement covers where a spec runs: every stream without a universe, its universe's
 // streams, or its universe's pairs, which are then the pair table.
 func TestExpandPlacement(t *testing.T) {
-	specs := []Spec{
+	specs := []feature.Spec{
 		spec("last", "", last()),
 		spec("sum", "eth", sum(2)),
 		spec("spread", "pairs", spread()),
@@ -155,10 +156,10 @@ func TestExpandVariants(t *testing.T) {
 func TestExpandLookback(t *testing.T) {
 	for _, c := range []struct {
 		name  string
-		specs []Spec
+		specs []feature.Spec
 		want  int
 	}{
-		{"the longest", []Spec{spec("last", "", last()), spec("sum", "eth", sum(9)), spec("ratio", "btc", ratio())}, 9},
+		{"the longest", []feature.Spec{spec("last", "", last()), spec("sum", "eth", sum(9)), spec("ratio", "btc", ratio())}, 9},
 		{"none", nil, 1},
 	} {
 		g, err := Expand(testStreams(), testUniverses, c.specs)
@@ -180,35 +181,35 @@ func TestExpandErrors(t *testing.T) {
 
 	for _, c := range []struct {
 		name  string
-		specs []Spec
+		specs []feature.Spec
 		want  string
 	}{
-		{"a variant ID twice", []Spec{spec("sum", "", sum(2)), spec("sum", "eth", sum(2))},
+		{"a variant ID twice", []feature.Spec{spec("sum", "", sum(2)), spec("sum", "eth", sum(2))},
 			"features: sum_2 is configured twice"},
-		{"variants of one type unlike in Pair", []Spec{spec("sum", "", sum(2)), spec("sum", "pairs", pairSum)},
+		{"variants of one type unlike in Pair", []feature.Spec{spec("sum", "", sum(2)), spec("sum", "pairs", pairSum)},
 			"features: sum: sum_3 declares Pair or Deps unlike sum_2"},
-		{"variants of one type unlike in Deps", []Spec{
+		{"variants of one type unlike in Deps", []feature.Spec{
 			spec("last", "", last()), spec("sum", "", sum(2)), spec("sum", "", depSum)},
 			"features: sum: sum_3 declares Pair or Deps unlike sum_2"},
-		{"an unregistered dependency type", []Spec{spec("diff", "", diffOf("diff", "ghost"))},
+		{"an unregistered dependency type", []feature.Spec{spec("diff", "", diffOf("diff", "ghost"))},
 			`features: diff: dependency type "ghost" is not registered`},
-		{"a dependency type with no variant", []Spec{spec("diff", "", diff())},
+		{"a dependency type with no variant", []feature.Spec{spec("diff", "", diff())},
 			`features: diff: no variant of dependency type "last" is configured`},
-		{"a pair dependency type", []Spec{spec("spread", "pairs", spread()), spec("diff", "", diffOf("diff", "spread"))},
+		{"a pair dependency type", []feature.Spec{spec("spread", "pairs", spread()), spec("diff", "", diffOf("diff", "spread"))},
 			`features: diff: dependency type "spread" is a pair feature, not supported yet`},
-		{"a cycle, its dependent adding nothing", []Spec{
+		{"a cycle, its dependent adding nothing", []feature.Spec{
 			spec("loop_a", "", follow("loop_a", "loop_b")), spec("loop_b", "", follow("loop_b", "loop_a")),
 			spec("tail", "", follow("tail", "loop_a"))},
 			"features: dependency cycle: loop_a -> loop_b -> loop_a"},
-		{"a type depending on itself", []Spec{spec("loop_self", "", follow("loop_self", "loop_self"))},
+		{"a type depending on itself", []feature.Spec{spec("loop_self", "", follow("loop_self", "loop_self"))},
 			"features: dependency cycle: loop_self -> loop_self"},
-		{"a pair feature without a universe", []Spec{spec("spread", "", spread())},
+		{"a pair feature without a universe", []feature.Spec{spec("spread", "", spread())},
 			"features: spread: a pair feature needs a universe"},
-		{"a universe without pairs", []Spec{spec("spread", "eth", spread())},
+		{"a universe without pairs", []feature.Spec{spec("spread", "eth", spread())},
 			`features: spread: universe "eth" has no pairs`},
-		{"an unknown universe", []Spec{spec("last", "ghost", last())},
+		{"an unknown universe", []feature.Spec{spec("last", "ghost", last())},
 			`features: last: unknown universe "ghost"`},
-		{"a dependent of a type with an error adds none", []Spec{
+		{"a dependent of a type with an error adds none", []feature.Spec{
 			spec("diff", "", diffOf("diff", "ghost")), spec("ddiff", "", ddiff())},
 			`features: diff: dependency type "ghost" is not registered`},
 	} {
@@ -226,30 +227,30 @@ func TestExpandErrors(t *testing.T) {
 // same on every call.
 func TestExpandStages(t *testing.T) {
 	btcID := testStreams().All[btc5m].Sub.ID()
-	bindErrSpecs := []Spec{
+	bindErrSpecs := []feature.Spec{
 		spec("last", "", sign()), // an int variant of the type diff reads as float64
 		spec("diff", "btc", diff()),
 	}
 
 	for _, c := range []struct {
 		name  string
-		specs []Spec
+		specs []feature.Spec
 		want  []string
 	}{
-		{"placement errors together, hiding a bind error", slices.Concat([]Spec{
+		{"placement errors together, hiding a bind error", slices.Concat([]feature.Spec{
 			spec("spread", "", spread()), spec("sum", "ghost", sum(2))}, bindErrSpecs),
 			[]string{
 				"features: spread: a pair feature needs a universe",
 				`features: sum_2: unknown universe "ghost"`,
 			}},
-		{"a duplicate hiding a cycle", []Spec{
+		{"a duplicate hiding a cycle", []feature.Spec{
 			spec("sum", "", sum(2)), spec("sum", "", sum(2)),
 			spec("loop_a", "", follow("loop_a", "loop_b")), spec("loop_b", "", follow("loop_b", "loop_a"))},
 			[]string{"features: sum_2 is configured twice"}},
-		{"a dependency error hiding a placement error", []Spec{
+		{"a dependency error hiding a placement error", []feature.Spec{
 			spec("diff", "", diff()), spec("spread", "", spread())},
 			[]string{`features: diff: no variant of dependency type "last" is configured`}},
-		{"newGraph's value type and bind errors together", slices.Concat([]Spec{
+		{"newGraph's value type and bind errors together", slices.Concat([]feature.Spec{
 			spec("label", "", label())}, bindErrSpecs),
 			[]string{
 				"features: label: unsupported Bind func(*feature.Binder) func() (string, bool)",

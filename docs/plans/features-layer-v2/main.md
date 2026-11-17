@@ -76,9 +76,9 @@ From [features.md](../../discussions/features.md):
 - **`Bind` runs once, before any ring exists.** A node needs the addresses of its inputs' views, not
   rings. `Expand` binds every instance, so `--validate-only` covers dependency value types and arity,
   and `New` only allocates. A `Graph` holds bound nodes and the views they read, so it runs once.
-- **Consumers read only the feature layer's view.** `Step` returns a `features.View` pinned at the
-  data view's frame, embedding it; `ViewOf[T](fv, id)` narrows it to a composed ID's
-  `frame.View[T]`, type-checked.
+- **Consumers read only the feature layer's view.** `Step` returns a `feature.FeaturesView` pinned
+  at the data view's frame, embedding it, valid until the next `Step`; `ViewOf[T](fv, id)` narrows
+  it to a composed ID's `frame.View[T]`, type-checked (`docs/plans/protocol-types.md`).
 - **Buffers stay with their owners.** Holding a `frame.Buffer` is holding write access to its rings,
   so only the data layer and the feature engine hold buffers. Nodes never hold one, not even to pin
   an input: the engine pins their inputs and hands them views.

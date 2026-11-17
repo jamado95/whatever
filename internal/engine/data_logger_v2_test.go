@@ -18,9 +18,9 @@ import (
 	"whatever/internal/config"
 	feat "whatever/internal/domains/features"
 	featv2 "whatever/internal/domains/featuresv2"
-	"whatever/internal/engine/features"
 	"whatever/internal/logger"
 	proto "whatever/internal/protocol"
+	"whatever/internal/protocol/feature"
 	reg "whatever/internal/registry"
 )
 
@@ -273,10 +273,10 @@ func TestDataLoggerV2Factory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create sma v2: %v", err)
 	}
-	spec := features.Spec{Type: featv2.SMAID, Feature: smaV2}
+	spec := feature.Spec{Type: featv2.SMAID, Feature: smaV2}
 
 	p := &barProvider{}
-	opts := func(originals []proto.Feature, specs []features.Spec, options map[string]any) map[string]any {
+	opts := func(originals []proto.Feature, specs []feature.Spec, options map[string]any) map[string]any {
 		o := map[string]any{
 			"_streams":    proto.NewStreams([]proto.Subscription{sub5mDerive1h}),
 			"_providers":  map[proto.Subscription]proto.DataProvider{sub5mDerive1h: p},
@@ -290,7 +290,7 @@ func TestDataLoggerV2Factory(t *testing.T) {
 		return o
 	}
 
-	eng, err := reg.Engines.Create(DataLoggerV2ID, opts([]proto.Feature{sma}, []features.Spec{spec}, nil))
+	eng, err := reg.Engines.Create(DataLoggerV2ID, opts([]proto.Feature{sma}, []feature.Spec{spec}, nil))
 	if err != nil {
 		t.Fatalf("derived subscription: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestDataLoggerV2Factory(t *testing.T) {
 		"no universes":       {without("_universes"), ""},
 		"negative limit":     {opts(nil, nil, map[string]any{"limit": float64(-1)}), ""},
 		"invalid ticker":     {opts(nil, nil, map[string]any{"ticker": map[string]any{"type": "fixedinterval"}}), ""},
-		"a variant twice":    {opts(nil, []features.Spec{spec, spec}, nil), "features: sma_3 is configured twice"},
+		"a variant twice":    {opts(nil, []feature.Spec{spec, spec}, nil), "features: sma_3 is configured twice"},
 		"duplicate features": {opts([]proto.Feature{sma, sma}, nil, nil), ""},
 	} {
 		_, err := reg.Engines.Create(DataLoggerV2ID, c.opts)

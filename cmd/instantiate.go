@@ -5,9 +5,9 @@ import (
 	"maps"
 
 	"whatever/internal/config"
-	"whatever/internal/engine/features"
 	"whatever/internal/logger"
 	proto "whatever/internal/protocol"
+	"whatever/internal/protocol/feature"
 	reg "whatever/internal/registry"
 )
 
@@ -17,7 +17,7 @@ type components struct {
 	providers  map[string]proto.DataProvider // by config name
 	strategies map[string]proto.Strategy     // by type
 	features   []proto.Feature
-	featuresV2 []features.Spec                   // the feature engine's variants, from reg.FeatureTypes
+	featuresV2 []feature.Spec                    // the feature engine's variants, from reg.FeatureTypes
 	universes  map[string]proto.ResolvedUniverse // the universes resolved without error, by name
 	exporter   proto.Exporter                    // nil when absent or disabled
 }
@@ -194,7 +194,7 @@ func (c *components) addFeatureV2(cfg config.FeatureConfig, log *logger.Logger) 
 			continue
 		}
 
-		c.featuresV2 = append(c.featuresV2, features.Spec{Type: cfg.Type, Universe: cfg.Universe, Feature: f})
+		c.featuresV2 = append(c.featuresV2, feature.Spec{Type: cfg.Type, Universe: cfg.Universe, Feature: f})
 		log.Info(fmt.Sprintf("created feature: %s", f.ID))
 	}
 

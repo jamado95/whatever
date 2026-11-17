@@ -26,7 +26,7 @@ Core Architecture
   - internal/engine/features: the feature engine — `Expand`, turning the composition root's specs
     (one per configured variant) and resolved universes into the feature graph; a typed result ring
     per composed ID and coordinate, one candle copy per stream that nodes read through
-    `Input.Last`, and the `View` consumers read results through, as built per
+    `Input.Last`, handing consumers each frame's `feature.FeaturesView`, as built per
     `docs/plans/features-layer-v2`
 - internal/flow: data-flow primitives — pipe (generic combinators, fanout), align (cross-stream synchronizers), timing (tickers)
 - internal/protocol: the types layers exchange, each with its own invariants: domain interfaces,
@@ -39,7 +39,10 @@ Core Architecture
   - internal/protocol/feature: the feature contract — `Feature` (what a factory configures: `ID`,
     `Lookback`, `Pair`, `Deps`, `Bind`) and `Bind[T]`, which takes a node's `Input[T]` handles from a
     `Binder` and returns the node, a function computing its value; `Feature.Validate` checks what
-    the contract requires of any variant. Holds no buffer: results live in the feature engine
+    the contract requires of any variant; `Spec`, one configured variant the composition root hands
+    the engine; `FeaturesView` and `ViewOf`, the feature layer at a frame that consumers read
+    results through, valid until the next `Step`. Holds no buffer of its own: results live in the
+    feature engine, whose buffers a `FeaturesView` pins
 - internal/registry: registers all internal component factories; `FeatureTypes` holds the feature
   contract's factories by base ID, beside `Features`, `FeatureChain`'s
 

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	proto "whatever/internal/protocol"
+	"whatever/internal/protocol/feature"
 	"whatever/internal/protocol/frame"
 )
 
@@ -27,15 +28,15 @@ func newRun(t *testing.T, cols int64, instances []instance) *run {
 }
 
 // pin pins the engine at col.
-func (r *run) pin(col int64) View { return r.e.pin(at(r.buf, col)) }
+func (r *run) pin(col int64) feature.FeaturesView { return r.e.pin(at(r.buf, col)) }
 
 // step steps the engine at col.
-func (r *run) step(col int64) View { return r.e.Step(at(r.buf, col)) }
+func (r *run) step(col int64) feature.FeaturesView { return r.e.Step(at(r.buf, col)) }
 
 // mustView is ViewOf, failing the test on an error.
-func mustView[T any](t *testing.T, v View, id string) frame.View[T] {
+func mustView[T any](t *testing.T, v feature.FeaturesView, id string) frame.View[T] {
 	t.Helper()
-	out, err := ViewOf[T](v, id)
+	out, err := feature.ViewOf[T](v, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +52,7 @@ func TestEngineFrame(t *testing.T) {
 		over(diff(), "diff-last", map[string]string{"last": "last"}, all...),
 		on(sign(), all...),
 	))
-	var v View
+	var v feature.FeaturesView
 	for col := int64(0); col <= 24; col++ {
 		v = r.step(col)
 	}
@@ -160,7 +161,7 @@ func TestEnginePairs(t *testing.T) {
 		on(spread(), fine, coarse),
 		over(pdiff(), "pdiff-last", map[string]string{"last": "last"}, coarse),
 	))
-	var v View
+	var v feature.FeaturesView
 	for col := int64(0); col <= 24; col++ {
 		v = r.step(col)
 	}
@@ -234,9 +235,9 @@ func TestViewOf(t *testing.T) {
 		err  error
 		want string
 	}{
-		{viewErr[int](v, "last"), `features: result "last" is not int`},
-		{viewErr[float64](v, "sign"), `features: result "sign" is not float64`},
-		{viewErr[float64](v, "nope"), `features: unknown result "nope"`},
+		{viewErr[int](v, "last"), `feature: result "last" is not int`},
+		{viewErr[float64](v, "sign"), `feature: result "sign" is not float64`},
+		{viewErr[float64](v, "nope"), `feature: unknown result "nope"`},
 	} {
 		if c.err == nil || c.err.Error() != c.want {
 			t.Errorf("err = %v, want %q", c.err, c.want)
@@ -244,8 +245,8 @@ func TestViewOf(t *testing.T) {
 	}
 }
 
-func viewErr[T any](v View, id string) error {
-	_, err := ViewOf[T](v, id)
+func viewErr[T any](v feature.FeaturesView, id string) error {
+	_, err := feature.ViewOf[T](v, id)
 	return err
 }
 
@@ -317,7 +318,7 @@ func TestEngineAllocations(t *testing.T) {
 	allocs := testing.AllocsPerRun(100, func() { // 101 runs, up to column 107
 		v := r.step(col)
 		col++
-		view, _ := ViewOf[float64](v, "last")
+		view, _ := feature.ViewOf[float64](v, "last")
 		view.Latest(btc5m)
 		dst = view.Data(btc5m, 3, dst)
 		v.Pair(btc5m, eth5m)

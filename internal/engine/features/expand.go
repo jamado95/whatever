@@ -11,13 +11,6 @@ import (
 	reg "whatever/internal/registry"
 )
 
-// Spec is one configured variant: what the composition root builds from a feature entry.
-type Spec struct {
-	Type     string          // the entry's type: the base ID other types' Deps name
-	Universe string          // the entry's universe; "" runs a single-stream feature on every stream
-	Feature  feature.Feature // the variant reg.FeatureTypes built from the entry's options
-}
-
 /*
 Expand turns specs into a validated Graph over st. Each variant is composed with every variant of its
 dependency types and placed on its universe's streams, every stream without one, or its universe's
@@ -28,7 +21,7 @@ Its checks run in stages: grouping, dependencies, cycles, placement, then newGra
 stage with errors stops it, returning all of that stage's errors, joined; each stage relies on those
 before it.
 */
-func Expand(st *proto.Streams, universes map[string]proto.ResolvedUniverse, specs []Spec) (*Graph, error) {
+func Expand(st *proto.Streams, universes map[string]proto.ResolvedUniverse, specs []feature.Spec) (*Graph, error) {
 	instances, err := expand(st, universes, specs)
 	if err != nil {
 		return nil, err
@@ -37,9 +30,9 @@ func Expand(st *proto.Streams, universes map[string]proto.ResolvedUniverse, spec
 }
 
 // expand returns the instances of specs, or the errors of its first check stage that finds any.
-func expand(st *proto.Streams, universes map[string]proto.ResolvedUniverse, specs []Spec) ([]instance, error) {
+func expand(st *proto.Streams, universes map[string]proto.ResolvedUniverse, specs []feature.Spec) ([]instance, error) {
 	x := &expansion{
-		variants: make(map[string][]Spec),
+		variants: make(map[string][]feature.Spec),
 		comps:    make(map[string][]*composition),
 	}
 	for _, stage := range []func(){
@@ -61,9 +54,9 @@ func expand(st *proto.Streams, universes map[string]proto.ResolvedUniverse, spec
 
 // expansion is Expand's state: the specs by type and the errors found.
 type expansion struct {
-	specs    []Spec                    // each variant ID once, in order
+	specs    []feature.Spec            // each variant ID once, in order
 	types    []string                  // in order of first appearance
-	variants map[string][]Spec         // by type
+	variants map[string][]feature.Spec // by type
 	comps    map[string][]*composition // by type, memoised
 	errs     []error
 }
@@ -84,7 +77,7 @@ func (x *expansion) deps(typ string) []string { return x.variants[typ][0].Featur
 
 // group sorts specs by type, reporting a variant ID seen before and a variant declaring Pair or Deps
 // unlike its type's first.
-func (x *expansion) group(specs []Spec) {
+func (x *expansion) group(specs []feature.Spec) {
 	seen := make(map[string]bool, len(specs))
 	for _, s := range specs {
 		id := s.Feature.ID
@@ -247,7 +240,7 @@ func (x *expansion) place(st *proto.Streams, universes map[string]proto.Resolved
 
 // coordinates returns where s runs: its universe's pairs for a pair feature, otherwise its universe's
 // streams, or every stream without one.
-func coordinates(st *proto.Streams, universes map[string]proto.ResolvedUniverse, s Spec) ([][2]int, error) {
+func coordinates(st *proto.Streams, universes map[string]proto.ResolvedUniverse, s feature.Spec) ([][2]int, error) {
 	id := s.Feature.ID
 	if s.Universe == "" {
 		if s.Feature.Pair {

@@ -43,6 +43,13 @@ func (f Feature) Validate() error {
 	return nil
 }
 
+// Spec is one configured variant: what the composition root builds from a feature entry.
+type Spec struct {
+	Type     string  // the entry's type: the base ID other types' Deps name
+	Universe string  // the entry's universe; "" runs a single-stream feature on every stream
+	Feature  Feature // the variant reg.FeatureTypes built from the entry's options
+}
+
 /*
 Bind places a feature at one coordinate: it takes its inputs from b, allocates its scratch and returns
 its node, which returns the value at the frame its inputs are pinned at, or false when it cannot

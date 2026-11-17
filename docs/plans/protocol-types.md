@@ -47,12 +47,12 @@ stay unstaged for review; the step is committed once approved, then the next sta
   moved into `config.go`: it names a config path.
 - **Every error message is unchanged.** Config and `cmd` keep their prefixes
   (`universes[i] (name):`, `universe "name":`, `subscriptions[i] (ID):`), except `ViewOf`'s, below.
-- **`FeaturesView` holds each result's pinned view, not its buffer.** The index maps a composed ID
-  to the `*frame.View[T]` that `column.cell()` already returns. The engine re-pins it in `pin`
-  before handing out the view. "Only the feature engine holds feature buffers"
-  ([features.md](../discussions/features.md) § Feature buffer) holds as written: `ViewOf` copies a
-  view and pins nothing. This replaces protocol.md's "each composed ID's `*frame.Buffer[T]`",
-  recorded at planning.
+- **`FeaturesView` holds each result's buffer, and `ViewOf` pins it at the view's own frame**, as
+  today's `View` does through the graph. The index maps a composed ID to its column's
+  `*frame.Buffer[T]` (`column.buffer()`), in an unexported field, so consumers still get only
+  pinned views. A `FeaturesView` kept past the next `Step` reads its own frame: no read sees a later
+  column. Amended at implementation: the plan first held the engine's views, re-pinned each frame,
+  which an older `FeaturesView` read at the newer frame (`TestEngineFrame`).
 - **The index is built once, in `New`.** `Step` returns `feature.NewFeaturesView(v, e.results,
   e.g.pairs)`, a struct holding two map references, so `Step` still allocates nothing.
 - **`ViewOf`'s errors take its package's prefix**: `feature: unknown result "x"`,
@@ -208,17 +208,17 @@ holding views instead of the graph:
 // column. Valid until the next frame is stepped.
 type FeaturesView struct {
 	frame.View[proto.Candle]
-	results map[string]any // by composed ID: its *frame.View[T], pinned at the frame
+	results map[string]any // by composed ID: its *frame.Buffer[T], pinned by ViewOf
 	pairs   map[[2]int]int // the pair table: (a, b), a < b → entry
 }
 
 // NewFeaturesView returns the feature layer at v's frame. results holds each composed ID's
-// *frame.View[T], which the caller pins at v's frame; pairs is the pair table. Both are shared.
+// *frame.Buffer[T]; pairs is the pair table. Both are shared, never written.
 func NewFeaturesView(v frame.View[proto.Candle], results map[string]any, pairs map[[2]int]int) FeaturesView
 
 // ViewOf returns composed ID id's results at v's frame: entry i is stream i, or pair i of the pair
 // table. An unknown ID, or a value type other than T, is an error.
-func ViewOf[T any](v FeaturesView, id string) (frame.View[T], error) // asserts *frame.View[T], returns a copy
+func ViewOf[T any](v FeaturesView, id string) (frame.View[T], error) // asserts *frame.Buffer[T], pins it at v's frame
 
 // Pair returns the pair (a, b)'s entry in pair results, in either order.
 func (v FeaturesView) Pair(a, b int) (int, bool)
@@ -227,10 +227,10 @@ func (v FeaturesView) Pair(a, b int) (int, bool)
 **`internal/engine/features`**
 
 - `view.go` is deleted. `expand.go` takes `[]feature.Spec`.
-- `Engine` gains `results map[string]any`, filled in `New` from `g.columns` with each column's
-  `cell()`, once. `pin` returns `feature.NewFeaturesView(v, e.results, e.g.pairs)`, and `Step`
-  returns `feature.FeaturesView`.
-- `column.cell()`'s comment: the `*frame.View[T]` that dependents bind to and consumers read.
+- `column` gains `buffer() any`: its `*frame.Buffer[T]`, nil until `alloc`.
+- `Engine` gains `results map[string]any`, filled once in `New`, after allocating, from
+  `g.columns` with each column's `buffer()`. `pin` returns
+  `feature.NewFeaturesView(v, e.results, e.g.pairs)`, and `Step` returns `feature.FeaturesView`.
 
 **`cmd/instantiate.go`** — `components.featuresV2 []feature.Spec`. It imports
 `internal/protocol/feature` instead of `internal/engine/features`.
@@ -241,7 +241,8 @@ func (v FeaturesView) Pair(a, b int) (int, bool)
 
 - **New `internal/protocol/feature/view_test.go`** — **`TestFeaturesView`**, over buffers built and
   pinned by hand (`buffers()`):
-  - `ViewOf[float64]` reads what the pinned view reads.
+  - `ViewOf[float64]` reads what the buffer pinned at the view's frame reads; two `FeaturesView`s
+    sharing one index each read their own frame.
   - `ViewOf[int]` on a float64 result is `feature: result "x" is not int`; an unknown ID is
     `feature: unknown result "y"`.
   - `Pair` finds a pair in either order, and reports a missing one.
@@ -259,9 +260,11 @@ func (v FeaturesView) Pair(a, b int) (int, bool)
     each frame's `feature.FeaturesView`".
   - `internal/protocol/feature`: adds `Spec`, one configured variant the composition root hands
     the engine, and `FeaturesView` with `ViewOf`, the feature layer at a frame that consumers read
-    results through. "Holds no buffer" stands.
+    results through. "Holds no buffer" becomes "holds no buffer of its own; a `FeaturesView`
+    pins the engine's".
 - [features.md](../discussions/features.md):
-  - § Feature buffer: `View.Pair` → `FeaturesView.Pair`.
+  - § Feature buffer: `View.Pair` → `FeaturesView.Pair`; "Only the feature engine holds feature
+    buffers" notes that a `FeaturesView` carries them unexported, pinned by `ViewOf`.
   - § Feature layer pieces: consumers read through `feature.FeaturesView`.
   - Open Questions, struct results: `ViewOf` is in `internal/protocol/feature`; the struct type's
     home is still open.
@@ -351,7 +354,8 @@ The `reflect` import goes; `strings` stays for the provider name check.
 Committed with this plan, beside the discussion it executes:
 
 - [protocol.md](../discussions/protocol.md):
-  - Solution: planned in this plan; `FeaturesView` holds each result's pinned view, not its buffer.
+  - Solution: planned in this plan; `FeaturesView` holds each result's pinned view, not its buffer
+    (reverted to buffers at implementation, § Decisions).
   - WIP: planned.
 - [features.md](../discussions/features.md), [config.md](../discussions/config.md) — the interim
   notes say "planned in `docs/plans/protocol-types.md`".

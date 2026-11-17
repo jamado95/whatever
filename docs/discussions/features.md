@@ -215,7 +215,8 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
 - **Only the feature engine holds feature buffers.** Holding a `frame.Buffer` is holding write access
   to its rings, so nodes and consumers get views, never buffers or rings: nodes cannot pin their
   inputs themselves, and the engine hands them their inputs' views. The engine writes what each
-  node returns into the node's own ring.
+  node returns into the node's own ring. A `feature.FeaturesView` carries the engine's buffers in an
+  unexported field; consumers get them only pinned, through `ViewOf`.
 - **One ring per result, each result stored once.** A result is a feature instance at its
   coordinate. Each composed ID has one typed buffer — not each variant ID, which `zscore_50-rsi_14`
   and `zscore_50-rsi_21` share — with one ring per stream of the stream table, or per pair of the
@@ -255,7 +256,7 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   until a feature reads one (iteration 3); they read through `Data` into scratch.
 - **No per-stream feature map.** Buffers share the stream table's and the pair table's indices, so
   features never look anything up — their inputs' views and ring indices are taken at `Bind` — and
-  consumers resolve a composed ID once with `ViewOf` and a pair with `View.Pair`.
+  consumers resolve a composed ID once with `ViewOf` and a pair with `FeaturesView.Pair`.
 - **Memory warning.** `features.New` estimates the feature buffer's memory (results × slots × slot
   size, and the candle copies) and logs a warning above 1 GiB, naming the lookback and the composed
   IDs holding the most memory. Not universes: a result is stored once per composed ID and
@@ -329,11 +330,12 @@ Superseded by § Feature layer above; kept for context.
 
 ### Reversed on 2026-11-15
 
-Superseded by § Feature layer above; kept for context.
+Superseded by § Feature layer and § Feature buffer above; kept for context.
 
 | Was | Now | Why |
 |---|---|---|
 | Universes in config: `config.Universe`, `Resolve`, `Resolved` | Universes in protocol: `proto.Universe`, `Universe.Resolve`, `ResolvedUniverse` | The engine consumes resolved universes, which are decoded from the file like subscriptions; `cmd` and `config` reach the core only through protocol ([[protocol]]) |
+| `features.View` and `ViewOf` in `internal/engine/features`, reading the graph | `feature.FeaturesView` and `ViewOf` in `internal/protocol/feature`, pinning the engine's buffers | Domains read results without importing the engine ([[protocol]]) |
 
 ## Solution
 
@@ -365,7 +367,7 @@ variants and resolved universes).
 | Expansion | Variants × dependency variants × coordinates; validation; composed IDs; each variant's value type recovered; every node bound; the `Graph` | Engine construction | `internal/engine/features` (pure function) |
 | Feature engine | Allocate the rings (`frame.Buffer[T]` per composed ID) and one candle copy per stream, due-pattern schedules; `Step(view)` | `Run`, then each frame | `internal/engine/features` |
 | Frame primitives | Generic rings and buffers, pinned `View[T]` | — | `internal/protocol/frame` |
-| Consumers | Exporter and strategies read through the `View` | After `Step` | — |
+| Consumers | Exporter and strategies read through `feature.FeaturesView` | After `Step` | — |
 
 Leaving the data path: `Snapshot`, `SortedWindow`, `FeatureChain`, `Update`, and the
 `data_logger_v2` bridge.
@@ -495,11 +497,10 @@ bound up with the strategy input contract ([[strategy-layer]]).
   (`ema_20_s1e-05`); the ports' `variantID` formats with `'f'` (`ema_20_s0.00001`), identical to `'g'`
   for values in [1e-4, 1e6). Negative values carry a sign: planned, `Feature.Validate` rejects a
   variant ID with `-`, called by the composition root on each variant (stage 5).
-- **How a strategy reads a struct result.** `ViewOf` is in `engine/features` and a struct value type
-  in its feature's domain, while a domain imports only `protocol` ([[engine]]). To settle before
-  strategies read features. `ViewOf` moves to `internal/protocol/feature`, beside `View` renamed
-  `FeaturesView`: decided in [[protocol]], planned in `docs/plans/protocol-types.md`. Where the
-  struct value type lives is still open.
+- **How a strategy reads a struct result.** `ViewOf` is in `internal/protocol/feature`
+  ([[protocol]]), and a struct value type in its feature's domain, while a domain imports only
+  `protocol` ([[engine]]). Where the struct type lives is still open; to settle before strategies
+  read features.
 - **`Input` reads once dependency results have copies** (iteration 3). Candle inputs read through
   `Last`; `Data` and `Latest` stay for dependency inputs, which have no copy (stage 4). If dependency
   results get copies, refilled after a dependency fires and before its dependents, `Input` could

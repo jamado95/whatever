@@ -90,12 +90,12 @@ Agreed 2026-11-15.
 
 ## Solution
 
-Planned in [`docs/plans/protocol-types.md`](../plans/protocol-types.md); step 1 executed:
+Planned in [`docs/plans/protocol-types.md`](../plans/protocol-types.md); steps 1 and 2 executed:
 
 | Piece | Now | Proposed |
 |---|---|---|
 | `Universe`, `Rule`, `Pairs`, `Resolve`, `Resolved` | `internal/config/universe.go` | `internal/protocol/universe.go`: `Universe`, `UniverseRule`, `UniversePairs`, `ResolvedUniverse`; `Universe.Validate`, `Universe.Resolve` |
-| `View`, `ViewOf`, `Pair` | `internal/engine/features/view.go` | `internal/protocol/feature`, `View` renamed `FeaturesView`. It holds the engine's `*Graph` today; in protocol it holds an index `New` builds once — each composed ID's `*frame.View[T]`, which the engine pins each frame, type-erased, and the pair table. `Step` still returns it; `ViewOf` asserts `*frame.View[T]` and copies it, so no buffer leaves the engine |
+| `View`, `ViewOf`, `Pair` | `internal/engine/features/view.go` | `internal/protocol/feature`, `View` renamed `FeaturesView`. It holds the engine's `*Graph` today; in protocol it holds an index `New` builds once — each composed ID's `*frame.Buffer[T]`, type-erased and unexported, and the pair table. `Step` still returns it; `ViewOf` asserts `*frame.Buffer[T]` and pins it at the view's own frame, so a view kept past the next `Step` still reads its frame |
 | Universe names required and unique, feature → universe references, error paths | `config.validate`, `universePath` | Unchanged |
 | `Spec` | `internal/engine/features` | `internal/protocol/feature`; `cmd` then imports no engine package |
 | A subscription's required fields, derived windows coarser and a multiple | `config.validate` | `proto.Subscription.Validate` and `Complete`; duplicates stay in config |
@@ -107,9 +107,10 @@ None.
 
 ## WIP
 
-- Step 1 implemented: universes in `internal/protocol/universe.go`; `internal/engine/features` no
-  longer imports `config`. Steps 2 (`Spec`, `FeaturesView`, `ViewOf`) and 3
-  (`Subscription.Validate`) remain — `docs/plans/protocol-types.md`.
+- Steps 1 and 2 implemented: universes in `internal/protocol/universe.go`, so
+  `internal/engine/features` no longer imports `config`; `Spec`, `FeaturesView` and `ViewOf` in
+  `internal/protocol/feature`, so `cmd` imports no engine package. Step 3
+  (`Subscription.Validate`) remains — `docs/plans/protocol-types.md`.
 
 ## Resources
 

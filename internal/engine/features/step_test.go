@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	proto "whatever/internal/protocol"
+	"whatever/internal/protocol/feature"
 	"whatever/internal/protocol/frame"
 )
 
@@ -244,7 +245,7 @@ func TestStepBruteForce(t *testing.T) {
 		"pairs": universe([]int{direct1h, btc5m, eth5m, rolling1h},
 			pair(direct1h, rolling1h), pair(btc5m, eth5m), pair(eth5m, rolling1h)),
 	}
-	specs := []Spec{ // dependents first, so Expand places them before their dependencies
+	specs := []feature.Spec{ // dependents first, so Expand places them before their dependencies
 		spec("pdiff", "pairs", pdiff()), spec("spread", "pairs", spread()),
 		spec("ddiff", "", ddiff()), spec("ratio", "", ratio()), spec("diff", "", diff()),
 		spec("sign", "", sign()), spec("sum", "", sum(3)), spec("last", "", last()),

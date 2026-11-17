@@ -17,6 +17,7 @@ import (
 	"whatever/internal/idgen"
 	"whatever/internal/logger"
 	proto "whatever/internal/protocol"
+	"whatever/internal/protocol/feature"
 	"whatever/internal/protocol/frame"
 	reg "whatever/internal/registry"
 )
@@ -44,7 +45,7 @@ func init() {
 			return nil, err
 		}
 
-		specs, err := config.Dep[[]features.Spec](opts, "_featuresv2")
+		specs, err := config.Dep[[]feature.Spec](opts, "_featuresv2")
 		if err != nil {
 			return nil, err
 		}

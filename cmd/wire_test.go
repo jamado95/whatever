@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"whatever/internal/config"
-	"whatever/internal/engine/features"
 	proto "whatever/internal/protocol"
 	"whatever/internal/protocol/feature"
 	reg "whatever/internal/registry"
@@ -100,7 +99,7 @@ func TestWireInjectsSpecs(t *testing.T) {
 	})
 
 	c := stubComponents()
-	c.featuresV2 = []features.Spec{{Type: "rsi", Universe: "btc", Feature: feature.Feature{ID: "rsi_14"}}}
+	c.featuresV2 = []feature.Spec{{Type: "rsi", Universe: "btc", Feature: feature.Feature{ID: "rsi_14"}}}
 	c.universes = map[string]proto.ResolvedUniverse{"btc": {Streams: []int{0}}}
 	cfg := wireConfig()
 	cfg.Engine.Type = "recording_test"

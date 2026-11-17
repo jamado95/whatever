@@ -198,7 +198,9 @@ func init() {
 }
 
 // spec is f as a variant of typ on universe u, "" for none.
-func spec(typ, u string, f feature.Feature) Spec { return Spec{Type: typ, Universe: u, Feature: f} }
+func spec(typ, u string, f feature.Feature) feature.Spec {
+	return feature.Spec{Type: typ, Universe: u, Feature: f}
+}
 
 // label has a value type the engine does not support.
 func label() feature.Feature {

@@ -5,22 +5,25 @@ import (
 	"slices"
 
 	proto "whatever/internal/protocol"
+	"whatever/internal/protocol/feature"
 	"whatever/internal/protocol/frame"
 )
 
 // Engine is one run of a Graph: its schedules and each frame's firing state.
 type Engine struct {
 	g         *Graph
-	periods   []int64       // the nodes' periods, ascending: a divisibility chain
-	schedules [][]int       // by pattern: the nodes due, in serial order
-	legs      []frame.State // by stream, at the frame: Fresh when updated there, Ended, or Gap
-	fresh     []bool        // by node: fired with a value at its last due column
-	ended     []bool        // by node: Ended written
+	results   map[string]any // by composed ID: its column's buffer, which each FeaturesView pins
+	periods   []int64        // the nodes' periods, ascending: a divisibility chain
+	schedules [][]int        // by pattern: the nodes due, in serial order
+	legs      []frame.State  // by stream, at the frame: Fresh when updated there, Ended, or Gap
+	fresh     []bool         // by node: fired with a value at its last due column
+	ended     []bool         // by node: Ended written
 }
 
 /*
-New allocates every column's buffer and each read stream's candle copy, and builds the schedules: the
-nodes' periods, and for each due pattern the nodes due there, in serial order.
+New allocates every column's buffer and each read stream's candle copy, indexes the columns' buffers
+for consumers, and builds the schedules: the nodes' periods, and for each due pattern the nodes due
+there, in serial order.
 */
 func New(g *Graph) *Engine {
 	for _, c := range g.all {
@@ -32,9 +35,15 @@ func New(g *Graph) *Engine {
 		}
 	}
 
+	results := make(map[string]any, len(g.columns))
+	for id, c := range g.columns {
+		results[id] = c.buffer()
+	}
+
 	periods, scheds := schedules(g, order(g))
 	return &Engine{
 		g:         g,
+		results:   results,
 		periods:   periods,
 		schedules: scheds,
 		legs:      make([]frame.State, len(g.history)),
@@ -51,7 +60,7 @@ dependencies fired with a value at the column; otherwise it is written Gap, or E
 column at or after its leg ended, and nothing after. It returns the feature layer at the frame, valid
 until the next Step.
 */
-func (e *Engine) Step(v frame.View[proto.Candle]) View {
+func (e *Engine) Step(v frame.View[proto.Candle]) feature.FeaturesView {
 	fv := e.pin(v)
 	col := v.Col()
 	for _, i := range e.schedules[e.pattern(col)] {
@@ -89,7 +98,7 @@ func (e *Engine) depsFresh(n *node) bool {
 pin re-pins the candles and every result at v's frame, reads every stream's leg there, and refills the
 candle copies of the streams updated there, before any node fires at it.
 */
-func (e *Engine) pin(v frame.View[proto.Candle]) View {
+func (e *Engine) pin(v frame.View[proto.Candle]) feature.FeaturesView {
 	e.g.candles = v
 	for s := range e.legs {
 		e.legs[s] = streamLeg(v, s)
@@ -98,7 +107,7 @@ func (e *Engine) pin(v frame.View[proto.Candle]) View {
 	for _, c := range e.g.all {
 		c.pin(v)
 	}
-	return View{View: v, g: e.g}
+	return feature.NewFeaturesView(v, e.results, e.g.pairs)
 }
 
 /*
