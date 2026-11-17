@@ -6,7 +6,6 @@ import (
 	"slices"
 	"testing"
 
-	"whatever/internal/config"
 	proto "whatever/internal/protocol"
 	"whatever/internal/protocol/frame"
 )
@@ -241,7 +240,7 @@ and Expand's placement order, dependents before their dependencies. After each c
 written there, and the state Latest reads, is equal on every ring.
 */
 func TestStepBruteForce(t *testing.T) {
-	universes := map[string]config.Resolved{
+	universes := map[string]proto.ResolvedUniverse{
 		"pairs": universe([]int{direct1h, btc5m, eth5m, rolling1h},
 			pair(direct1h, rolling1h), pair(btc5m, eth5m), pair(eth5m, rolling1h)),
 	}

@@ -101,7 +101,7 @@ func TestWireInjectsSpecs(t *testing.T) {
 
 	c := stubComponents()
 	c.featuresV2 = []features.Spec{{Type: "rsi", Universe: "btc", Feature: feature.Feature{ID: "rsi_14"}}}
-	c.universes = map[string]config.Resolved{"btc": {Streams: []int{0}}}
+	c.universes = map[string]proto.ResolvedUniverse{"btc": {Streams: []int{0}}}
 	cfg := wireConfig()
 	cfg.Engine.Type = "recording_test"
 

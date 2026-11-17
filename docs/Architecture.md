@@ -29,9 +29,11 @@ Core Architecture
     `Input.Last`, and the `View` consumers read results through, as built per
     `docs/plans/features-layer-v2`
 - internal/flow: data-flow primitives — pipe (generic combinators, fanout), align (cross-stream synchronizers), timing (tickers)
-- internal/protocol: domain interfaces, and the stream table (`Streams`: one entry per direct
-  subscription and derived window, built once by the composition root; a stream's index in it is its
-  index in every layer)
+- internal/protocol: the types layers exchange, each with its own invariants: domain interfaces,
+  the stream table (`Streams`: one entry per direct subscription and derived window, built once by
+  the composition root; a stream's index in it is its index in every layer), and universes
+  (`Universe`: named stream and pair sets, resolved over the stream table into a
+  `ResolvedUniverse`)
   - internal/protocol/frame: generic rings and buffers, and the read-only views pinned at a frame
     that layers hand each other and consumers
   - internal/protocol/feature: the feature contract — `Feature` (what a factory configures: `ID`,
@@ -46,7 +48,11 @@ Design Rules
 - Dependency injection using a factory registry
   - Backtesting strat param optimisation needs many instances (how to handle TBD)
 - Engine wires domains together
-- Protocol defines contracts; implementations live in domains
+- Protocol holds the types layers exchange: contracts, and value types holding their own
+  invariants (`Validate`, validating `UnmarshalJSON`). Implementations live in domains, which fill
+  in protocol values rather than embed protocol types
+- `cmd` and `config` reach the core only through protocol and the registry; the core imports
+  `config` only for the factory helpers
 - `internal/protocol` and its subpackages import nothing outside `internal/protocol`
 - `flow/pipe` is the primary data/control flow mechanism
   - Pipeline stages follow `pipe.Stage`: a stage owns its goroutine and closes its output when its

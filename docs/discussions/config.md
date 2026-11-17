@@ -110,6 +110,8 @@ Executed implementation plans:
 - [`docs/plans/features-layer-v2/stage-2-universes.md`](../plans/features-layer-v2/stage-2-universes.md)
   — universes, their resolver over the stream table, and collected validation errors. Executed
   2026-11-02.
+- [`docs/plans/protocol-types.md`](../plans/protocol-types.md) — step 1, universes moved into
+  protocol. Executed 2026-11-17.
 
 As implemented:
 
@@ -117,7 +119,8 @@ As implemented:
 |---|---|
 | `Decode`, `DecodeOptions`, `Dep`, `OptDep`, `Duration`, `Validator` | `internal/config/decode.go` |
 | File shape, strict `Load`, `EngineConfig.Opts()` | `internal/config/config.go` |
-| `Universe`, `Rule`, `Pairs`, `Resolve` | `internal/config/universe.go` |
+| `Universe`, `UniverseRule`, `UniversePairs`, `Universe.Validate`, `Universe.Resolve` | `internal/protocol/universe.go` |
+| Universe names and feature → universe references, `universePath` | `internal/config/config.go` |
 | Resolving each universe over the stream table, `addUniverse` | `cmd/instantiate.go` |
 | `Timeframe.UnmarshalJSON` | `internal/protocol/provider.go` |
 | `TickerType`, `TickerConfig`, `newTicker` | `internal/engine/ticker.go` |
@@ -169,15 +172,14 @@ Resolved by this work: silent ticker fallback, triplicated engine parsers, untyp
     self-contained rules (references, explicit pairs, `*`) with filters on symbol, timeframe,
     provider and kind. See [features § Universes](features.md#universes); example config in
     [features § Solution — Universes](features.md#universes-1).
-  - **Universe resolution is config's** — `Resolve`, a pure function of rules over the stream table
-    (`proto.Streams`). `Load` checks universes' shape only; the composition root builds the table
-    once in `instantiate`, resolves each universe over it with `Resolve` (`addUniverse`),
-    keeping only those that resolve without error, and injects the table as `_streams`. A used
-    universe selecting no stream is an error there. Resolution errors are prefixed
-    `universe "name":`, `Load`'s shape errors `universes[i] (name):`. See
-    [features § Feature layer](features.md#feature-layer). To move into protocol, config keeping
-    the block's cross-entry checks: decided in [[protocol]], planned in
-    `docs/plans/protocol-types.md`.
+  - **Universe resolution is protocol's** — `Universe.Resolve`, a pure function of rules over the
+    stream table (`proto.Streams`). `Load` checks universes' shape with `Universe.Validate`, and
+    their names and references itself; the composition root builds the table once in
+    `instantiate`, resolves each universe over it (`addUniverse`), keeping only those that resolve
+    without error, and injects the table as `_streams`. A used universe selecting no stream is an
+    error there. Resolution errors are prefixed `universe "name":`, `Load`'s shape errors
+    `universes[i] (name):`. Moved from config by `docs/plans/protocol-types.md` step 1
+    ([[protocol]]). See [features § Feature layer](features.md#feature-layer).
   - **Rules name streams by their stream IDs**, derived ones included, so a name matches at most one
     stream and subscriptions need no new rule. Lookup is the only check on a name. See
     [features § Universes](features.md#universes).

@@ -7,19 +7,19 @@ import (
 	"strings"
 	"testing"
 
-	"whatever/internal/config"
+	proto "whatever/internal/protocol"
 )
 
 // names are the test table's streams, short.
 var names = [...]string{direct1h: "d1h", btc5m: "btc5m", eth5m: "eth5m", rolling1h: "r1h"}
 
 // universe is a resolved universe of the test table: its streams, and its pairs.
-func universe(streams []int, pairs ...[2]int) config.Resolved {
-	return config.Resolved{Streams: streams, Pairs: pairs}
+func universe(streams []int, pairs ...[2]int) proto.ResolvedUniverse {
+	return proto.ResolvedUniverse{Streams: streams, Pairs: pairs}
 }
 
 // testUniverses are the universes the tests bind to.
-var testUniverses = map[string]config.Resolved{
+var testUniverses = map[string]proto.ResolvedUniverse{
 	"btc":   universe([]int{btc5m}),
 	"eth":   universe([]int{eth5m}),
 	"d1h":   universe([]int{direct1h}),

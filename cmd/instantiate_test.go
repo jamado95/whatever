@@ -75,9 +75,9 @@ func TestInstantiateSpecs(t *testing.T) {
 
 	cfg := &config.Config{
 		Subscriptions: []proto.Subscription{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "p"}},
-		Universes: []config.Universe{
-			{Name: "btc", Rules: []config.Rule{{Symbol: []string{"BTC*"}}}},
-			{Name: "typo", Rules: []config.Rule{{References: []string{"BTCUSDT:1h:ghost"}}}},
+		Universes: []proto.Universe{
+			{Name: "btc", Rules: []proto.UniverseRule{{Symbol: []string{"BTC*"}}}},
+			{Name: "typo", Rules: []proto.UniverseRule{{References: []string{"BTCUSDT:1h:ghost"}}}},
 		},
 		Features: []config.FeatureConfig{
 			{Type: "rsi", Universe: "btc", Variants: []map[string]any{{"period": 14}, {"period": 21}}},
@@ -121,12 +121,12 @@ func TestInstantiateUniverses(t *testing.T) {
 	eth := proto.Subscription{Symbol: "ETHUSDT", Timeframe: proto.Timeframe1h, Provider: "eth_1h"}
 	c := &components{
 		streams:   proto.NewStreams([]proto.Subscription{btc, eth}),
-		universes: make(map[string]config.Resolved),
+		universes: make(map[string]proto.ResolvedUniverse),
 	}
-	sol := []config.Rule{{Symbol: []string{"SOL*"}}}
-	universes := []config.Universe{
-		{Name: "btc", Rules: []config.Rule{{Symbol: []string{"BTC*"}}}},
-		{Name: "typo", Rules: []config.Rule{{References: []string{"BTCUSDT:1h:binance"}}}},
+	sol := []proto.UniverseRule{{Symbol: []string{"SOL*"}}}
+	universes := []proto.Universe{
+		{Name: "btc", Rules: []proto.UniverseRule{{Symbol: []string{"BTC*"}}}},
+		{Name: "typo", Rules: []proto.UniverseRule{{References: []string{"BTCUSDT:1h:binance"}}}},
 		{Name: "empty", Rules: sol},
 		{Name: "unused", Rules: sol},
 		{Name: "disabled_only", Rules: sol},

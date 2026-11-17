@@ -1,4 +1,4 @@
-package config
+package proto
 
 import (
 	"cmp"
@@ -7,8 +7,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	proto "whatever/internal/protocol"
 )
 
 // The streams of testStreams, by ID.
@@ -23,14 +21,14 @@ const (
 )
 
 // testStreams is a table on two providers, binance and kraken, with a derived 1h window on each.
-func testStreams() *proto.Streams {
-	derive1h := proto.NewTimeframeDerivationSet(proto.Timeframe1h)
-	return proto.NewStreams([]proto.Subscription{
-		{Symbol: "BTCUSDT", Timeframe: proto.Timeframe5m, Provider: "binance", Derive: derive1h},
-		{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "kraken"},
-		{Symbol: "ETHUSDT", Timeframe: proto.Timeframe1h, Provider: "binance"},
-		{Symbol: "ETHUSDT", Timeframe: proto.Timeframe5m, Provider: "kraken", Derive: derive1h},
-		{Symbol: "ETHBTC", Timeframe: proto.Timeframe1h, Provider: "kraken"},
+func testStreams() *Streams {
+	derive1h := NewTimeframeDerivationSet(Timeframe1h)
+	return NewStreams([]Subscription{
+		{Symbol: "BTCUSDT", Timeframe: Timeframe5m, Provider: "binance", Derive: derive1h},
+		{Symbol: "BTCUSDT", Timeframe: Timeframe1h, Provider: "kraken"},
+		{Symbol: "ETHUSDT", Timeframe: Timeframe1h, Provider: "binance"},
+		{Symbol: "ETHUSDT", Timeframe: Timeframe5m, Provider: "kraken", Derive: derive1h},
+		{Symbol: "ETHBTC", Timeframe: Timeframe1h, Provider: "kraken"},
 	})
 }
 
@@ -39,7 +37,7 @@ func universe(t *testing.T, rules ...string) Universe {
 	t.Helper()
 	u := Universe{Name: "test"}
 	for _, js := range rules {
-		var r Rule
+		var r UniverseRule
 		dec := json.NewDecoder(strings.NewReader(js))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&r); err != nil {
@@ -50,17 +48,8 @@ func universe(t *testing.T, rules ...string) Universe {
 	return u
 }
 
-func index(t *testing.T, st *proto.Streams, id string) int {
-	t.Helper()
-	i, ok := st.Index(id)
-	if !ok {
-		t.Fatalf("no stream %q", id)
-	}
-	return i
-}
-
 // render lists r by stream ID, for failure messages.
-func render(st *proto.Streams, r Resolved) string {
+func render(st *Streams, r ResolvedUniverse) string {
 	streams := make([]string, len(r.Streams))
 	for i, s := range r.Streams {
 		streams[i] = st.All[s].Sub.ID()
@@ -80,22 +69,22 @@ type resolveCase struct {
 }
 
 // runResolve resolves each case over st and wants exactly its streams and pairs, sorted.
-func runResolve(t *testing.T, st *proto.Streams, cases []resolveCase) {
+func runResolve(t *testing.T, st *Streams, cases []resolveCase) {
 	t.Helper()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, errs := Resolve(universe(t, tc.rules...), st)
+			got, errs := universe(t, tc.rules...).Resolve(st)
 			if len(errs) > 0 {
 				t.Fatalf("Resolve: %v", errs)
 			}
 
-			var want Resolved
+			var want ResolvedUniverse
 			for _, id := range tc.streams {
-				want.Streams = append(want.Streams, index(t, st, id))
+				want.Streams = append(want.Streams, mustIndex(t, st, id))
 			}
 			slices.Sort(want.Streams)
 			for _, p := range tc.pairs {
-				a, b := index(t, st, p[0]), index(t, st, p[1])
+				a, b := mustIndex(t, st, p[0]), mustIndex(t, st, p[1])
 				want.Pairs = append(want.Pairs, [2]int{min(a, b), max(a, b)})
 			}
 			slices.SortFunc(want.Pairs, func(a, b [2]int) int {
@@ -169,7 +158,7 @@ func TestResolveNamed(t *testing.T) {
 		u := universe(t,
 			`{"references": ["BTCUSDT:1h:kraken", "BTCUSDT:1h:binance", "BTCUSDT"]}`,
 			`{"pairs": [["BTCUSDT:1h:kraken", "SOLUSDT:1h:kraken"]]}`)
-		got, errs := Resolve(u, testStreams())
+		got, errs := u.Resolve(testStreams())
 		wantErrs(t, errs,
 			`rules[0].references[1]: no stream has ID "BTCUSDT:1h:binance"`,
 			`rules[0].references[2]: no stream has ID "BTCUSDT"`,
@@ -237,7 +226,7 @@ func TestResolveUnion(t *testing.T) {
 	})
 }
 
-func TestUniverseCheck(t *testing.T) {
+func TestUniverseValidate(t *testing.T) {
 	cases := []struct {
 		name  string
 		rules []string
@@ -293,25 +282,25 @@ func TestUniverseCheck(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			wantErrs(t, universe(t, tc.rules...).check(), tc.want...)
+			wantErrs(t, universe(t, tc.rules...).Validate(), tc.want...)
 		})
 	}
 }
 
-func TestPairsUnmarshal(t *testing.T) {
-	var all Pairs
+func TestUniversePairsUnmarshal(t *testing.T) {
+	var all UniversePairs
 	if err := json.Unmarshal([]byte(`"*"`), &all); err != nil || !all.All || all.List != nil {
 		t.Errorf(`"*" = %+v, %v; want All`, all, err)
 	}
 
-	var list Pairs
+	var list UniversePairs
 	err := json.Unmarshal([]byte(`[["a", "b"], ["c"]]`), &list)
 	if err != nil || list.All || !slices.EqualFunc(list.List, [][]string{{"a", "b"}, {"c"}}, slices.Equal) {
 		t.Errorf("a list = %+v, %v; want it as written", list, err)
 	}
 
 	for _, js := range []string{`"all"`, `3`, `[["a", 1]]`} {
-		var p Pairs
+		var p UniversePairs
 		if err := json.Unmarshal([]byte(js), &p); err == nil {
 			t.Errorf("%s decoded as %+v, want an error", js, p)
 		}
@@ -330,14 +319,14 @@ var readme = map[string]string{
 }
 
 // readmeStreams is the table of the guide's five example subscriptions.
-func readmeStreams() *proto.Streams {
-	derive1h := proto.NewTimeframeDerivationSet(proto.Timeframe1h)
-	return proto.NewStreams([]proto.Subscription{
-		{Symbol: "BTCUSDT", Timeframe: proto.Timeframe5m, Provider: "btc_5m", Derive: derive1h},
-		{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "btc_1h"},
-		{Symbol: "ETHUSDT", Timeframe: proto.Timeframe5m, Provider: "eth_5m", Derive: derive1h},
-		{Symbol: "SOLUSDT", Timeframe: proto.Timeframe1h, Provider: "sol_1h"},
-		{Symbol: "ETHBTC", Timeframe: proto.Timeframe1h, Provider: "ethbtc_1h"},
+func readmeStreams() *Streams {
+	derive1h := NewTimeframeDerivationSet(Timeframe1h)
+	return NewStreams([]Subscription{
+		{Symbol: "BTCUSDT", Timeframe: Timeframe5m, Provider: "btc_5m", Derive: derive1h},
+		{Symbol: "BTCUSDT", Timeframe: Timeframe1h, Provider: "btc_1h"},
+		{Symbol: "ETHUSDT", Timeframe: Timeframe5m, Provider: "eth_5m", Derive: derive1h},
+		{Symbol: "SOLUSDT", Timeframe: Timeframe1h, Provider: "sol_1h"},
+		{Symbol: "ETHBTC", Timeframe: Timeframe1h, Provider: "ethbtc_1h"},
 	})
 }
 
@@ -346,7 +335,7 @@ func readmeStreams() *proto.Streams {
 func TestResolveExamples(t *testing.T) {
 	st := readmeStreams()
 	for _, id := range readme {
-		index(t, st, id) // the guide's stream IDs are the table's
+		mustIndex(t, st, id) // the guide's stream IDs are the table's
 	}
 
 	examples := []struct {
@@ -395,9 +384,9 @@ func TestResolveExamples(t *testing.T) {
 	for _, ex := range errExamples {
 		t.Run(ex.rule, func(t *testing.T) {
 			u := universe(t, ex.rule)
-			errs := u.check()
+			errs := u.Validate()
 			if len(errs) == 0 {
-				_, errs = Resolve(u, st)
+				_, errs = u.Resolve(st)
 			}
 			wantErrs(t, errs, ex.want)
 		})

@@ -167,9 +167,8 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   (`proto.Streams`), built once by the composition root and injected into the data layer and the
   feature layer: a stream's index in it is its index in the data rings, the feature buffers and
   resolved universes ([[data-layer-v2]] § Subscriptions and the grid).
-- **Universe resolution belongs to config** — a pure function of rules over the stream table,
-  independent of the feature engine. To move into protocol, resolution unchanged: decided in
-  [[protocol]], planned in `docs/plans/protocol-types.md`.
+- **Universe resolution belongs to protocol** — `Universe.Resolve`, a pure function of rules over
+  the stream table, independent of the feature engine. See § Reversed on 2026-11-15.
 - **Views are part of the protocol layer**, in `internal/protocol/frame`. Generic, concrete rings
   (`frame.Ring[T]`, one per entry, reads stepped by `Period × Window`) in a `frame.Buffer[T]`, read
   through a `frame.View[T]` pinned at a frame: a read-only snapshot for consumers, with direct calls.
@@ -328,6 +327,14 @@ Superseded by § Feature layer above; kept for context.
 |---|---|---|
 | `--validate-only` reports expansion and bind errors all in one pass, a failed type set aside so later checks still run | Expansion stops at its first check stage with errors, reporting all of that stage's | Each stage relies on those before it, so none tracks failed types or reasons about a partial graph; the errors it can hide are few, mostly code bugs |
 
+### Reversed on 2026-11-15
+
+Superseded by § Feature layer above; kept for context.
+
+| Was | Now | Why |
+|---|---|---|
+| Universes in config: `config.Universe`, `Resolve`, `Resolved` | Universes in protocol: `proto.Universe`, `Universe.Resolve`, `ResolvedUniverse` | The engine consumes resolved universes, which are decoded from the file like subscriptions; `cmd` and `config` reach the core only through protocol ([[protocol]]) |
+
 ## Solution
 
 Executed stages of `docs/plans/features-layer-v2/main.md`, iteration 4 of
@@ -354,7 +361,7 @@ variants and resolved universes).
 | Contract | `Feature`, `Bind[T]`, binder and `Input` handles | — | `internal/protocol/feature` |
 | Feature types | Pure maths; a factory returning a `Feature`, registered under the base ID | — | `internal/domains/featuresv2` until the originals in `internal/domains/features` retire |
 | Stream table | One entry per direct subscription and derived window; the index space of every layer | Composition root | `internal/protocol` |
-| Registry and config | Type → factory; variants decoded strictly; `universes` block, `universe` per feature; universe resolution | Config parse, composition root | `internal/registry`, `internal/config` |
+| Registry, config and universes | Type → factory; variants decoded strictly; `universes` block, `universe` per feature; universe resolution | Config parse, composition root | `internal/registry`, `internal/config`, `internal/protocol` (universes) |
 | Expansion | Variants × dependency variants × coordinates; validation; composed IDs; each variant's value type recovered; every node bound; the `Graph` | Engine construction | `internal/engine/features` (pure function) |
 | Feature engine | Allocate the rings (`frame.Buffer[T]` per composed ID) and one candle copy per stream, due-pattern schedules; `Step(view)` | `Run`, then each frame | `internal/engine/features` |
 | Frame primitives | Generic rings and buffers, pinned `View[T]` | — | `internal/protocol/frame` |
@@ -535,6 +542,8 @@ bound up with the strategy input contract ([[strategy-layer]]).
   universes; `data_logger_v2`'s factory expands them with `features.Expand`, stopping at the first
   check stage with errors, into a bound graph that nothing runs yet —
   `docs/plans/features-layer-v2/stage-5-expansion.md`.
+- Universes moved into protocol: `proto.Universe`, `Universe.Resolve` and `ResolvedUniverse`;
+  config keeps the block's cross-entry checks — `docs/plans/protocol-types.md` step 1.
 - Registered and working: `sma`, `ema`, `rsi`, `vwap`, `engulfing_candle`.
 - `swing_highlow` is broken behind a `wip` build tag. It duplicates swing-detection logic that also
   exists (also broken) inside `buy_the_dip` — see [[strategy-layer]]. Consolidating swing detection

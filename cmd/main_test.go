@@ -198,8 +198,8 @@ func TestBuildReportsUniverseErrors(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []config.ComponentConfig{csvProvider("binance_csv")},
 		Features:  []config.FeatureConfig{{Type: "ghost_feature", Universe: "btc"}},
-		Universes: []config.Universe{
-			{Name: "btc", Rules: []config.Rule{{References: []string{"BTCUSDT:1h:ghost"}}}},
+		Universes: []proto.Universe{
+			{Name: "btc", Rules: []proto.UniverseRule{{References: []string{"BTCUSDT:1h:ghost"}}}},
 		},
 		Subscriptions: []proto.Subscription{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "binance_csv"}},
 		Engine:        config.EngineConfig{Type: "data_logger"},

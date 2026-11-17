@@ -1,4 +1,4 @@
-package config
+package proto
 
 import (
 	"cmp"
@@ -9,28 +9,26 @@ import (
 	"path"
 	"reflect"
 	"slices"
-
-	proto "whatever/internal/protocol"
 )
 
 // Universe is a named set of streams and pairs, the union of its rules' selections.
 type Universe struct {
-	Name  string `json:"name"`
-	Rules []Rule `json:"rules"`
+	Name  string         `json:"name"`
+	Rules []UniverseRule `json:"rules"`
 }
 
-// Rule selects streams by filters, and pairs them by at most one of References or Pairs.
-type Rule struct {
-	Symbol     []string           `json:"symbol"` // globs
-	Timeframe  []proto.Timeframe  `json:"timeframe"`
-	Provider   []string           `json:"provider"` // globs over provider instance names
-	Kind       []proto.StreamKind `json:"kind"`
-	References []string           `json:"references"` // stream IDs
-	Pairs      *Pairs             `json:"pairs"`
+// UniverseRule selects streams by filters, and pairs them by at most one of References or Pairs.
+type UniverseRule struct {
+	Symbol     []string       `json:"symbol"` // globs
+	Timeframe  []Timeframe    `json:"timeframe"`
+	Provider   []string       `json:"provider"` // globs over provider instance names
+	Kind       []StreamKind   `json:"kind"`
+	References []string       `json:"references"` // stream IDs
+	Pairs      *UniversePairs `json:"pairs"`
 }
 
 // check returns r's shape errors, each prefixed at.
-func (r Rule) check(at string) []error {
+func (r UniverseRule) check(at string) []error {
 	var errs []error
 	add := func(err error) {
 		if err != nil {
@@ -89,7 +87,7 @@ func (r Rule) check(at string) []error {
 }
 
 // matches reports whether stream i passes every filter r sets.
-func (r Rule) matches(st *proto.Streams, i int) bool {
+func (r UniverseRule) matches(st *Streams, i int) bool {
 	s := st.All[i]
 	return globAny(r.Symbol, s.Sub.Symbol) &&
 		(len(r.Timeframe) == 0 || slices.Contains(r.Timeframe, s.Sub.Timeframe)) &&
@@ -97,21 +95,21 @@ func (r Rule) matches(st *proto.Streams, i int) bool {
 		(len(r.Kind) == 0 || slices.Contains(r.Kind, s.Kind))
 }
 
-// Pairs is "*", every pair of the rule's streams, or a list of explicit pairs.
-type Pairs struct {
+// UniversePairs is "*", every pair of the rule's streams, or a list of explicit pairs.
+type UniversePairs struct {
 	All  bool
 	List [][]string // two names each; checked, since a [2]string would drop extras silently
 }
 
 // UnmarshalJSON decodes "*" or [[a, b], …]; any other string is an error.
-func (p *Pairs) UnmarshalJSON(b []byte) error {
+func (p *UniversePairs) UnmarshalJSON(b []byte) error {
 	var s string
 	if err := json.Unmarshal(b, &s); err == nil {
 		if s != "*" {
 			return fmt.Errorf("pairs must be \"*\" or a list of pairs, got %q", s)
 		}
 
-		*p = Pairs{All: true}
+		*p = UniversePairs{All: true}
 
 		return nil
 	}
@@ -121,16 +119,16 @@ func (p *Pairs) UnmarshalJSON(b []byte) error {
 		return fmt.Errorf("pairs must be \"*\" or a list of pairs: %w", err)
 	}
 
-	*p = Pairs{List: list}
+	*p = UniversePairs{List: list}
 
 	return nil
 }
 
 // explicit reports whether p lists its pairs rather than pairing a rule's streams.
-func (p *Pairs) explicit() bool { return p != nil && !p.All }
+func (p *UniversePairs) explicit() bool { return p != nil && !p.All }
 
-// Resolved is a universe's streams and pairs as indices into the stream table's All.
-type Resolved struct {
+// ResolvedUniverse is a universe's streams and pairs as indices into the stream table's All.
+type ResolvedUniverse struct {
 	Streams []int    // ascending
 	Pairs   [][2]int // a < b, ascending
 }
@@ -139,9 +137,9 @@ type Resolved struct {
 Resolve returns u's streams and pairs over st. Each rule's streams S are the streams passing its
 filters; a references rule pairs each reference with S, explicit pairs are taken as written, "*"
 pairs S. Streams are S plus every named stream; duplicates collapse and self-pairs are dropped. A
-name that is no stream's ID is an error, path-named from the rule. u must have passed check.
+name that is no stream's ID is an error, path-named from the rule. u must have passed Validate.
 */
-func Resolve(u Universe, st *proto.Streams) (Resolved, []error) {
+func (u Universe) Resolve(st *Streams) (ResolvedUniverse, []error) {
 	var errs []error
 	streams := make(map[int]bool)
 	pairs := make(map[[2]int]bool)
@@ -208,14 +206,14 @@ func Resolve(u Universe, st *proto.Streams) (Resolved, []error) {
 		return cmp.Or(cmp.Compare(a[0], b[0]), cmp.Compare(a[1], b[1]))
 	})
 
-	return Resolved{Streams: slices.Sorted(maps.Keys(streams)), Pairs: ps}, errs
+	return ResolvedUniverse{Streams: slices.Sorted(maps.Keys(streams)), Pairs: ps}, errs
 }
 
 /*
-check returns u's shape errors, path-named from the rule: pairing, empty lists and values, globs.
+Validate returns u's shape errors, path-named from the rule: pairing, empty lists and values, globs.
 Names are left to Resolve: a name is valid if it is a stream's ID.
 */
-func (u Universe) check() []error {
+func (u Universe) Validate() []error {
 	if len(u.Rules) == 0 {
 		return []error{errors.New("rules: at least one rule is required")}
 	}
@@ -272,12 +270,4 @@ func checkGlob(at, g string) error {
 		return fmt.Errorf("%s: invalid glob %q", at, g)
 	}
 	return nil
-}
-
-// universePath is universe i's error prefix, universes[i] (name).
-func universePath(i int, name string) string {
-	if name == "" {
-		return fmt.Sprintf("universes[%d]", i)
-	}
-	return fmt.Sprintf("universes[%d] (%s)", i, name)
 }

@@ -16,7 +16,7 @@ type Config struct {
 	Providers     []ComponentConfig    `json:"providers"`
 	Strategies    []ComponentConfig    `json:"strategies"`
 	Features      []FeatureConfig      `json:"features"`
-	Universes     []Universe           `json:"universes"`
+	Universes     []proto.Universe     `json:"universes"`
 	Subscriptions []proto.Subscription `json:"subscriptions"`
 	Engine        EngineConfig         `json:"engine"`
 }
@@ -216,7 +216,7 @@ func (c *Config) validate() []error {
 		}
 		named[u.Name] = true
 
-		for _, err := range u.check() {
+		for _, err := range u.Validate() {
 			errs = append(errs, fmt.Errorf("%s: %w", universePath(i, u.Name), err))
 		}
 	}
@@ -226,4 +226,12 @@ func (c *Config) validate() []error {
 	}
 
 	return errs
+}
+
+// universePath is universe i's error prefix, universes[i] (name).
+func universePath(i int, name string) string {
+	if name == "" {
+		return fmt.Sprintf("universes[%d]", i)
+	}
+	return fmt.Sprintf("universes[%d] (%s)", i, name)
 }

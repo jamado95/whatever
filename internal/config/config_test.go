@@ -9,6 +9,19 @@ import (
 	proto "whatever/internal/protocol"
 )
 
+// wantErrs fails unless errs are exactly one per want, in order, each containing it.
+func wantErrs(t *testing.T, errs []error, want ...string) {
+	t.Helper()
+	if len(errs) != len(want) {
+		t.Fatalf("got %d errors %v, want %d %q", len(errs), errs, len(want), want)
+	}
+	for i, err := range errs {
+		if !strings.Contains(err.Error(), want[i]) {
+			t.Errorf("error %d = %q, want it to contain %q", i, err, want[i])
+		}
+	}
+}
+
 func writeConfig(t *testing.T, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")
@@ -254,7 +267,7 @@ func TestLoadUniverses(t *testing.T) {
 	if usdt.Name != "usdt" || usdt.Rules[0].Symbol[0] != "*USDT" || usdt.Rules[0].Kind[0] != proto.StreamDirect {
 		t.Errorf("usdt = %+v, want a *USDT direct filter", usdt)
 	}
-	if lead.Rules[0].References[0] != "BTCUSDT:1h:binance_csv" || !lead.Rules[1].Pairs.explicit() ||
+	if lead.Rules[0].References[0] != "BTCUSDT:1h:binance_csv" || lead.Rules[1].Pairs == nil || lead.Rules[1].Pairs.All ||
 		len(lead.Rules[1].Pairs.List) != 1 {
 		t.Errorf("lead = %+v, want a references rule and one explicit pair", lead)
 	}

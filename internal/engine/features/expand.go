@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 
-	"whatever/internal/config"
 	proto "whatever/internal/protocol"
 	"whatever/internal/protocol/feature"
 	reg "whatever/internal/registry"
@@ -29,7 +28,7 @@ Its checks run in stages: grouping, dependencies, cycles, placement, then newGra
 stage with errors stops it, returning all of that stage's errors, joined; each stage relies on those
 before it.
 */
-func Expand(st *proto.Streams, universes map[string]config.Resolved, specs []Spec) (*Graph, error) {
+func Expand(st *proto.Streams, universes map[string]proto.ResolvedUniverse, specs []Spec) (*Graph, error) {
 	instances, err := expand(st, universes, specs)
 	if err != nil {
 		return nil, err
@@ -38,7 +37,7 @@ func Expand(st *proto.Streams, universes map[string]config.Resolved, specs []Spe
 }
 
 // expand returns the instances of specs, or the errors of its first check stage that finds any.
-func expand(st *proto.Streams, universes map[string]config.Resolved, specs []Spec) ([]instance, error) {
+func expand(st *proto.Streams, universes map[string]proto.ResolvedUniverse, specs []Spec) ([]instance, error) {
 	x := &expansion{
 		variants: make(map[string][]Spec),
 		comps:    make(map[string][]*composition),
@@ -195,7 +194,7 @@ place returns every spec's compositions at its coordinates, each composition's d
 onto the streams it runs on, each composed ID once per coordinate. A spec with a wrong universe is
 reported and places nothing; expand then discards what was placed.
 */
-func (x *expansion) place(st *proto.Streams, universes map[string]config.Resolved) []instance {
+func (x *expansion) place(st *proto.Streams, universes map[string]proto.ResolvedUniverse) []instance {
 	type placed struct {
 		id string
 		at [2]int
@@ -248,7 +247,7 @@ func (x *expansion) place(st *proto.Streams, universes map[string]config.Resolve
 
 // coordinates returns where s runs: its universe's pairs for a pair feature, otherwise its universe's
 // streams, or every stream without one.
-func coordinates(st *proto.Streams, universes map[string]config.Resolved, s Spec) ([][2]int, error) {
+func coordinates(st *proto.Streams, universes map[string]proto.ResolvedUniverse, s Spec) ([][2]int, error) {
 	id := s.Feature.ID
 	if s.Universe == "" {
 		if s.Feature.Pair {

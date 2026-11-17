@@ -90,7 +90,7 @@ Agreed 2026-11-15.
 
 ## Solution
 
-Planned in [`docs/plans/protocol-types.md`](../plans/protocol-types.md), not yet executed:
+Planned in [`docs/plans/protocol-types.md`](../plans/protocol-types.md); step 1 executed:
 
 | Piece | Now | Proposed |
 |---|---|---|
@@ -107,8 +107,9 @@ None.
 
 ## WIP
 
-- Nothing implemented. Planned in `docs/plans/protocol-types.md`, to run after features-layer-v2
-  stage 6 and before stage 7, since both touch `internal/engine/features`.
+- Step 1 implemented: universes in `internal/protocol/universe.go`; `internal/engine/features` no
+  longer imports `config`. Steps 2 (`Spec`, `FeaturesView`, `ViewOf`) and 3
+  (`Subscription.Validate`) remain — `docs/plans/protocol-types.md`.
 
 ## Resources
 

@@ -17,9 +17,9 @@ type components struct {
 	providers  map[string]proto.DataProvider // by config name
 	strategies map[string]proto.Strategy     // by type
 	features   []proto.Feature
-	featuresV2 []features.Spec            // the feature engine's variants, from reg.FeatureTypes
-	universes  map[string]config.Resolved // the universes resolved without error, by name
-	exporter   proto.Exporter             // nil when absent or disabled
+	featuresV2 []features.Spec                   // the feature engine's variants, from reg.FeatureTypes
+	universes  map[string]proto.ResolvedUniverse // the universes resolved without error, by name
+	exporter   proto.Exporter                    // nil when absent or disabled
 }
 
 // instantiate constructs every enabled component from the registries,
@@ -30,7 +30,7 @@ func instantiate(cfg *config.Config, log *logger.Logger) (*components, []error) 
 	var errs []error
 	c := &components{
 		streams:    proto.NewStreams(cfg.Subscriptions),
-		universes:  make(map[string]config.Resolved),
+		universes:  make(map[string]proto.ResolvedUniverse),
 		providers:  make(map[string]proto.DataProvider),
 		strategies: make(map[string]proto.Strategy),
 		features:   make([]proto.Feature, 0),
@@ -83,10 +83,10 @@ addUniverse resolves cfg over the stream table and keeps it in c.universes when 
 without error. A universe an enabled feature of fcfg names that selects no stream is an error. Errors
 are prefixed universe "name": Load has validated the name.
 */
-func (c *components) addUniverse(cfg config.Universe, fcfg []config.FeatureConfig) []error {
+func (c *components) addUniverse(cfg proto.Universe, fcfg []config.FeatureConfig) []error {
 	var errs []error
 
-	ru, rerrs := config.Resolve(cfg, c.streams)
+	ru, rerrs := cfg.Resolve(c.streams)
 	for _, err := range rerrs {
 		errs = append(errs, fmt.Errorf("universe %q: %w", cfg.Name, err))
 	}
