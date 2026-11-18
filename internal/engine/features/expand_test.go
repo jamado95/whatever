@@ -14,17 +14,25 @@ import (
 // names are the test table's streams, short.
 var names = [...]string{direct1h: "d1h", btc5m: "btc5m", eth5m: "eth5m", rolling1h: "r1h"}
 
-// universe is a resolved universe of the test table: its streams, and its pairs.
-func universe(streams []int, pairs ...[2]int) proto.ResolvedUniverse {
-	return proto.ResolvedUniverse{Streams: streams, Pairs: pairs}
+// universe is a universe over st: its streams, and its pairs.
+func universe(st *proto.Streams, index []int, pairs ...[2]int) proto.Universe {
+	return proto.Universe{Streams: st, Index: index, Pairs: pairs}
 }
 
-// testUniverses are the universes the tests bind to.
-var testUniverses = map[string]proto.ResolvedUniverse{
-	"btc":   universe([]int{btc5m}),
-	"eth":   universe([]int{eth5m}),
-	"d1h":   universe([]int{direct1h}),
-	"pairs": universe([]int{direct1h, btc5m, eth5m, rolling1h}, pair(direct1h, rolling1h), pair(btc5m, eth5m)),
+// testUniverses are the universes the tests bind to, over st.
+func testUniverses(st *proto.Streams) map[string]proto.Universe {
+	return map[string]proto.Universe{
+		"btc":   universe(st, []int{btc5m}),
+		"eth":   universe(st, []int{eth5m}),
+		"d1h":   universe(st, []int{direct1h}),
+		"pairs": universe(st, []int{direct1h, btc5m, eth5m, rolling1h}, pair(direct1h, rolling1h), pair(btc5m, eth5m)),
+	}
+}
+
+// expandTest is Expand over a test table and the test universes over it.
+func expandTest(specs []feature.Spec) (*Graph, error) {
+	st := testStreams()
+	return Expand(st, testUniverses(st), specs)
 }
 
 // rendered is each instance as id@stream or id@a,b, with its dependencies in Deps order; sorted.
@@ -51,10 +59,11 @@ func rendered(instances []instance) []string {
 // mustExpand is specs' instances, rendered, failing the test on any error from Expand.
 func mustExpand(t *testing.T, specs ...feature.Spec) []string {
 	t.Helper()
-	if _, err := Expand(testStreams(), testUniverses, specs); err != nil {
+	if _, err := expandTest(specs); err != nil {
 		t.Fatal(err)
 	}
-	instances, err := expand(testStreams(), testUniverses, specs)
+	st := testStreams()
+	instances, err := expand(st, testUniverses(st), specs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +98,7 @@ func TestExpandPlacement(t *testing.T) {
 	wantInstances(t, mustExpand(t, specs...),
 		slices.Concat(every("last"), []string{"sum_2@eth5m", "spread@d1h,r1h", "spread@btc5m,eth5m"})...)
 
-	g, err := Expand(testStreams(), testUniverses, specs)
+	g, err := expandTest(specs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +171,7 @@ func TestExpandLookback(t *testing.T) {
 		{"the longest", []feature.Spec{spec("last", "", last()), spec("sum", "eth", sum(9)), spec("ratio", "btc", ratio())}, 9},
 		{"none", nil, 1},
 	} {
-		g, err := Expand(testStreams(), testUniverses, c.specs)
+		g, err := expandTest(c.specs)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
@@ -213,13 +222,21 @@ func TestExpandErrors(t *testing.T) {
 			spec("diff", "", diffOf("diff", "ghost")), spec("ddiff", "", ddiff())},
 			`features: diff: dependency type "ghost" is not registered`},
 	} {
-		g, err := Expand(testStreams(), testUniverses, c.specs)
+		g, err := expandTest(c.specs)
 		if err == nil || err.Error() != c.want {
 			t.Errorf("%s:\n got %v\nwant %s", c.name, err, c.want)
 		}
 		if g != nil {
 			t.Errorf("%s: a graph despite the error", c.name)
 		}
+	}
+}
+
+// A universe over a table other than the one expanded over is an error.
+func TestExpandUniverseOverAnotherTable(t *testing.T) {
+	_, err := Expand(testStreams(), testUniverses(testStreams()), []feature.Spec{spec("last", "btc", last())})
+	if want := `features: last: universe "btc" is over another stream table`; err == nil || err.Error() != want {
+		t.Errorf("got %v, want %s", err, want)
 	}
 }
 
@@ -257,7 +274,7 @@ func TestExpandStages(t *testing.T) {
 				fmt.Sprintf(`features: diff-sign on %s: feature: dependency "last" is not float64`, btcID),
 			}},
 	} {
-		_, first := Expand(testStreams(), testUniverses, c.specs)
+		_, first := expandTest(c.specs)
 		if first == nil {
 			t.Errorf("%s: no error", c.name)
 			continue
@@ -265,7 +282,7 @@ func TestExpandStages(t *testing.T) {
 		if got := strings.Split(first.Error(), "\n"); !slices.Equal(got, c.want) {
 			t.Errorf("%s:\n%s\nwant:\n%s", c.name, strings.Join(got, "\n"), strings.Join(c.want, "\n"))
 		}
-		if _, again := Expand(testStreams(), testUniverses, c.specs); again == nil || again.Error() != first.Error() {
+		if _, again := expandTest(c.specs); again == nil || again.Error() != first.Error() {
 			t.Errorf("%s: a second call reports:\n%v\nthe first:\n%v", c.name, again, first)
 		}
 	}

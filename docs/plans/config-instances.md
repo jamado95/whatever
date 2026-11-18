@@ -28,7 +28,7 @@ Load   []SubscriptionConfig ── at least one
 cmd    proto.NewSubscription each, duplicates ─▶ c.subscriptions        nil when one fails
        proto.NewStreams(c.subscriptions)
        reg.Universes.Create(type, opts + _streams) ─▶ map[string]proto.Universe        _universes
-         rules factory: Decode ─ Validate ─ resolve ─ proto.NewUniverse
+         rules factory: Decode ─ Validate ─ resolve, canonical         addUniverse: u.Validate()
 engine features.Expand(st, universes, specs): each universe's Streams is st
 ```
 
@@ -38,8 +38,8 @@ committed once approved, then the next starts.
 1. `proto.NewSubscription`; `SubscriptionConfig`; subscriptions built in `instantiate`.
 2. Universes as components: `reg.Universes`, the `rules` type in `internal/domains/universe`,
    `config.UniverseConfig`, `addUniverse` through the registry.
-3. `ResolvedUniverse` → `proto.Universe{Streams, Index, Pairs}`, `NewUniverse` and `Validate`; the
-   factory ends in `NewUniverse`; `Expand` checks each universe's table.
+3. `ResolvedUniverse` → `proto.Universe{Streams, Index, Pairs}` and its `Validate`, run by
+   `addUniverse` on what the factory returns; `Expand` checks each universe's table.
 
 Executes on `feature/config-instances`, branched from `feature/features-layer-v2` at `27dd54c`.
 
@@ -97,11 +97,13 @@ Executes on `feature/config-instances`, branched from `feature/features-layer-v2
   indexes, `Index` its streams as indices into `Streams.All`, `Pairs` its pairs of indices. The
   field named for the table's type holds the table; consumers that read today's
   `ResolvedUniverse.Streams` read `Index`.
-- **`NewUniverse` normalises, `Validate` is strict.** `NewUniverse(st, index, pairs)` copies its
-  inputs, sorts and dedups the index, orders each pair `a < b`, sorts and dedups the pairs, then
-  validates. `Validate` rejects anything not in that form, so a literal is held to what the engine
-  relies on. A self-pair and a pair end outside `Index` are rejected, not repaired: a factory
-  producing one has a bug. Dropping self-pairs stays the `rules` type's semantics.
+- **A universe type fills the canonical form; the composition root validates it.** `Validate` is
+  strict: it rejects anything not sorted, deduplicated and ordered `a < b`, a self-pair and a pair end
+  outside `Index`. Producing that form is each type's job — `rules` does it in `resolve`, its maps
+  deduplicating and its sort as before — and `addUniverse` runs `Validate` on what the factory
+  returns, as `addFeatureV2` does with `feature.Feature`. A protocol value a domain factory fills
+  has no constructor; one with no factory, the subscription, does. Amended at review: the plan first
+  had a `NewUniverse` constructor normalise and validate inside the factory.
 - **Each universe holds its table by pointer**; the table is shared, never copied or written after
   `NewStreams`. `Expand` keeps its `st` argument — a feature without a universe runs on every
   stream, and the data layer is sized from it — and rejects a used universe whose `Streams` is not
@@ -400,7 +402,7 @@ joined error's parts, else the error alone; `reportErrors` uses it.
 - `internal/protocol` imports nothing outside it; `internal/domains/universe` imports only
   `config`, `protocol` and `registry`.
 
-## Step 3 — `proto.Universe` and `NewUniverse`
+## Step 3 — `proto.Universe` validated at the boundary
 
 ### Changes
 
@@ -408,20 +410,16 @@ joined error's parts, else the error alone; `reportErrors` uses it.
 and given its table as `Streams`:
 
 ```go
-// Universe is a set of streams and pairs over a stream table: what a universe type builds, and what
-// features are placed on.
+/*
+Universe is a set of streams and pairs over a stream table: what a universe type fills in, in this
+canonical form, and what features are placed on. The composition root runs Validate on every universe
+a type returns.
+*/
 type Universe struct {
 	Streams *Streams // the table it indexes; shared, never written
 	Index   []int    // its streams, indices into Streams.All; ascending, unique
 	Pairs   [][2]int // a < b, ascending, unique; both ends in Index
 }
-
-/*
-NewUniverse returns the universe of index and pairs over st with its Validate errors. The inputs are
-copied, the index sorted and deduplicated, each pair ordered a < b, the pairs sorted and
-deduplicated. A self-pair or a pair end outside index is an error, not repaired.
-*/
-func NewUniverse(st *Streams, index []int, pairs [][2]int) (Universe, []error)
 
 /*
 Validate returns u's errors: no stream table alone; otherwise each index entry not in the table, an
@@ -439,9 +437,8 @@ Messages: `no stream table`; `stream 9 is not in the table of 7 streams`;
 **`internal/protocol/stream.go`** — `Streams`'s comment: never written after `NewStreams`;
 universes hold it by pointer.
 
-**`internal/domains/universe/rules.go`** — `resolve` returns the selected stream indices and pairs
-as collected (its sorting goes) and `newRules` ends in `proto.NewUniverse(st, index, pairs)`, its
-errors joined. They can only be bugs: `resolve` drops self-pairs and adds both ends of every pair.
+**`internal/domains/universe/rules.go`** — `resolve` returns `proto.Universe{Streams: st, …}`, its
+index and pairs sorted as before.
 
 **`internal/registry/registry.go`** — `Universes` is `registry[proto.Universe]`.
 
@@ -452,20 +449,21 @@ index; a single-stream feature's coordinates read `u.Index`.
 
 **`internal/engine/data_logger_v2.go`** — `_universes` is `config.Dep[map[string]proto.Universe]`.
 
-**`cmd/instantiate.go`** — `components.universes map[string]proto.Universe`; `addUniverse`'s
-empty-universe check reads `len(u.Index)`.
+**`cmd/instantiate.go`** — `components.universes map[string]proto.Universe`. `addUniverse` runs
+`u.Validate()` on what the factory returns, each error prefixed `universe "name":`, the universe
+kept out of the map; its empty-universe check reads `len(u.Index)`.
 
 ### Tests
 
-- `internal/protocol/universe_test.go`, new:
-  - **`TestNewUniverse`**: an unsorted index with duplicates, reversed and repeated pairs come back
-    canonical, `Streams` the given table, the caller's slices untouched; a self-pair, a pair end
-    outside the index and an index entry past the table are each reported.
-  - **`TestUniverseValidate`**: a canonical literal and an empty universe are valid; no stream table
-    is reported alone; an unsorted or duplicate index, a reversed pair, unsorted or duplicate pairs
-    are each reported.
+- `internal/protocol/universe_test.go`, new — **`TestUniverseValidate`**: a canonical universe and
+  an empty one are valid; no stream table is reported alone; an index entry past the table, an
+  unsorted or duplicate index, a self-pair, a reversed pair, unsorted or duplicate pairs and a pair
+  end outside the index are each reported.
 - `internal/domains/universe/rules_test.go`: `render` and `runResolve` read `proto.Universe`'s
-  `Index`; `runResolve` also wants `Streams` to be the table resolved over.
+  `Index`; `runResolve` also wants `Streams` to be the table resolved over and the universe to pass
+  `Validate`.
+- `cmd/instantiate_test.go` — `TestInstantiateUniverses` gains a type returning an unsorted index:
+  `universe "unsorted": index not ascending and unique at 1`, kept out of the map.
 - `internal/engine/features/expand_test.go`:
   - `universe(st, index, pairs...)` sets `Streams`; `testUniverses` becomes
     `testUniverses(st *proto.Streams) map[string]proto.Universe`, every caller passing the table it
@@ -480,16 +478,19 @@ empty-universe check reads `len(u.Index)`.
 
 - `docs/Architecture.md`, `internal/protocol`: "universes (`Universe`: a set of streams and pairs
   over the stream table — `Streams`, the table by pointer; `Index`, its streams' indices; `Pairs` —
-  built by `NewUniverse` from a universe type's selection)".
+  filled by a universe type, checked by `Validate`)"; Design Rules, the constructor rule: components'
+  protocol values are validated on return (`feature.Feature`, `Universe`).
 - [features.md](../discussions/features.md):
   - § Feature layer, "One stream table for every layer": universes hold the table by pointer;
     `Expand` rejects a universe over another.
   - § Reversed on 2026-11-18, new row: was, `ResolvedUniverse`, its order kept by `Resolve`; now,
-    `proto.Universe{Streams, Index, Pairs}`, built by `NewUniverse`; why, the invariants consumers rely on
-    hold for every universe type ([[protocol]]).
+    `proto.Universe{Streams, Index, Pairs}`, validated by the composition root; why, the invariants
+    consumers rely on hold for every universe type ([[protocol]]).
   - WIP: this plan implemented; the planned note goes.
 - [protocol.md](../discussions/protocol.md):
-  - § What protocol holds: `Universe` with `NewUniverse` and `Validate`; `ResolvedUniverse` gone.
+  - § Decisions: a component's protocol value is validated at the boundary; the universe bullet
+    drops `NewUniverse`.
+  - § What protocol holds: `Universe` with `Validate`; `ResolvedUniverse` gone.
   - Solution: this plan executed, its table rows for subscriptions and universes.
   - WIP: implemented, nothing pending.
 - [config.md](../discussions/config.md) — Solution lists this plan as executed; WIP: implemented.

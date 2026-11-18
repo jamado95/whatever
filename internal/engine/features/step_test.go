@@ -241,8 +241,9 @@ and Expand's placement order, dependents before their dependencies. After each c
 written there, and the state Latest reads, is equal on every ring.
 */
 func TestStepBruteForce(t *testing.T) {
-	universes := map[string]proto.ResolvedUniverse{
-		"pairs": universe([]int{direct1h, btc5m, eth5m, rolling1h},
+	st := testStreams()
+	universes := map[string]proto.Universe{
+		"pairs": universe(st, []int{direct1h, btc5m, eth5m, rolling1h},
 			pair(direct1h, rolling1h), pair(btc5m, eth5m), pair(eth5m, rolling1h)),
 	}
 	specs := []feature.Spec{ // dependents first, so Expand places them before their dependencies
@@ -250,7 +251,6 @@ func TestStepBruteForce(t *testing.T) {
 		spec("ddiff", "", ddiff()), spec("ratio", "", ratio()), spec("diff", "", diff()),
 		spec("sign", "", sign()), spec("sum", "", sum(3)), spec("last", "", last()),
 	}
-	st := testStreams()
 	instances, err := expand(st, universes, specs)
 	if err != nil {
 		t.Fatal(err)

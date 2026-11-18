@@ -18,9 +18,9 @@ type components struct {
 	providers     map[string]proto.DataProvider // by config name
 	strategies    map[string]proto.Strategy     // by type
 	features      []proto.Feature
-	featuresV2    []feature.Spec                    // the feature engine's variants, from reg.FeatureTypes
-	universes     map[string]proto.ResolvedUniverse // the universes resolved without error, by name
-	exporter      proto.Exporter                    // nil when absent or disabled
+	featuresV2    []feature.Spec            // the feature engine's variants, from reg.FeatureTypes
+	universes     map[string]proto.Universe // the universes built without error, by name
+	exporter      proto.Exporter            // nil when absent or disabled
 }
 
 // instantiate constructs every enabled component from the registries,
@@ -30,7 +30,7 @@ type components struct {
 func instantiate(cfg *config.Config, log *logger.Logger) (*components, []error) {
 	var errs []error
 	c := &components{
-		universes:  make(map[string]proto.ResolvedUniverse),
+		universes:  make(map[string]proto.Universe),
 		providers:  make(map[string]proto.DataProvider),
 		strategies: make(map[string]proto.Strategy),
 		features:   make([]proto.Feature, 0),
@@ -119,9 +119,10 @@ func (c *components) addSubscriptions(cfg []config.SubscriptionConfig) []error {
 }
 
 /*
-addUniverse builds cfg from reg.Universes over the stream table and keeps it in c.universes when it
-builds without error. A universe an enabled feature of fcfg names that selects no stream is an error.
-Errors are prefixed universe "name", a joined one per part: Load has validated the name.
+addUniverse builds cfg from reg.Universes over the stream table, validates the universe it returns
+and keeps it in c.universes when both pass. A universe an enabled feature of fcfg names that selects
+no stream is an error. Errors are prefixed universe "name", a joined one per part: Load has validated
+the name.
 */
 func (c *components) addUniverse(cfg config.UniverseConfig, fcfg []config.FeatureConfig) []error {
 	if !reg.Universes.Has(cfg.Type) {
@@ -132,18 +133,25 @@ func (c *components) addUniverse(cfg config.UniverseConfig, fcfg []config.Featur
 	maps.Copy(opts, cfg.Opts)
 	opts["_streams"] = c.streams
 
+	// a factory's joined error per part, then what the universe it returns breaks of its contract
 	u, err := reg.Universes.Create(cfg.Type, opts)
+	var verrs []error
 	if err != nil {
-		var errs []error
-		for _, e := range parts(err) {
-			errs = append(errs, fmt.Errorf("universe %q: %w", cfg.Name, e))
+		verrs = parts(err)
+	} else {
+		verrs = u.Validate()
+	}
+	if len(verrs) > 0 {
+		errs := make([]error, len(verrs))
+		for i, e := range verrs {
+			errs[i] = fmt.Errorf("universe %q: %w", cfg.Name, e)
 		}
 		return errs
 	}
 
 	// an unmatched name already explains an empty universe
 	for _, f := range fcfg {
-		if !f.Disabled && f.Universe == cfg.Name && len(u.Streams) == 0 {
+		if !f.Disabled && f.Universe == cfg.Name && len(u.Index) == 0 {
 			return []error{fmt.Errorf("universe %q: selects no streams", cfg.Name)}
 		}
 	}

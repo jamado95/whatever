@@ -100,7 +100,7 @@ func TestWireInjectsSpecs(t *testing.T) {
 
 	c := stubComponents()
 	c.featuresV2 = []feature.Spec{{Type: "rsi", Universe: "btc", Feature: feature.Feature{ID: "rsi_14"}}}
-	c.universes = map[string]proto.ResolvedUniverse{"btc": {Streams: []int{0}}}
+	c.universes = map[string]proto.Universe{"btc": {Streams: c.streams, Index: []int{0}}}
 	cfg := wireConfig()
 	cfg.Engine.Type = "recording_test"
 

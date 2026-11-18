@@ -21,7 +21,7 @@ Its checks run in stages: grouping, dependencies, cycles, placement, then newGra
 stage with errors stops it, returning all of that stage's errors, joined; each stage relies on those
 before it.
 */
-func Expand(st *proto.Streams, universes map[string]proto.ResolvedUniverse, specs []feature.Spec) (*Graph, error) {
+func Expand(st *proto.Streams, universes map[string]proto.Universe, specs []feature.Spec) (*Graph, error) {
 	instances, err := expand(st, universes, specs)
 	if err != nil {
 		return nil, err
@@ -30,7 +30,7 @@ func Expand(st *proto.Streams, universes map[string]proto.ResolvedUniverse, spec
 }
 
 // expand returns the instances of specs, or the errors of its first check stage that finds any.
-func expand(st *proto.Streams, universes map[string]proto.ResolvedUniverse, specs []feature.Spec) ([]instance, error) {
+func expand(st *proto.Streams, universes map[string]proto.Universe, specs []feature.Spec) ([]instance, error) {
 	x := &expansion{
 		variants: make(map[string][]feature.Spec),
 		comps:    make(map[string][]*composition),
@@ -187,7 +187,7 @@ place returns every spec's compositions at its coordinates, each composition's d
 onto the streams it runs on, each composed ID once per coordinate. A spec with a wrong universe is
 reported and places nothing; expand then discards what was placed.
 */
-func (x *expansion) place(st *proto.Streams, universes map[string]proto.ResolvedUniverse) []instance {
+func (x *expansion) place(st *proto.Streams, universes map[string]proto.Universe) []instance {
 	type placed struct {
 		id string
 		at [2]int
@@ -240,7 +240,7 @@ func (x *expansion) place(st *proto.Streams, universes map[string]proto.Resolved
 
 // coordinates returns where s runs: its universe's pairs for a pair feature, otherwise its universe's
 // streams, or every stream without one.
-func coordinates(st *proto.Streams, universes map[string]proto.ResolvedUniverse, s feature.Spec) ([][2]int, error) {
+func coordinates(st *proto.Streams, universes map[string]proto.Universe, s feature.Spec) ([][2]int, error) {
 	id := s.Feature.ID
 	if s.Universe == "" {
 		if s.Feature.Pair {
@@ -257,14 +257,17 @@ func coordinates(st *proto.Streams, universes map[string]proto.ResolvedUniverse,
 	if !ok {
 		return nil, fmt.Errorf("features: %s: unknown universe %q", id, s.Universe)
 	}
+	if u.Streams != st {
+		return nil, fmt.Errorf("features: %s: universe %q is over another stream table", id, s.Universe)
+	}
 	if s.Feature.Pair {
 		if len(u.Pairs) == 0 {
 			return nil, fmt.Errorf("features: %s: universe %q has no pairs", id, s.Universe)
 		}
 		return u.Pairs, nil
 	}
-	ats := make([][2]int, len(u.Streams))
-	for i, s := range u.Streams {
+	ats := make([][2]int, len(u.Index))
+	for i, s := range u.Index {
 		ats[i] = [2]int{s, -1}
 	}
 	return ats, nil

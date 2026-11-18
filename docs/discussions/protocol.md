@@ -21,7 +21,7 @@ More than interfaces:
 |---|---|
 | Interfaces | `DataProvider`, `Strategy`, `RiskManager`, `Executor`, `Exporter`, the originals' `Feature` |
 | Config-decoded value types | `Subscription` with `NewSubscription` and `Validate`; `Timeframe`, `TimeframeDerivationSet` and `StreamKind`, with validating `UnmarshalJSON` |
-| Structures with logic | `Streams` and `NewStreams`, `ResolvedUniverse`, `SortedWindow`, `Snapshot` |
+| Structures with logic | `Streams` and `NewStreams`, `Universe` with `Validate`, `SortedWindow`, `Snapshot` |
 | Contracts as concrete types | `feature.Feature` with `Validate`, `Spec`, `Binder`, `Input[T]`, `FeaturesView` and `ViewOf`; `frame` rings, buffers and views |
 
 `docs/Architecture.md` § Design Rules states the rule in § Decisions.
@@ -40,10 +40,12 @@ decoded into `config.SubscriptionConfig` and built by the composition root with
 `proto.NewSubscription`, duplicates checked as they are built; `Subscription.Validate` checks a
 subscription's fields, timeframe and derived windows. Universes are components:
 `config.UniverseConfig` holds a name, a type and the type's options, and the composition root builds
-each from `reg.Universes` over the stream table and injects them; `Expand` consumes
-`ResolvedUniverse`. The `rules` type, in `internal/domains/universe`, checks its rules' shape and
-resolves them. Config adds the checks that span entries — names required and unique, a universe's
-type present, feature → universe references, provider names — and prefixes each error with its path.
+each from `reg.Universes` over the stream table and injects them; `Expand` consumes `proto.Universe`,
+each holding the stream table it indexes, after running `Universe.Validate` on each. The `rules`
+type, in `internal/domains/universe`, checks its rules' shape and resolves them into a canonical
+`proto.Universe`. Config adds the checks that
+span entries — names required and unique, a universe's type present, feature → universe references,
+provider names — and prefixes each error with its path.
 
 ### Embedding versus protocol values
 
@@ -76,17 +78,22 @@ Agreed 2026-11-15.
   function independent of the feature engine, still holds. Config keeps the `universes` block's
   cross-entry checks. *Revised 2026-11-18, below: only the resolved universe stays in protocol.*
 
-Agreed 2026-11-18, planned in [`docs/plans/config-instances.md`](../plans/config-instances.md):
+Agreed 2026-11-18, executed by [`docs/plans/config-instances.md`](../plans/config-instances.md):
 
-- **A value type is built by its constructor.** `NewX(…) (X, []error)` returns the value with its
-  `Validate` errors. Fields stay exported, so a literal (a test's) is checked with `Validate`.
-  `NewSubscription` is the first; the composition root builds every subscription with it.
+- **A value type is built by its constructor; a component's protocol value is validated at the
+  boundary.** `NewX(…) (X, []error)` returns the value with its `Validate` errors: `NewSubscription`
+  is the first, and the composition root builds every subscription with it. A value a component's
+  domain factory fills in has no constructor; the composition root runs its `Validate` on what the
+  factory returns, as for `feature.Feature`. Fields stay exported, so a literal (a test's) is checked
+  with `Validate` too.
 - **A universe is a protocol value; how it selects streams is a component's.** `proto.Universe` is
-  the resolved set (today's `ResolvedUniverse`, renamed): `Streams`, the stream table it indexes;
-  `Index`, its streams' indices into it; and `Pairs`. `NewUniverse` normalises — sorts, dedups,
-  orders each pair `a < b` — and `Validate` enforces what consumers rely on: a table, indices in it,
-  index and pairs ascending and unique, no self-pair, both ends of a pair in `Index`. Selection is a universe type's, registered in
-  `reg.Universes`, its factory ending in `NewUniverse`. Today's rules, their shape check and `Resolve`
+  the resolved set (formerly `ResolvedUniverse`): `Streams`, the stream table it indexes;
+  `Index`, its streams' indices into it; and `Pairs`. Its `Validate` enforces what consumers rely
+  on: a table, indices in it, index and pairs ascending and unique, no self-pair, both ends of a pair
+  in `Index`. Selection is a universe type's, registered in `reg.Universes`: its factory fills the
+  universe in that canonical form, and the composition root validates it. Amended at review: a
+  `NewUniverse` constructor first normalised and validated inside the factory. Today's rules, their
+  shape check and `Resolve`
   become the `rules` type in `internal/domains/universe`, so another selection (top N by volume, a
   correlation cluster) is a new factory. The rule language is a config format, not a contract between
   layers: only the resolved set crosses into the engine.
@@ -113,9 +120,15 @@ Executed: [`docs/plans/protocol-types.md`](../plans/protocol-types.md), 2026-11-
 | A subscription's required fields and derived windows | `config.validate` | `proto.Subscription.Validate`, which also rejects an unknown timeframe and names the subscription in a derived window's error; duplicates stay in config, which reports none for an invalid entry |
 | Protocol's description and design rule | `docs/Architecture.md` | The rule in § Decisions |
 
-The universe rows are superseded by [`docs/plans/config-instances.md`](../plans/config-instances.md):
-the rules, their shape check and `Resolve` are the `rules` universe type in
-`internal/domains/universe`.
+Its universe rows are superseded by the next plan.
+
+Executed: [`docs/plans/config-instances.md`](../plans/config-instances.md), 2026-11-18.
+
+| Piece | Was | Now |
+|---|---|---|
+| Subscriptions in the file | Decoded into `proto.Subscription`, then `Validate`d by config | Decoded into `config.SubscriptionConfig`, built by the composition root with `proto.NewSubscription`, which finds duplicates |
+| Universe rules, their shape check, `Resolve`, `UniversePairs` | `internal/protocol/universe.go`, checked by `Load`, resolved by `addUniverse` | The `rules` universe type in `internal/domains/universe`, registered in `reg.Universes`, built by `addUniverse` over `_streams` |
+| The resolved set | `ResolvedUniverse{Streams, Pairs}`, its order kept by `Resolve` | `Universe{Streams, Index, Pairs}`, holding the stream table, filled in canonical form by its universe type, checked by `Validate` in `addUniverse`; `Expand` rejects a universe over another table |
 
 ## Open Questions
 
@@ -124,9 +137,8 @@ None.
 ## WIP
 
 - Implemented — `docs/plans/protocol-types.md`, steps 1 to 3.
-- [`docs/plans/config-instances.md`](../plans/config-instances.md): step 1, `NewSubscription`, and
-  step 2, universes as components, implemented. Planned: `ResolvedUniverse` → `Universe` with its
-  table and `NewUniverse`.
+- Implemented — [`docs/plans/config-instances.md`](../plans/config-instances.md), steps 1 to 3.
+  Nothing pending.
 
 ## Resources
 

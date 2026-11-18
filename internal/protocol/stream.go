@@ -39,7 +39,8 @@ type Stream struct {
 	Source int   // derived: index of its source stream; direct: -1
 }
 
-// Streams is the stream table: direct streams first, then derived, each group sorted by ID.
+// Streams is the stream table: direct streams first, then derived, each group sorted by ID. It is
+// never written after NewStreams; universes hold it by pointer.
 type Streams struct {
 	Stride  int64 // ms per column: the finest direct timeframe
 	All     []Stream

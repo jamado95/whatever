@@ -72,9 +72,9 @@ func errList(err error) []error {
 }
 
 // render lists r by stream ID, for failure messages.
-func render(st *proto.Streams, r proto.ResolvedUniverse) string {
-	streams := make([]string, len(r.Streams))
-	for i, s := range r.Streams {
+func render(st *proto.Streams, r proto.Universe) string {
+	streams := make([]string, len(r.Index))
+	for i, s := range r.Index {
 		streams[i] = st.All[s].Sub.ID()
 	}
 	pairs := make([]string, len(r.Pairs))
@@ -91,7 +91,7 @@ type resolveCase struct {
 	pairs   [][2]string // either order
 }
 
-// runResolve resolves each case over st and wants exactly its streams and pairs, sorted.
+// runResolve resolves each case over st and wants exactly its streams and pairs, in canonical form.
 func runResolve(t *testing.T, st *proto.Streams, cases []resolveCase) {
 	t.Helper()
 	for _, tc := range cases {
@@ -101,11 +101,11 @@ func runResolve(t *testing.T, st *proto.Streams, cases []resolveCase) {
 				t.Fatalf("resolve: %v", errs)
 			}
 
-			var want proto.ResolvedUniverse
+			want := proto.Universe{Streams: st}
 			for _, id := range tc.streams {
-				want.Streams = append(want.Streams, mustIndex(t, st, id))
+				want.Index = append(want.Index, mustIndex(t, st, id))
 			}
-			slices.Sort(want.Streams)
+			slices.Sort(want.Index)
 			for _, p := range tc.pairs {
 				a, b := mustIndex(t, st, p[0]), mustIndex(t, st, p[1])
 				want.Pairs = append(want.Pairs, [2]int{min(a, b), max(a, b)})
@@ -114,7 +114,11 @@ func runResolve(t *testing.T, st *proto.Streams, cases []resolveCase) {
 				return cmp.Or(cmp.Compare(a[0], b[0]), cmp.Compare(a[1], b[1]))
 			})
 
-			if !slices.Equal(got.Streams, want.Streams) || !slices.Equal(got.Pairs, want.Pairs) {
+			if got.Streams != st {
+				t.Error("universe over another stream table")
+			}
+			wantErrs(t, got.Validate()) // canonical
+			if !slices.Equal(got.Index, want.Index) || !slices.Equal(got.Pairs, want.Pairs) {
 				t.Errorf("got\n%s\nwant\n%s", render(st, got), render(st, want))
 			}
 		})
@@ -423,7 +427,7 @@ a missing table is an error.
 */
 func TestRulesFactory(t *testing.T) {
 	st := testStreams()
-	create := func(t *testing.T, js string, withStreams bool) (proto.ResolvedUniverse, error) {
+	create := func(t *testing.T, js string, withStreams bool) (proto.Universe, error) {
 		t.Helper()
 		var opts map[string]any
 		if err := json.Unmarshal([]byte(js), &opts); err != nil {
@@ -440,8 +444,8 @@ func TestRulesFactory(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := []int{mustIndex(t, st, ethbtc)}; !slices.Equal(u.Streams, want) {
-			t.Errorf("streams %v, want %v", u.Streams, want)
+		if want := []int{mustIndex(t, st, ethbtc)}; u.Streams != st || !slices.Equal(u.Index, want) {
+			t.Errorf("universe %+v, want index %v over the injected table", u, want)
 		}
 	})
 

@@ -282,7 +282,7 @@ func TestDataLoggerV2Factory(t *testing.T) {
 			"_providers":  map[proto.Subscription]proto.DataProvider{sub5mDerive1h: p},
 			"_features":   originals,
 			"_featuresv2": specs,
-			"_universes":  map[string]proto.ResolvedUniverse{},
+			"_universes":  map[string]proto.Universe{},
 		}
 		if options != nil {
 			o[config.OptionsKey] = options

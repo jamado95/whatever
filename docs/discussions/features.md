@@ -166,7 +166,8 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
 - **One stream table for every layer.** The stream table is its own protocol domain
   (`proto.Streams`), built once by the composition root and injected into the data layer and the
   feature layer: a stream's index in it is its index in the data rings, the feature buffers and
-  resolved universes ([[data-layer-v2]] § Subscriptions and the grid).
+  universes ([[data-layer-v2]] § Subscriptions and the grid). Each `proto.Universe` holds the table
+  it indexes by pointer; `Expand` rejects a universe over another table.
 - **Universe selection is a component's** — a universe type registered in `reg.Universes`, `rules`
   in `internal/domains/universe`, a pure function of its options over the stream table, independent
   of the feature engine. See § Reversed on 2026-11-18.
@@ -345,6 +346,7 @@ Superseded by § Feature layer above; kept for context.
 | Was | Now | Why |
 |---|---|---|
 | Universes in protocol: `proto.Universe`, its rules, `Universe.Resolve` | The `rules` universe type in `internal/domains/universe`, built from `reg.Universes` by the composition root | The rule language is a config format crossing no layer; only the resolved set reaches the engine, and another selection is a new factory ([[protocol]]) |
+| `ResolvedUniverse{Streams, Pairs}`, its order kept by `Resolve` | `proto.Universe{Streams, Index, Pairs}`, holding its stream table, validated by the composition root | The invariants consumers rely on hold for every universe type ([[protocol]]) |
 
 ## Solution
 
@@ -556,9 +558,9 @@ bound up with the strategy input contract ([[strategy-layer]]).
 - Universes moved into protocol: `proto.Universe`, `Universe.Resolve` and `ResolvedUniverse`;
   config keeps the block's cross-entry checks — `docs/plans/protocol-types.md` step 1.
 - Universes are components: the `rules` type in `internal/domains/universe`, registered in
-  `reg.Universes` — `docs/plans/config-instances.md` step 2. Planned: `ResolvedUniverse` becomes
-  `proto.Universe`, holding its stream table; `Expand` rejects a universe over another table
-  ([[protocol]] § Decisions).
+  `reg.Universes`, returning a `proto.Universe{Streams, Index, Pairs}` the composition root
+  validates; `Expand` rejects a universe over another table — `docs/plans/config-instances.md` ([[protocol]]
+  § Decisions).
 - Registered and working: `sma`, `ema`, `rsi`, `vwap`, `engulfing_candle`.
 - `swing_highlow` is broken behind a `wip` build tag. It duplicates swing-detection logic that also
   exists (also broken) inside `buy_the_dip` — see [[strategy-layer]]. Consolidating swing detection

@@ -23,15 +23,15 @@ Factory builds a rules universe: its options decoded strictly and validated, the
 injected stream table. Each stage's errors come back joined.
 */
 func init() {
-	reg.Universes.Register(RulesID, func(opts map[string]any) (proto.ResolvedUniverse, error) {
+	reg.Universes.Register(RulesID, func(opts map[string]any) (proto.Universe, error) {
 		var cfg RulesConfig
 		if err := config.Decode(opts, &cfg); err != nil {
-			return proto.ResolvedUniverse{}, err
+			return proto.Universe{}, err
 		}
 
 		st, err := config.Dep[*proto.Streams](opts, "_streams")
 		if err != nil {
-			return proto.ResolvedUniverse{}, err
+			return proto.Universe{}, err
 		}
 
 		u, errs := cfg.resolve(st)
@@ -160,12 +160,13 @@ func (p *Pairs) UnmarshalJSON(b []byte) error {
 func (p *Pairs) explicit() bool { return p != nil && !p.All }
 
 /*
-resolve returns rc's streams and pairs over st. Each rule's streams S are the streams passing its
-filters; a references rule pairs each reference with S, explicit pairs are taken as written, "*"
-pairs S. Streams are S plus every named stream; duplicates collapse and self-pairs are dropped. A
-name that is no stream's ID is an error, path-named from the rule. rc must have passed Validate.
+resolve returns rc's universe over st, in proto.Universe's canonical form. Each rule's streams S are
+the streams passing its filters; a references rule pairs each reference with S, explicit pairs are
+taken as written, "*" pairs S. Streams are S plus every named stream; duplicates collapse and
+self-pairs are dropped. A name that is no stream's ID is an error, path-named from the rule. rc must
+have passed Validate.
 */
-func (rc RulesConfig) resolve(st *proto.Streams) (proto.ResolvedUniverse, []error) {
+func (rc RulesConfig) resolve(st *proto.Streams) (proto.Universe, []error) {
 	var errs []error
 	streams := make(map[int]bool)
 	pairs := make(map[[2]int]bool)
@@ -232,7 +233,7 @@ func (rc RulesConfig) resolve(st *proto.Streams) (proto.ResolvedUniverse, []erro
 		return cmp.Or(cmp.Compare(a[0], b[0]), cmp.Compare(a[1], b[1]))
 	})
 
-	return proto.ResolvedUniverse{Streams: slices.Sorted(maps.Keys(streams)), Pairs: ps}, errs
+	return proto.Universe{Streams: st, Index: slices.Sorted(maps.Keys(streams)), Pairs: ps}, errs
 }
 
 /*

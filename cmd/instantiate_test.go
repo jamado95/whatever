@@ -118,21 +118,28 @@ func rulesUniverse(name string, rules ...map[string]any) config.UniverseConfig {
 }
 
 /*
-TestInstantiateUniverses covers building universes: an unregistered type, shape errors, an unmatched
-name and a used universe selecting no stream are errors, each prefixed with its universe, a joined error
-per part, and kept out of the map; an unused or disabled-only empty universe is built.
+TestInstantiateUniverses covers building universes: an unregistered type, a universe breaking its
+contract, shape errors, an unmatched name and a used universe selecting no stream are errors, each
+prefixed with its universe, a joined error per part, and kept out of the map; an unused or
+disabled-only empty universe is built.
 */
 func TestInstantiateUniverses(t *testing.T) {
 	btc := proto.Subscription{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "btc_1h"}
 	eth := proto.Subscription{Symbol: "ETHUSDT", Timeframe: proto.Timeframe1h, Provider: "eth_1h"}
 	c := &components{
 		streams:   proto.NewStreams([]proto.Subscription{btc, eth}),
-		universes: make(map[string]proto.ResolvedUniverse),
+		universes: make(map[string]proto.Universe),
 	}
+	// a type breaking the universe contract: its index not ascending
+	reg.Universes.Register("unsorted_test", func(opts map[string]any) (proto.Universe, error) {
+		st, err := config.Dep[*proto.Streams](opts, "_streams")
+		return proto.Universe{Streams: st, Index: []int{1, 0}}, err
+	})
 	sol := map[string]any{"symbol": []string{"SOL*"}}
 	universes := []config.UniverseConfig{
 		rulesUniverse("btc", map[string]any{"symbol": []string{"BTC*"}}),
 		{Name: "ghost", Type: "ghost_type"},
+		{Name: "unsorted", Type: "unsorted_test"},
 		rulesUniverse("shape", map[string]any{"symbol": []string{}}, map[string]any{"references": []string{"x"}, "pairs": "*"}),
 		rulesUniverse("typo", map[string]any{"references": []string{"BTCUSDT:1h:binance"}}),
 		rulesUniverse("empty", sol),
@@ -155,6 +162,7 @@ func TestInstantiateUniverses(t *testing.T) {
 	}
 	want := []string{
 		`universe "ghost": type "ghost_type" not registered`,
+		`universe "unsorted": index not ascending and unique at 1`,
 		`universe "shape": rules[0].symbol: empty list`,
 		`universe "shape": rules[1]: references and pairs are exclusive`,
 		`universe "typo": rules[0].references[0]: no stream has ID "BTCUSDT:1h:binance"`,
@@ -167,8 +175,8 @@ func TestInstantiateUniverses(t *testing.T) {
 	if names := slices.Sorted(maps.Keys(c.universes)); !slices.Equal(names, []string{"btc", "disabled_only", "unused"}) {
 		t.Errorf("resolved %v, want btc, disabled_only and unused", names)
 	}
-	if i, _ := c.streams.Index(btc.ID()); !slices.Equal(c.universes["btc"].Streams, []int{i}) {
-		t.Errorf("btc = %v, want stream %d", c.universes["btc"].Streams, i)
+	if i, _ := c.streams.Index(btc.ID()); c.universes["btc"].Streams != c.streams || !slices.Equal(c.universes["btc"].Index, []int{i}) {
+		t.Errorf("btc = %+v, want stream %d over the components' table", c.universes["btc"], i)
 	}
 }
 

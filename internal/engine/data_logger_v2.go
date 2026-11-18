@@ -50,7 +50,7 @@ func init() {
 			return nil, err
 		}
 
-		universes, err := config.Dep[map[string]proto.ResolvedUniverse](opts, "_universes")
+		universes, err := config.Dep[map[string]proto.Universe](opts, "_universes")
 		if err != nil {
 			return nil, err
 		}

@@ -99,12 +99,13 @@ the same way in stages: the first check stage with errors stops it ([[features]]
 - **A feature type may appear in several entries**, each with its own universe ([[features]]
   § Universes); an ID configured twice, in one entry or across entries, is still an error.
 - **Disabled blocks are not validated**, keeping them usable as scratch space.
-- **Config parses; the composition root builds** (agreed 2026-11-18, planned in
+- **Config parses; the composition root builds** (agreed 2026-11-18, executed by
   [`docs/plans/config-instances.md`](../plans/config-instances.md)). Every block decodes into a
   config type, and `cmd/instantiate` builds what reaches the code from it:
   - A value type by its protocol constructor: each `SubscriptionConfig` by `proto.NewSubscription`.
   - A component by its registry factory, returning a protocol value: providers, strategies,
-    features, the exporter, the engine, and now universes.
+    features, the exporter, the engine, and now universes. A value with a `Validate` is validated
+    on return (`feature.Feature`, `proto.Universe`).
   - The stream table from the built subscriptions: it is derived, not a block.
 
   Config checks the file's own keys: required fields it reads, names given in the file unique,
@@ -134,9 +135,10 @@ Executed implementation plans:
   2026-11-02.
 - [`docs/plans/protocol-types.md`](../plans/protocol-types.md) — universes and a subscription's own
   checks moved into protocol; config keeps the checks that span entries. Executed 2026-11-17.
-- [`docs/plans/config-instances.md`](../plans/config-instances.md) — step 1: subscriptions decoded
-  into `SubscriptionConfig` and built by the composition root with `proto.NewSubscription`; step 2:
-  universes as `reg.Universes` components, the `rules` type in `internal/domains/universe`.
+- [`docs/plans/config-instances.md`](../plans/config-instances.md) — subscriptions decoded into
+  `SubscriptionConfig` and built by the composition root with `proto.NewSubscription`; universes as
+  `reg.Universes` components, the `rules` type in `internal/domains/universe`, returning a
+  `proto.Universe` that `addUniverse` validates. Executed 2026-11-18.
 
 As implemented:
 
@@ -215,11 +217,10 @@ Resolved by this work: silent ticker fallback, triplicated engine parsers, untyp
     [features § Universes](features.md#universes).
   - **`validate()` collects every error**; `Load` returns them joined and `main` logs one per line,
     as it does `build`'s.
-- **Config instances** — [`docs/plans/config-instances.md`](../plans/config-instances.md):
-  subscriptions built by the composition root with `proto.NewSubscription`, and universes as
-  `reg.Universes` components, implemented (steps 1 and 2). Planned: `ResolvedUniverse` →
-  `proto.Universe`, holding its stream table, built by `NewUniverse`. See § Decisions and
-  [[protocol]] § Decisions.
+- **Config instances implemented** — [`docs/plans/config-instances.md`](../plans/config-instances.md):
+  subscriptions built by the composition root with `proto.NewSubscription`; universes as
+  `reg.Universes` components, returning a `proto.Universe` that holds its stream table and that
+  `addUniverse` validates. See § Decisions and [[protocol]] § Decisions.
 - **Composition is never in config**, agreed in [[features]] and planned in
   `docs/plans/features-layer-v2/main.md`. Dependencies come from each configured variant's `Deps`,
   which validation reads without binding; a dependency type with no configured variant is an error.
