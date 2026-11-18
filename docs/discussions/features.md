@@ -545,6 +545,10 @@ bound up with the strategy input contract ([[strategy-layer]]).
   `docs/plans/features-layer-v2/stage-5-expansion.md`.
 - Universes moved into protocol: `proto.Universe`, `Universe.Resolve` and `ResolvedUniverse`;
   config keeps the block's cross-entry checks — `docs/plans/protocol-types.md` step 1.
+- Planned: universes become components — the `rules` type in `internal/domains/universe`,
+  registered in `reg.Universes` — and `ResolvedUniverse` becomes `proto.Universe`, holding its stream
+  table; `Expand` rejects a universe over another table — `docs/plans/config-instances.md`
+  ([[protocol]] § Decisions).
 - Registered and working: `sma`, `ema`, `rsi`, `vwap`, `engulfing_candle`.
 - `swing_highlow` is broken behind a `wip` build tag. It duplicates swing-detection logic that also
   exists (also broken) inside `buy_the_dip` — see [[strategy-layer]]. Consolidating swing detection

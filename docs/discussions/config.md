@@ -96,6 +96,20 @@ the same way in stages: the first check stage with errors stops it ([[features]]
 - **A feature type may appear in several entries**, each with its own universe ([[features]]
   § Universes); an ID configured twice, in one entry or across entries, is still an error.
 - **Disabled blocks are not validated**, keeping them usable as scratch space.
+- **Every block decodes into a config type, and what reaches the code is an instance** (agreed
+  2026-11-18, planned in [`docs/plans/config-instances.md`](../plans/config-instances.md)):
+  - A value type with no dependencies, a subscription, is built in `Load` by its protocol
+    constructor (`SubscriptionConfig` → `proto.NewSubscription`). `Config.Subscriptions` holds
+    `proto.Subscription`s; the file's shape is an unexported `file` struct only `Load` decodes.
+  - A component is built from its block by a registry factory at the composition root, returning a
+    protocol value: providers, strategies, features, the exporter, the engine, and now universes.
+  - The stream table stays the composition root's, built in `instantiate`: it is derived from the
+    subscriptions, not a block.
+- **Universes are components.** An entry is `name`, `type` and the type's options: `name` required,
+  unique, referenced by features; `type` required, `rules` the one registered. Config checks names,
+  the type's presence and feature references. The factory decodes its options strictly, validates
+  them and resolves them over the injected `_streams`, so every universe error, shape included, is a
+  construction error prefixed `universe "name":`.
 - **An engine with an unresolved dependency is skipped, not constructed.** Constructing it would
   only restate an error already reported. Accepted cost: errors inside that engine's own options
   surface on the next run. A failed optional dependency, the exporter, does not skip it: the engine
@@ -152,6 +166,8 @@ Resolved by this work: silent ticker fallback, triplicated engine parsers, untyp
 - Multi-subscription. Top-level singular `subscription` bakes in the one-provider-per-engine
   assumption ([[engine]] defect 9). It makes the limit visible rather than burying it in the engine
   block, but multi-symbol work will revisit this key.
+- `disabled` on a universe. Not reserved: a universe entry carrying it is rejected by the `rules`
+  factory as an unknown option. Add it with the first use for a scratch universe.
 - Secrets. `config.json` is checked in, so credentials cannot live there — unresolved and needed
   before any live provider or executor ([[execution-layer]]).
 
@@ -187,6 +203,10 @@ Resolved by this work: silent ticker fallback, triplicated engine parsers, untyp
     [features § Universes](features.md#universes).
   - **`validate()` collects every error**; `Load` returns them joined and `main` logs one per line,
     as it does `build`'s.
+- **Config instances planned** — [`docs/plans/config-instances.md`](../plans/config-instances.md):
+  subscriptions built in `Load` by `proto.NewSubscription`; universes as `reg.Universes` components,
+  the `rules` type in `internal/domains/universe`; `ResolvedUniverse` → `proto.Universe`, holding its
+  stream table, built by `NewUniverse`. See § Decisions and [[protocol]] § Decisions.
 - **Composition is never in config**, agreed in [[features]] and planned in
   `docs/plans/features-layer-v2/main.md`. Dependencies come from each configured variant's `Deps`,
   which validation reads without binding; a dependency type with no configured variant is an error.

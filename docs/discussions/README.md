@@ -8,7 +8,7 @@ Opened 2026-07-26 from a full review of the codebase at commit `fbee380`.
 
 | Document | Component | Implementation state |
 |---|---|---|
-| [config.md](config.md) | Config parsing / validation | Implemented — strict decoding, validating enums, `--validate-only` |
+| [config.md](config.md) | Config parsing / validation | Implemented — strict decoding, validating enums, `--validate-only`. **Planned** — subscriptions built in `Load`, universes as components; `docs/plans/config-instances.md` |
 | [data-layer.md](data-layer.md) | Data layer / providers | Working (CSV); historical provider untested against a bounded range; no live provider |
 | [data-layer-v2.md](data-layer-v2.md) | Data layer V2 — `internal/engine/data` module | **Iteration 1 implemented** — `docs/plans/data-layer-v2`; stages 1–6 (subscription model, stream table, `FrameBuffer` core, per-stream lanes, align and readiness, module API and rolling aggregation, the pipeline, the `data_logger_v2` engine) implemented; iteration 2 (live) next |
 | [features.md](features.md) | Features | Working; 5 registered features; not reachable by strategies |
@@ -19,7 +19,7 @@ Opened 2026-07-26 from a full review of the codebase at commit `fbee380`.
 | [engine.md](engine.md) | Engine | `data_logger` and `data_logger_v2` work; `signal_logger` blocked; `full` uninstantiable; `backtesting` unstarted |
 | [multi-subscription.md](multi-subscription.md) | Cross-cutting — multi-stream flows | **Under active research** — nothing implemented, no plan |
 | [pipeline-runtime.md](pipeline-runtime.md) | Cross-cutting — runtime model, alignment point, clock | **Direction set** — frame-based data layer; partly implemented through data-layer-v2 (replay data layer, engine-side pacer, `data_logger_v2`) |
-| [protocol.md](protocol.md) | Cross-cutting — what protocol holds, import direction | **Implemented** — universes, the feature handoff and subscription invariants in protocol; `docs/plans/protocol-types.md` |
+| [protocol.md](protocol.md) | Cross-cutting — what protocol holds, import direction | **Implemented** — universes, the feature handoff and subscription invariants in protocol; `docs/plans/protocol-types.md`. **Planned** — value-type constructors, universes as components; `docs/plans/config-instances.md` |
 
 ## Cross-cutting themes
 

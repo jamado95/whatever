@@ -71,7 +71,26 @@ Agreed 2026-11-15.
   renamed `ResolvedUniverse`. Rules, their shape check, `Resolve` and `Resolved` move out of config.
   Reverses [[features]] § Feature layer "Universe resolution belongs to config"; its reason, a pure
   function independent of the feature engine, still holds. Config keeps the `universes` block's
-  cross-entry checks.
+  cross-entry checks. *Revised 2026-11-18, below: only the resolved universe stays in protocol.*
+
+Agreed 2026-11-18, planned in [`docs/plans/config-instances.md`](../plans/config-instances.md):
+
+- **A value type is built by its constructor.** `NewX(…) (X, []error)` returns the value with its
+  `Validate` errors. Fields stay exported, so a literal (a test's) is checked with `Validate`.
+  `NewSubscription` is the first; config builds every subscription with it.
+- **A universe is a protocol value; how it selects streams is a component's.** `proto.Universe` is
+  the resolved set (today's `ResolvedUniverse`, renamed): `Table`, the stream table it indexes,
+  `Streams` and `Pairs`. `NewUniverse` normalises — sorts, dedups, orders each pair `a < b` — and
+  `Validate` enforces what consumers rely on: a table, indices in it, streams and pairs ascending and
+  unique, no self-pair, both ends of a pair in `Streams`. Selection is a universe type's, registered in
+  `reg.Universes`, its factory ending in `NewUniverse`. Today's rules, their shape check and `Resolve`
+  become the `rules` type in `internal/domains/universe`, so another selection (top N by volume, a
+  correlation cluster) is a new factory. The rule language is a config format, not a contract between
+  layers: only the resolved set crosses into the engine.
+- **One stream table, shared by pointer.** Each `Universe` holds the table it was built over, never
+  a copy. The table is never written after `NewStreams`. `Expand` rejects a universe over a table
+  other than its own. Not a singleton: tests and research runs build several tables in one process,
+  and protocol holds no state.
 - **Feature results are read through protocol.** `View` and `ViewOf` move to
   `internal/protocol/feature`, `View` renamed `FeaturesView`, so strategies read results without
   importing the engine ([[features]] § Open Questions, struct results).
@@ -97,7 +116,9 @@ None.
 
 ## WIP
 
-- Implemented — `docs/plans/protocol-types.md`, steps 1 to 3. Nothing pending.
+- Implemented — `docs/plans/protocol-types.md`, steps 1 to 3.
+- Planned — [`docs/plans/config-instances.md`](../plans/config-instances.md): `NewSubscription`,
+  universes as components, `ResolvedUniverse` → `Universe` with its table and `NewUniverse`.
 
 ## Resources
 
