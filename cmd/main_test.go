@@ -36,7 +36,7 @@ func hasError(errs []error, substr string) bool {
 func TestBuildSingleSubscription(t *testing.T) {
 	cfg := &config.Config{
 		Providers:     []config.ComponentConfig{csvProvider("binance_csv")},
-		Subscriptions: []proto.Subscription{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "binance_csv"}},
+		Subscriptions: []config.SubscriptionConfig{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "binance_csv"}},
 		Engine:        config.EngineConfig{Type: "data_logger"},
 	}
 	eng, errs := build(cfg, testLogger())
@@ -51,7 +51,7 @@ func TestBuildSingleSubscription(t *testing.T) {
 func TestBuildMultiSubscription(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []config.ComponentConfig{csvProvider("btcusdt_1m"), csvProvider("btcusdt_1h")},
-		Subscriptions: []proto.Subscription{
+		Subscriptions: []config.SubscriptionConfig{
 			{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1m, Provider: "btcusdt_1m"},
 			{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "btcusdt_1h"},
 		},
@@ -69,7 +69,7 @@ func TestBuildMultiSubscription(t *testing.T) {
 func TestBuildUnresolvedSubscriptionProvider(t *testing.T) {
 	cfg := &config.Config{
 		Providers:     []config.ComponentConfig{csvProvider("binance_csv")},
-		Subscriptions: []proto.Subscription{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "ghost"}},
+		Subscriptions: []config.SubscriptionConfig{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "ghost"}},
 		Engine:        config.EngineConfig{Type: "data_logger"},
 	}
 	_, errs := build(cfg, testLogger())
@@ -84,7 +84,7 @@ func TestBuildUnresolvedStrategySubscription(t *testing.T) {
 		Strategies: []config.ComponentConfig{
 			{Type: "buy_the_dip", Name: "buy_the_dip", Subscriptions: []string{"ghost:1h:binance_csv"}},
 		},
-		Subscriptions: []proto.Subscription{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "binance_csv"}},
+		Subscriptions: []config.SubscriptionConfig{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "binance_csv"}},
 		Engine:        config.EngineConfig{Type: "data_logger"},
 	}
 	_, errs := build(cfg, testLogger())
@@ -96,7 +96,7 @@ func TestBuildUnresolvedStrategySubscription(t *testing.T) {
 func TestBuildDataLoggerRejectsDerivations(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []config.ComponentConfig{csvProvider("binance_csv")},
-		Subscriptions: []proto.Subscription{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe5m, Provider: "binance_csv",
+		Subscriptions: []config.SubscriptionConfig{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe5m, Provider: "binance_csv",
 			Derive: proto.NewTimeframeDerivationSet(proto.Timeframe1h)}},
 		Engine: config.EngineConfig{Type: "data_logger"},
 	}
@@ -109,7 +109,7 @@ func TestBuildDataLoggerRejectsDerivations(t *testing.T) {
 func TestBuildDataLoggerV2AcceptsDerivations(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []config.ComponentConfig{csvProvider("binance_csv")},
-		Subscriptions: []proto.Subscription{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe5m, Provider: "binance_csv",
+		Subscriptions: []config.SubscriptionConfig{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe5m, Provider: "binance_csv",
 			Derive: proto.NewTimeframeDerivationSet(proto.Timeframe1h)}},
 		Engine: config.EngineConfig{Type: "data_logger_v2"},
 	}
@@ -125,7 +125,7 @@ func TestBuildReportsExpandErrors(t *testing.T) {
 	period := func(p int) map[string]any { return map[string]any{"period": p} }
 	cfg := &config.Config{
 		Providers:     []config.ComponentConfig{csvProvider("binance_csv")},
-		Subscriptions: []proto.Subscription{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "binance_csv"}},
+		Subscriptions: []config.SubscriptionConfig{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "binance_csv"}},
 		Features: []config.FeatureConfig{
 			{Type: "rsi", Variants: []map[string]any{period(14)}},
 			{Type: "rsi", Variants: []map[string]any{period(14)}},
@@ -156,7 +156,7 @@ func TestBuildReportsExpandErrors(t *testing.T) {
 func TestBuildReportsExporterAndEngineErrors(t *testing.T) {
 	cfg := &config.Config{
 		Providers:     []config.ComponentConfig{csvProvider("binance_csv")},
-		Subscriptions: []proto.Subscription{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "binance_csv"}},
+		Subscriptions: []config.SubscriptionConfig{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "binance_csv"}},
 		Engine: config.EngineConfig{
 			Type:     "data_logger_v2",
 			Exporter: map[string]any{"type": "ghost_exporter"},
@@ -201,7 +201,7 @@ func TestBuildReportsUniverseErrors(t *testing.T) {
 		Universes: []proto.Universe{
 			{Name: "btc", Rules: []proto.UniverseRule{{References: []string{"BTCUSDT:1h:ghost"}}}},
 		},
-		Subscriptions: []proto.Subscription{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "binance_csv"}},
+		Subscriptions: []config.SubscriptionConfig{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "binance_csv"}},
 		Engine:        config.EngineConfig{Type: "data_logger"},
 	}
 	_, errs := build(cfg, testLogger())

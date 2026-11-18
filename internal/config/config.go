@@ -16,8 +16,17 @@ type Config struct {
 	Strategies    []ComponentConfig    `json:"strategies"`
 	Features      []FeatureConfig      `json:"features"`
 	Universes     []proto.Universe     `json:"universes"`
-	Subscriptions []proto.Subscription `json:"subscriptions"`
+	Subscriptions []SubscriptionConfig `json:"subscriptions"`
 	Engine        EngineConfig         `json:"engine"`
+}
+
+// SubscriptionConfig is a subscriptions entry, built by the composition root with
+// proto.NewSubscription.
+type SubscriptionConfig struct {
+	Symbol    string                       `json:"symbol"`
+	Timeframe proto.Timeframe              `json:"timeframe"`
+	Provider  string                       `json:"provider"`
+	Derive    proto.TimeframeDerivationSet `json:"derive"`
 }
 
 type FeatureConfig struct {
@@ -135,7 +144,7 @@ func Load(path string) (*Config, error) {
 }
 
 // validate returns every shape error in the file: features, subscriptions, providers, universes and
-// the engine, each path-named.
+// the engine, each path-named. Subscriptions are checked when built.
 func (c *Config) validate() []error {
 	var errs []error
 	fail := func(format string, args ...any) {
@@ -158,27 +167,6 @@ func (c *Config) validate() []error {
 
 	if len(c.Subscriptions) == 0 {
 		fail("subscriptions: at least one subscription is required")
-	}
-
-	seen := make(map[string]bool, len(c.Subscriptions))
-	for i, s := range c.Subscriptions {
-		var subErrs []error
-		at := fmt.Sprintf("subscriptions[%d]", i)
-		for _, err := range s.Validate() {
-			subErrs = append(subErrs, fmt.Errorf("%s: %w", at, err))
-		}
-
-		// an invalid subscription is not checked for duplicates, but a later valid copy of it is
-		if len(subErrs) > 0 {
-			errs = append(errs, subErrs...)
-			seen[s.ID()] = true
-			continue
-		}
-
-		if seen[s.ID()] {
-			fail("%s: duplicate subscription %q", at, s.ID())
-		}
-		seen[s.ID()] = true
 	}
 
 	// Provider instance names must be unique so a subscription's provider

@@ -102,21 +102,6 @@ func TestTimeframeDerivationSetBits(t *testing.T) {
 	}
 }
 
-func TestSubscriptionDecodesDerive(t *testing.T) {
-	var subs []Subscription
-	in := `[{"symbol": "BTCUSDT", "timeframe": "5m", "provider": "p", "derive": ["1h"]},
-	        {"symbol": "ETHUSDT", "timeframe": "5m", "provider": "p"}]`
-	if err := json.Unmarshal([]byte(in), &subs); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	if subs[0].Derive != NewTimeframeDerivationSet(Timeframe1h) {
-		t.Errorf("derive = %v, want [1h]", subs[0].Derive.List())
-	}
-	if subs[1].Derive != 0 {
-		t.Errorf("absent derive = %v, want empty", subs[1].Derive.List())
-	}
-}
-
 func TestSubscriptionWithDeriveIsMapKey(t *testing.T) {
 	s := Subscription{Symbol: "BTCUSDT", Timeframe: Timeframe5m, Provider: "p",
 		Derive: NewTimeframeDerivationSet(Timeframe1h)}
@@ -157,4 +142,20 @@ func TestSubscriptionValidate(t *testing.T) {
 			wantErrs(t, tc.s.Validate(), tc.want...)
 		})
 	}
+}
+
+// TestNewSubscription covers the constructor: the fields as given, with Validate's errors, an invalid
+// subscription returned too so it can be named by its ID.
+func TestNewSubscription(t *testing.T) {
+	s, errs := NewSubscription("BTCUSDT", Timeframe5m, "p", NewTimeframeDerivationSet(Timeframe1h))
+	if want := sub("BTCUSDT", Timeframe5m, "p", Timeframe1h); s != want {
+		t.Errorf("NewSubscription = %+v, want %+v", s, want)
+	}
+	wantErrs(t, errs)
+
+	s, errs = NewSubscription("BTCUSDT", Timeframe1h, "", NewTimeframeDerivationSet(Timeframe5m))
+	if got, want := s.ID(), "BTCUSDT:1h:"; got != want {
+		t.Errorf("invalid ID() = %q, want %q", got, want)
+	}
+	wantErrs(t, errs, "missing required 'provider' field")
 }

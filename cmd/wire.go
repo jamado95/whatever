@@ -20,12 +20,14 @@ func wire(cfg *config.Config, c *components, log *logger.Logger) (reg.Runnable, 
 	}
 
 	// 1. Validate subscription and strategy references. These checks run for
-	// every subscription regardless of count.
-	subNames := make(map[string]bool, len(cfg.Subscriptions))
-	for _, sub := range cfg.Subscriptions {
+	// every subscription regardless of count, and not at all when one failed to
+	// build: that error is already reported. c.subscriptions is then as configured,
+	// so its indices are the config's.
+	subNames := make(map[string]bool, len(c.subscriptions))
+	for _, sub := range c.subscriptions {
 		subNames[sub.ID()] = true
 	}
-	for i, sub := range cfg.Subscriptions {
+	for i, sub := range c.subscriptions {
 		if _, exists := c.providers[sub.Provider]; !exists {
 			errs = append(errs, fmt.Errorf(
 				"subscriptions[%d] (%s) references provider %q, which was not instantiated (disabled or missing)",
@@ -33,7 +35,7 @@ func wire(cfg *config.Config, c *components, log *logger.Logger) (reg.Runnable, 
 		}
 	}
 	for _, sc := range cfg.Strategies {
-		if sc.Disabled {
+		if sc.Disabled || c.subscriptions == nil {
 			continue
 		}
 		for _, ref := range sc.Subscriptions {
@@ -54,8 +56,8 @@ func wire(cfg *config.Config, c *components, log *logger.Logger) (reg.Runnable, 
 	depsOK := true
 
 	// one provider instance per subscription
-	subProviders := make(map[proto.Subscription]proto.DataProvider, len(cfg.Subscriptions))
-	for _, sub := range cfg.Subscriptions {
+	subProviders := make(map[proto.Subscription]proto.DataProvider, len(c.subscriptions))
+	for _, sub := range c.subscriptions {
 		if prov, exists := c.providers[sub.Provider]; exists {
 			subProviders[sub] = prov
 		} else {
@@ -63,10 +65,10 @@ func wire(cfg *config.Config, c *components, log *logger.Logger) (reg.Runnable, 
 		}
 	}
 
-	if len(cfg.Subscriptions) == 0 {
-		depsOK = false // already reported by validate()
+	if len(c.subscriptions) == 0 {
+		depsOK = false // none, or one failed to build: already reported
 	}
-	engineOpts["_subscriptions"] = cfg.Subscriptions
+	engineOpts["_subscriptions"] = c.subscriptions
 	engineOpts["_streams"] = c.streams
 	engineOpts["_providers"] = subProviders
 

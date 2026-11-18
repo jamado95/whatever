@@ -13,13 +13,14 @@ import (
 
 // components holds every instantiated component, keyed the way wiring resolves them.
 type components struct {
-	streams    *proto.Streams                // the stream table, built once from the subscriptions
-	providers  map[string]proto.DataProvider // by config name
-	strategies map[string]proto.Strategy     // by type
-	features   []proto.Feature
-	featuresV2 []feature.Spec                    // the feature engine's variants, from reg.FeatureTypes
-	universes  map[string]proto.ResolvedUniverse // the universes resolved without error, by name
-	exporter   proto.Exporter                    // nil when absent or disabled
+	subscriptions []proto.Subscription          // built and unique, as configured; nil when one failed
+	streams       *proto.Streams                // built once from the subscriptions; nil without them
+	providers     map[string]proto.DataProvider // by config name
+	strategies    map[string]proto.Strategy     // by type
+	features      []proto.Feature
+	featuresV2    []feature.Spec                    // the feature engine's variants, from reg.FeatureTypes
+	universes     map[string]proto.ResolvedUniverse // the universes resolved without error, by name
+	exporter      proto.Exporter                    // nil when absent or disabled
 }
 
 // instantiate constructs every enabled component from the registries,
@@ -29,16 +30,21 @@ type components struct {
 func instantiate(cfg *config.Config, log *logger.Logger) (*components, []error) {
 	var errs []error
 	c := &components{
-		streams:    proto.NewStreams(cfg.Subscriptions),
 		universes:  make(map[string]proto.ResolvedUniverse),
 		providers:  make(map[string]proto.DataProvider),
 		strategies: make(map[string]proto.Strategy),
 		features:   make([]proto.Feature, 0),
 	}
 
-	// 0. Universes, resolved over the table; feature specs use only those that resolve
-	for _, uc := range cfg.Universes {
-		errs = append(errs, c.addUniverse(uc, cfg.Features)...)
+	// 0. Subscriptions, then the stream table and the universes resolved over it; feature specs use
+	// only those that resolve. A subscription failing to build leaves neither: they would only
+	// restate its error.
+	errs = append(errs, c.addSubscriptions(cfg.Subscriptions)...)
+	if c.subscriptions != nil {
+		c.streams = proto.NewStreams(c.subscriptions)
+		for _, uc := range cfg.Universes {
+			errs = append(errs, c.addUniverse(uc, cfg.Features)...)
+		}
 	}
 
 	// 1. Providers
@@ -76,6 +82,40 @@ func instantiate(cfg *config.Config, log *logger.Logger) (*components, []error) 
 	}
 
 	return c, errs
+}
+
+/*
+addSubscriptions builds each entry of cfg with proto.NewSubscription into c.subscriptions, in order.
+An invalid entry and a duplicate of an earlier one are errors, prefixed subscriptions[i]; an invalid
+entry is not checked for duplicates, but a later valid copy of it is. Any error leaves
+c.subscriptions nil.
+*/
+func (c *components) addSubscriptions(cfg []config.SubscriptionConfig) []error {
+	var errs []error
+	subs := make([]proto.Subscription, 0, len(cfg))
+	seen := make(map[string]bool, len(cfg))
+
+	for i, sc := range cfg {
+		s, verrs := proto.NewSubscription(sc.Symbol, sc.Timeframe, sc.Provider, sc.Derive)
+		at := fmt.Sprintf("subscriptions[%d]", i)
+		for _, err := range verrs {
+			errs = append(errs, fmt.Errorf("%s: %w", at, err))
+		}
+
+		switch {
+		case len(verrs) > 0:
+		case seen[s.ID()]:
+			errs = append(errs, fmt.Errorf("%s: duplicate subscription %q", at, s.ID()))
+		default:
+			subs = append(subs, s)
+		}
+		seen[s.ID()] = true
+	}
+
+	if len(errs) == 0 {
+		c.subscriptions = subs
+	}
+	return errs
 }
 
 /*

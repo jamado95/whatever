@@ -23,15 +23,15 @@ func (stubProvider) Close()                                           {}
 
 func stubComponents() *components {
 	return &components{
-		providers:  map[string]proto.DataProvider{"p": stubProvider{}},
-		strategies: map[string]proto.Strategy{},
+		subscriptions: []proto.Subscription{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "p"}},
+		providers:     map[string]proto.DataProvider{"p": stubProvider{}},
+		strategies:    map[string]proto.Strategy{},
 	}
 }
 
 func wireConfig() *config.Config {
 	return &config.Config{
-		Subscriptions: []proto.Subscription{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "p"}},
-		Engine:        config.EngineConfig{Type: "data_logger"},
+		Engine: config.EngineConfig{Type: "data_logger"},
 	}
 }
 
@@ -46,10 +46,10 @@ func TestWireResolved(t *testing.T) {
 }
 
 func TestWireUnresolvedSubscriptionProvider(t *testing.T) {
-	cfg := wireConfig()
-	cfg.Subscriptions[0].Provider = "ghost"
+	c := stubComponents()
+	c.subscriptions[0].Provider = "ghost"
 
-	eng, errs := wire(cfg, stubComponents(), testLogger())
+	eng, errs := wire(wireConfig(), c, testLogger())
 	if !hasError(errs, `references provider "ghost"`) {
 		t.Fatalf("expected an unresolved-provider error, got: %v", errs)
 	}
@@ -125,5 +125,22 @@ func TestWireMissingEngineStrategy(t *testing.T) {
 	}
 	if eng != nil {
 		t.Fatal("expected no engine")
+	}
+}
+
+// A subscription that failed to build skips the reference checks and the engine: its error is already
+// reported.
+func TestWireWithoutSubscriptions(t *testing.T) {
+	c := stubComponents()
+	c.subscriptions = nil
+	cfg := wireConfig()
+	cfg.Strategies = []config.ComponentConfig{{Type: "s", Subscriptions: []string{"BTCUSDT:1h:p"}}}
+
+	eng, errs := wire(cfg, c, testLogger())
+	if len(errs) != 0 {
+		t.Errorf("errors %v, want none", errs)
+	}
+	if eng != nil {
+		t.Error("expected no engine")
 	}
 }

@@ -17,8 +17,9 @@ Implemented 2026-07-26 — see Solution for the executed plan.
 ### Path from file to component
 
 `internal/config.Load` decodes the file with `DisallowUnknownFields`, then `cmd/main.go` walks the
-blocks, constructs each enabled component from its registry, and injects the resolved instances into
-the engine's option map under `_`-prefixed keys. Each factory decodes its own slice of the map into
+blocks, builds each subscription with `proto.NewSubscription`, constructs each enabled component from
+its registry, and injects the resolved instances into the engine's option map under `_`-prefixed
+keys. Each factory decodes its own slice of the map into
 a struct it declares itself.
 
 ```
@@ -72,8 +73,9 @@ engine as an injected `_subscription` dependency.
 validation machinery because `main.go` already builds everything before running anything, and no
 factory performs I/O. Errors are accumulated rather than fatal, so one pass reports every
 independent problem: `Load` collects its validation errors, universes' shape included, and `build`
-collects construction errors, universe resolution over the stream table among them. `Load`'s errors
-stop the run, so `build`'s surface on the next one. Feature expansion, in the engine's factory, works
+collects construction errors, subscriptions and universe resolution over the stream table among
+them. `Load`'s errors stop the run, so `build`'s surface on the next one. A subscription failing to
+build holds back the stream table, the universes and the engine, which would only restate it. Feature expansion, in the engine's factory, works
 the same way in stages: the first check stage with errors stops it ([[features]] § Feature layer).
 
 ## Decisions
@@ -96,15 +98,20 @@ the same way in stages: the first check stage with errors stops it ([[features]]
 - **A feature type may appear in several entries**, each with its own universe ([[features]]
   § Universes); an ID configured twice, in one entry or across entries, is still an error.
 - **Disabled blocks are not validated**, keeping them usable as scratch space.
-- **Every block decodes into a config type, and what reaches the code is an instance** (agreed
-  2026-11-18, planned in [`docs/plans/config-instances.md`](../plans/config-instances.md)):
-  - A value type with no dependencies, a subscription, is built in `Load` by its protocol
-    constructor (`SubscriptionConfig` → `proto.NewSubscription`). `Config.Subscriptions` holds
-    `proto.Subscription`s; the file's shape is an unexported `file` struct only `Load` decodes.
-  - A component is built from its block by a registry factory at the composition root, returning a
-    protocol value: providers, strategies, features, the exporter, the engine, and now universes.
-  - The stream table stays the composition root's, built in `instantiate`: it is derived from the
-    subscriptions, not a block.
+- **Config parses; the composition root builds** (agreed 2026-11-18, planned in
+  [`docs/plans/config-instances.md`](../plans/config-instances.md)). Every block decodes into a
+  config type, and `cmd/instantiate` builds what reaches the code from it:
+  - A value type by its protocol constructor: each `SubscriptionConfig` by `proto.NewSubscription`.
+  - A component by its registry factory, returning a protocol value: providers, strategies,
+    features, the exporter, the engine, and now universes.
+  - The stream table from the built subscriptions: it is derived, not a block.
+
+  Config checks the file's own keys: required fields it reads, names given in the file unique,
+  references between blocks by name. Identity derived from a built value is checked where it is
+  built: a duplicate subscription in `addSubscriptions`, as a duplicate feature variant in `Expand`.
+- **A subscription failing to build holds back what is built over it**: the stream table, the
+  universes, the subscription and strategy reference checks, and the engine. They would only restate
+  its error as unmatched names. A subscription naming a missing provider is still built.
 - **Universes are components.** An entry is `name`, `type` and the type's options: `name` required,
   unique, referenced by features; `type` required, `rules` the one registered. Config checks names,
   the type's presence and feature references. The factory decodes its options strictly, validates
@@ -126,17 +133,20 @@ Executed implementation plans:
   2026-11-02.
 - [`docs/plans/protocol-types.md`](../plans/protocol-types.md) — universes and a subscription's own
   checks moved into protocol; config keeps the checks that span entries. Executed 2026-11-17.
+- [`docs/plans/config-instances.md`](../plans/config-instances.md) — step 1: subscriptions decoded
+  into `SubscriptionConfig` and built by the composition root with `proto.NewSubscription`.
 
 As implemented:
 
 | Piece | Location |
 |---|---|
 | `Decode`, `DecodeOptions`, `Dep`, `OptDep`, `Duration`, `Validator` | `internal/config/decode.go` |
-| File shape, strict `Load`, `EngineConfig.Opts()` | `internal/config/config.go` |
+| File shape (`SubscriptionConfig` among it), strict `Load`, `EngineConfig.Opts()` | `internal/config/config.go` |
 | `Universe`, `UniverseRule`, `UniversePairs`, `Universe.Validate`, `Universe.Resolve` | `internal/protocol/universe.go` |
 | Universe names and feature → universe references, `universePath` | `internal/config/config.go` |
-| `Subscription.Validate`: required fields, a known timeframe, derived windows named by the subscription's ID | `internal/protocol/subscription.go` |
-| Duplicate subscriptions, provider names, the path prefixes | `internal/config/config.go` |
+| `NewSubscription`; `Subscription.Validate`: required fields, a known timeframe, derived windows named by the subscription's ID | `internal/protocol/subscription.go` |
+| Provider names, the path prefixes | `internal/config/config.go` |
+| Building each subscription, duplicate subscriptions, `addSubscriptions` | `cmd/instantiate.go` |
 | Resolving each universe over the stream table, `addUniverse` | `cmd/instantiate.go` |
 | `Timeframe.UnmarshalJSON` | `internal/protocol/provider.go` |
 | `TickerType`, `TickerConfig`, `newTicker` | `internal/engine/ticker.go` |
@@ -203,10 +213,11 @@ Resolved by this work: silent ticker fallback, triplicated engine parsers, untyp
     [features § Universes](features.md#universes).
   - **`validate()` collects every error**; `Load` returns them joined and `main` logs one per line,
     as it does `build`'s.
-- **Config instances planned** — [`docs/plans/config-instances.md`](../plans/config-instances.md):
-  subscriptions built in `Load` by `proto.NewSubscription`; universes as `reg.Universes` components,
-  the `rules` type in `internal/domains/universe`; `ResolvedUniverse` → `proto.Universe`, holding its
-  stream table, built by `NewUniverse`. See § Decisions and [[protocol]] § Decisions.
+- **Config instances** — [`docs/plans/config-instances.md`](../plans/config-instances.md):
+  subscriptions built by the composition root with `proto.NewSubscription`, implemented (step 1).
+  Planned: universes as `reg.Universes` components, the `rules` type in `internal/domains/universe`;
+  `ResolvedUniverse` → `proto.Universe`, holding its stream table, built by `NewUniverse`. See
+  § Decisions and [[protocol]] § Decisions.
 - **Composition is never in config**, agreed in [[features]] and planned in
   `docs/plans/features-layer-v2/main.md`. Dependencies come from each configured variant's `Deps`,
   which validation reads without binding; a dependency type with no configured variant is an error.

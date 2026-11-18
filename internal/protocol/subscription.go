@@ -137,6 +137,15 @@ type Subscription struct {
 	Derive    TimeframeDerivationSet // rolling windows derived from this direct subscription
 }
 
+/*
+NewSubscription returns the subscription of its fields with its Validate errors. It is returned even
+when invalid, so a caller can name it by its ID; it is usable only without errors.
+*/
+func NewSubscription(symbol string, tf Timeframe, provider string, derive TimeframeDerivationSet) (Subscription, []error) {
+	s := Subscription{Symbol: symbol, Timeframe: tf, Provider: provider, Derive: derive}
+	return s, s.Validate()
+}
+
 // ID is the canonical identity of a subscription, "symbol:timeframe:provider".
 // It is the reference handle strategies use and the key the seam events carry.
 func (s Subscription) ID() string {

@@ -54,6 +54,9 @@ Design Rules
 - Protocol holds the types layers exchange: contracts, and value types holding their own
   invariants (`Validate`, validating `UnmarshalJSON`). Implementations live in domains, which fill
   in protocol values rather than embed protocol types
+- A value type is built by its constructor, `NewX`, returning the value with its `Validate` errors.
+  Config parses the file; the composition root builds every block from it: value types
+  (subscriptions) by their constructors, components by registry factories
 - `cmd` and `config` reach the core only through protocol and the registry; the core imports
   `config` only for the factory helpers
 - `internal/protocol` and its subpackages import nothing outside `internal/protocol`

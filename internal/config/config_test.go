@@ -60,47 +60,6 @@ func TestSubscriptionID(t *testing.T) {
 	}
 }
 
-func TestDuplicateSubscriptionRejected(t *testing.T) {
-	body := `{
-      "providers": [{ "type": "binance_csv", "file": "x.csv" }],
-      "subscriptions": [
-        { "symbol": "BTCUSDT", "timeframe": "1h", "provider": "binance_csv" },
-        { "symbol": "BTCUSDT", "timeframe": "1h", "provider": "binance_csv" }
-      ],
-      "engine": { "type": "data_logger" }
-    }`
-	_, err := Load(writeConfig(t, body))
-	if err == nil || !strings.Contains(err.Error(), "duplicate") {
-		t.Fatalf("expected a duplicate-subscription error, got: %v", err)
-	}
-}
-
-// An invalid subscription gets only its own errors, never a duplicate's; a later valid copy of it is
-// still a duplicate.
-func TestInvalidSubscriptionNotCheckedForDuplicates(t *testing.T) {
-	body := `{
-      "providers": [{ "type": "binance_csv", "file": "x.csv" }],
-      "subscriptions": [
-        { "symbol": "BTCUSDT", "timeframe": "1h", "provider": "binance_csv", "derive": ["5m"] },
-        { "symbol": "BTCUSDT", "timeframe": "1h", "provider": "binance_csv", "derive": ["5m"] },
-        { "symbol": "BTCUSDT", "timeframe": "1h", "provider": "binance_csv" },
-        { "symbol": "ETHUSDT", "timeframe": "1h" },
-        { "symbol": "ETHUSDT", "timeframe": "1h" }
-      ],
-      "engine": { "type": "data_logger" }
-    }`
-	_, err := Load(writeConfig(t, body))
-	if err == nil {
-		t.Fatal("Load succeeded, want errors")
-	}
-	wantErrs(t, err.(interface{ Unwrap() []error }).Unwrap(),
-		`subscriptions[0]: derive "5m" of BTCUSDT:1h:binance_csv must be coarser than "1h"`,
-		`subscriptions[1]: derive "5m" of BTCUSDT:1h:binance_csv must be coarser than "1h"`,
-		`subscriptions[2]: duplicate subscription "BTCUSDT:1h:binance_csv"`,
-		"subscriptions[3]: missing required 'provider' field",
-		"subscriptions[4]: missing required 'provider' field")
-}
-
 func TestProviderNameDefaultsToType(t *testing.T) {
 	cfg, err := Load(writeConfig(t, validConfig))
 	if err != nil {
@@ -167,33 +126,6 @@ func TestEngineProviderKeyRejected(t *testing.T) {
 	}
 }
 
-func TestMissingSubscriptionProvider(t *testing.T) {
-	body := `{
-      "providers": [{ "type": "binance_csv", "file": "x.csv" }],
-      "subscriptions": [{ "symbol": "BTCUSDT", "timeframe": "1h" }],
-      "engine": { "type": "data_logger" }
-    }`
-	_, err := Load(writeConfig(t, body))
-	if err == nil || !strings.Contains(err.Error(), "provider") {
-		t.Fatalf("expected a missing-provider error, got: %v", err)
-	}
-}
-
-// A subscription without a timeframe is reported alone, its derive windows unchecked.
-func TestMissingSubscriptionTimeframe(t *testing.T) {
-	body := `{
-      "providers": [{ "type": "binance_csv", "file": "x.csv" }],
-      "subscriptions": [{ "symbol": "BTCUSDT", "provider": "binance_csv", "derive": ["1h"] }],
-      "engine": { "type": "data_logger" }
-    }`
-	_, err := Load(writeConfig(t, body))
-	if err == nil {
-		t.Fatal("Load succeeded, want a missing-timeframe error")
-	}
-	wantErrs(t, err.(interface{ Unwrap() []error }).Unwrap(),
-		"subscriptions[0]: missing required 'timeframe' field")
-}
-
 func TestNoSubscriptionsRejected(t *testing.T) {
 	body := `{
       "providers": [{ "type": "binance_csv", "file": "x.csv" }],
@@ -209,7 +141,10 @@ func TestNoSubscriptionsRejected(t *testing.T) {
 func TestLoadDerive(t *testing.T) {
 	body := `{
       "providers": [{ "type": "binance_csv", "file": "x.csv" }],
-      "subscriptions": [{ "symbol": "BTCUSDT", "timeframe": "5m", "provider": "binance_csv", "derive": ["1h", "1d"] }],
+      "subscriptions": [
+        { "symbol": "BTCUSDT", "timeframe": "5m", "provider": "binance_csv", "derive": ["1h", "1d"] },
+        { "symbol": "ETHUSDT", "timeframe": "5m", "provider": "binance_csv" }
+      ],
       "engine": { "type": "data_logger" }
     }`
 	cfg, err := Load(writeConfig(t, body))
@@ -219,33 +154,8 @@ func TestLoadDerive(t *testing.T) {
 	if got, want := cfg.Subscriptions[0].Derive, proto.NewTimeframeDerivationSet(proto.Timeframe1h, proto.Timeframe1d); got != want {
 		t.Errorf("derive = %v, want %v", got.List(), want.List())
 	}
-}
-
-func TestDeriveNotCoarserRejected(t *testing.T) {
-	for _, derive := range []string{"1h", "5m"} {
-		body := `{
-      "providers": [{ "type": "binance_csv", "file": "x.csv" }],
-      "subscriptions": [{ "symbol": "BTCUSDT", "timeframe": "1h", "provider": "binance_csv", "derive": ["` + derive + `"] }],
-      "engine": { "type": "data_logger" }
-    }`
-		_, err := Load(writeConfig(t, body))
-		if err == nil || !strings.Contains(err.Error(), "must be coarser") {
-			t.Errorf("derive %s from 1h: expected a must-be-coarser error, got: %v", derive, err)
-		}
-	}
-}
-
-func TestSymbolTimeframesOnOneProviderAccepted(t *testing.T) {
-	body := `{
-      "providers": [{ "type": "binance_csv", "file": "x.csv" }],
-      "subscriptions": [
-        { "symbol": "BTCUSDT", "timeframe": "5m", "provider": "binance_csv" },
-        { "symbol": "BTCUSDT", "timeframe": "1h", "provider": "binance_csv" }
-      ],
-      "engine": { "type": "data_logger" }
-    }`
-	if _, err := Load(writeConfig(t, body)); err != nil {
-		t.Fatalf("Load: %v", err)
+	if got := cfg.Subscriptions[1].Derive; got != 0 {
+		t.Errorf("absent derive = %v, want empty", got.List())
 	}
 }
 
@@ -347,6 +257,8 @@ func TestUniverseErrors(t *testing.T) {
 	}
 }
 
+// TestValidateCollectsErrors covers Load's checks reported together; subscriptions are checked when
+// built, so its invalid ones are not reported here.
 func TestValidateCollectsErrors(t *testing.T) {
 	body := `{
       "providers": [
@@ -367,8 +279,6 @@ func TestValidateCollectsErrors(t *testing.T) {
 	}
 	wantErrs(t, err.(interface{ Unwrap() []error }).Unwrap(),
 		"features[0]: missing required 'type' field",
-		"subscriptions[0]: missing required 'provider' field",
-		`subscriptions[1]: derive "5m" of BTCUSDT:1h:p must be coarser than "1h"`,
 		`providers[1]: duplicate provider name "p"`,
 		"universes[0] (u): rules[0].kind: empty list",
 		"engine: missing required 'type' field")

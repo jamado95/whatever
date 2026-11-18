@@ -48,9 +48,9 @@ type Streams struct {
 }
 
 /*
-NewStreams builds the stream table from validated direct subscriptions: one
-stream per subscription and one per window in its Derive set. The grid stride is
-the finest direct timeframe. Rules are enforced by config parsing, so nothing is
+NewStreams builds the stream table from direct subscriptions built by
+NewSubscription without errors: one stream per subscription and one per window in
+its Derive set. The grid stride is the finest direct timeframe. Nothing is
 validated here.
 */
 func NewStreams(subs []Subscription) *Streams {

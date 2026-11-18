@@ -74,7 +74,7 @@ func TestInstantiateSpecs(t *testing.T) {
 	})
 
 	cfg := &config.Config{
-		Subscriptions: []proto.Subscription{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "p"}},
+		Subscriptions: []config.SubscriptionConfig{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "p"}},
 		Universes: []proto.Universe{
 			{Name: "btc", Rules: []proto.UniverseRule{{Symbol: []string{"BTC*"}}}},
 			{Name: "typo", Rules: []proto.UniverseRule{{References: []string{"BTCUSDT:1h:ghost"}}}},
@@ -158,5 +158,79 @@ func TestInstantiateUniverses(t *testing.T) {
 	}
 	if i, _ := c.streams.Index(btc.ID()); !slices.Equal(c.universes["btc"].Streams, []int{i}) {
 		t.Errorf("btc = %v, want stream %d", c.universes["btc"].Streams, i)
+	}
+}
+
+/*
+TestInstantiateSubscriptions covers building the subscriptions: valid ones are built in order, with the
+stream table and the universes over it. An invalid entry and a duplicate are errors, an invalid entry
+not checked for duplicates but a later valid copy of it is; any of them leaves no subscriptions, table
+or universes.
+*/
+func TestInstantiateSubscriptions(t *testing.T) {
+	btcUniverse := []proto.Universe{{Name: "btc", Rules: []proto.UniverseRule{{Symbol: []string{"BTC*"}}}}}
+
+	t.Run("built", func(t *testing.T) {
+		cfg := &config.Config{
+			Subscriptions: []config.SubscriptionConfig{
+				{Symbol: "BTCUSDT", Timeframe: proto.Timeframe5m, Provider: "p", Derive: proto.NewTimeframeDerivationSet(proto.Timeframe1h)},
+				{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "p"},
+			},
+			Universes: btcUniverse,
+		}
+		c, errs := instantiate(cfg, testLogger())
+		if len(errs) != 0 {
+			t.Fatalf("errors: %v", errs)
+		}
+		ids := make([]string, len(c.subscriptions))
+		for i, s := range c.subscriptions {
+			ids[i] = s.ID()
+		}
+		if want := []string{"BTCUSDT:5m:p", "BTCUSDT:1h:p"}; !slices.Equal(ids, want) {
+			t.Errorf("subscriptions %v, want %v", ids, want)
+		}
+		if c.streams == nil || len(c.streams.All) != 3 {
+			t.Errorf("stream table %+v, want 3 streams", c.streams)
+		}
+		if _, ok := c.universes["btc"]; !ok {
+			t.Error("universe btc not resolved")
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		subs []config.SubscriptionConfig
+		want []string
+	}{
+		{"invalid entries and duplicates", []config.SubscriptionConfig{
+			{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "p", Derive: proto.NewTimeframeDerivationSet(proto.Timeframe5m)},
+			{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "p", Derive: proto.NewTimeframeDerivationSet(proto.Timeframe5m)},
+			{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "p"},
+			{Symbol: "ETHUSDT", Timeframe: proto.Timeframe1h},
+			{Symbol: "ETHUSDT", Timeframe: proto.Timeframe1h},
+		}, []string{
+			`subscriptions[0]: derive "5m" of BTCUSDT:1h:p must be coarser than "1h"`,
+			`subscriptions[1]: derive "5m" of BTCUSDT:1h:p must be coarser than "1h"`,
+			`subscriptions[2]: duplicate subscription "BTCUSDT:1h:p"`,
+			"subscriptions[3]: missing required 'provider' field",
+			"subscriptions[4]: missing required 'provider' field",
+		}},
+		{"a missing timeframe, derivations unchecked", []config.SubscriptionConfig{
+			{Symbol: "BTCUSDT", Provider: "p", Derive: proto.NewTimeframeDerivationSet(proto.Timeframe1h)},
+		}, []string{"subscriptions[0]: missing required 'timeframe' field"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, errs := instantiate(&config.Config{Subscriptions: tc.subs, Universes: btcUniverse}, testLogger())
+			got := make([]string, len(errs))
+			for i, err := range errs {
+				got[i] = err.Error()
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("errors %q, want %q", got, tc.want)
+			}
+			if c.subscriptions != nil || c.streams != nil || len(c.universes) != 0 {
+				t.Errorf("subscriptions %v, table %v, universes %v; want none", c.subscriptions, c.streams, c.universes)
+			}
+		})
 	}
 }

@@ -42,7 +42,8 @@ The config is strict:
 
 - Unknown keys and invalid values are errors, never ignored.
 - Errors name their path. File errors are reported together first; once they are fixed, construction
-  errors are (unmatched stream names among them).
+  errors are (subscriptions and unmatched stream names among them). A subscription error holds back
+  the universes and the engine until it is fixed.
 - Blocks with `"disabled": true` are skipped and not checked.
 
 ## Blocks
