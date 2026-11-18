@@ -20,7 +20,7 @@ More than interfaces:
 | Kind | Examples |
 |---|---|
 | Interfaces | `DataProvider`, `Strategy`, `RiskManager`, `Executor`, `Exporter`, the originals' `Feature` |
-| Config-decoded value types | `Subscription` with `NewSubscription` and `Validate`; `Universe` with `Validate` and `Resolve`; `Timeframe`, `TimeframeDerivationSet`, `StreamKind` and `UniversePairs`, with validating `UnmarshalJSON` |
+| Config-decoded value types | `Subscription` with `NewSubscription` and `Validate`; `Timeframe`, `TimeframeDerivationSet` and `StreamKind`, with validating `UnmarshalJSON` |
 | Structures with logic | `Streams` and `NewStreams`, `ResolvedUniverse`, `SortedWindow`, `Snapshot` |
 | Contracts as concrete types | `feature.Feature` with `Validate`, `Spec`, `Binder`, `Input[T]`, `FeaturesView` and `ViewOf`; `frame` rings, buffers and views |
 
@@ -35,14 +35,15 @@ register. The core imports `config` only for the factory helpers — `Decode`, `
 
 ### Config-decoded types
 
-Universes and subscriptions are decoded from the file and consumed by the core. Subscriptions are
+Subscriptions and universes are decoded from the file and consumed by the core. Subscriptions are
 decoded into `config.SubscriptionConfig` and built by the composition root with
-`proto.NewSubscription`. Each checks its own invariants: `Universe.Validate` its rules' shape,
-`Subscription.Validate` its fields, timeframe and derived windows. Config adds the checks that span
-entries — names required and unique, feature → universe references, provider names — and prefixes
-each error with its path; the composition root checks duplicate subscriptions as it builds them. It
-resolves universes over the stream table (`Universe.Resolve`) and injects them; `Expand` consumes
-`ResolvedUniverse`.
+`proto.NewSubscription`, duplicates checked as they are built; `Subscription.Validate` checks a
+subscription's fields, timeframe and derived windows. Universes are components:
+`config.UniverseConfig` holds a name, a type and the type's options, and the composition root builds
+each from `reg.Universes` over the stream table and injects them; `Expand` consumes
+`ResolvedUniverse`. The `rules` type, in `internal/domains/universe`, checks its rules' shape and
+resolves them. Config adds the checks that span entries — names required and unique, a universe's
+type present, feature → universe references, provider names — and prefixes each error with its path.
 
 ### Embedding versus protocol values
 
@@ -112,6 +113,10 @@ Executed: [`docs/plans/protocol-types.md`](../plans/protocol-types.md), 2026-11-
 | A subscription's required fields and derived windows | `config.validate` | `proto.Subscription.Validate`, which also rejects an unknown timeframe and names the subscription in a derived window's error; duplicates stay in config, which reports none for an invalid entry |
 | Protocol's description and design rule | `docs/Architecture.md` | The rule in § Decisions |
 
+The universe rows are superseded by [`docs/plans/config-instances.md`](../plans/config-instances.md):
+the rules, their shape check and `Resolve` are the `rules` universe type in
+`internal/domains/universe`.
+
 ## Open Questions
 
 None.
@@ -119,14 +124,15 @@ None.
 ## WIP
 
 - Implemented — `docs/plans/protocol-types.md`, steps 1 to 3.
-- [`docs/plans/config-instances.md`](../plans/config-instances.md): step 1, `NewSubscription`,
-  implemented. Planned: universes as components, `ResolvedUniverse` → `Universe` with its table and
-  `NewUniverse`.
+- [`docs/plans/config-instances.md`](../plans/config-instances.md): step 1, `NewSubscription`, and
+  step 2, universes as components, implemented. Planned: `ResolvedUniverse` → `Universe` with its
+  table and `NewUniverse`.
 
 ## Resources
 
 - `internal/protocol/universe.go`, `internal/protocol/subscription.go`,
-  `internal/protocol/feature/view.go`, `internal/config/config.go`, `cmd/instantiate.go`
+  `internal/protocol/feature/view.go`, `internal/domains/universe/rules.go`,
+  `internal/config/config.go`, `cmd/instantiate.go`
 - `docs/Architecture.md` § Design Rules, `docs/Protocol.md`
 - Related: [[features]] (§ Feature layer, § Universes), [[config]], [[engine]] (composition root),
   [[strategy-layer]]

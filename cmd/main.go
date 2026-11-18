@@ -21,6 +21,7 @@ import (
 	_ "whatever/internal/domains/provider"
 	_ "whatever/internal/domains/risk"
 	_ "whatever/internal/domains/strategy"
+	_ "whatever/internal/domains/universe"
 	_ "whatever/internal/engine"
 )
 
@@ -68,16 +69,20 @@ func main() {
 	log.Info("whtv shutdown complete")
 }
 
+// parts returns a joined error's parts, or err alone.
+func parts(err error) []error {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		return joined.Unwrap()
+	}
+	return []error{err}
+}
+
 // reportErrors logs each config error on its own line, a joined error split into its parts, then
 // their count.
 func reportErrors(log *logger.Logger, path string, errs []error) {
 	var all []error
 	for _, err := range errs {
-		if joined, ok := err.(interface{ Unwrap() []error }); ok {
-			all = append(all, joined.Unwrap()...)
-		} else {
-			all = append(all, err)
-		}
+		all = append(all, parts(err)...)
 	}
 
 	for _, e := range all {

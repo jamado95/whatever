@@ -78,8 +78,7 @@ func DecodeOptions(opts map[string]any, dst any) error {
 }
 
 // Dep extracts a dependency instance injected under key, reporting a typed
-// error rather than yielding a zero value when it is missing or of the wrong
-// type.
+// error when it is missing or of the wrong type.
 func Dep[T any](opts map[string]any, key string) (T, error) {
 	var zero T
 

@@ -15,7 +15,7 @@ type Config struct {
 	Providers     []ComponentConfig    `json:"providers"`
 	Strategies    []ComponentConfig    `json:"strategies"`
 	Features      []FeatureConfig      `json:"features"`
-	Universes     []proto.Universe     `json:"universes"`
+	Universes     []UniverseConfig     `json:"universes"`
 	Subscriptions []SubscriptionConfig `json:"subscriptions"`
 	Engine        EngineConfig         `json:"engine"`
 }
@@ -34,6 +34,41 @@ type FeatureConfig struct {
 	Disabled bool             `json:"disabled"`
 	Universe string           `json:"universe"` // a universe's name; every variant runs on it
 	Variants []map[string]any `json:"variants"`
+}
+
+// UniverseConfig is a universes entry: a named component whose non-reserved keys are its type's
+// options, checked by its factory rather than here.
+type UniverseConfig struct {
+	Name string
+	Type string
+	Opts map[string]any
+}
+
+// UnmarshalJSON takes name and type, each a string if present, and leaves every other key in Opts.
+func (u *UniverseConfig) UnmarshalJSON(data []byte) error {
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	for _, f := range []struct {
+		key string
+		dst *string
+	}{{"name", &u.Name}, {"type", &u.Type}} {
+		v, ok := raw[f.key]
+		if !ok {
+			continue
+		}
+		s, ok := v.(string)
+		if !ok {
+			return fmt.Errorf("universe '%s' must be a string", f.key)
+		}
+		*f.dst = s
+		delete(raw, f.key)
+	}
+	u.Opts = raw
+
+	return nil
 }
 
 // ComponentConfig is a component block whose non-reserved keys are the
@@ -195,8 +230,8 @@ func (c *Config) validate() []error {
 		}
 		named[u.Name] = true
 
-		for _, err := range u.Validate() {
-			errs = append(errs, fmt.Errorf("%s: %w", universePath(i, u.Name), err))
+		if u.Type == "" {
+			fail("%s: missing required 'type' field", universePath(i, u.Name))
 		}
 	}
 

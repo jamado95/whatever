@@ -194,12 +194,22 @@ func TestReportErrorsSplitsJoined(t *testing.T) {
 	}
 }
 
+func TestParts(t *testing.T) {
+	first, second := errors.New("first"), errors.New("second")
+	if got := parts(errors.Join(first, second)); len(got) != 2 || got[0] != first || got[1] != second {
+		t.Errorf("parts of a joined error = %v, want [first second]", got)
+	}
+	if got := parts(first); len(got) != 1 || got[0] != first {
+		t.Errorf("parts of a plain error = %v, want [first]", got)
+	}
+}
+
 func TestBuildReportsUniverseErrors(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []config.ComponentConfig{csvProvider("binance_csv")},
 		Features:  []config.FeatureConfig{{Type: "ghost_feature", Universe: "btc"}},
-		Universes: []proto.Universe{
-			{Name: "btc", Rules: []proto.UniverseRule{{References: []string{"BTCUSDT:1h:ghost"}}}},
+		Universes: []config.UniverseConfig{
+			rulesUniverse("btc", map[string]any{"references": []string{"BTCUSDT:1h:ghost"}}),
 		},
 		Subscriptions: []config.SubscriptionConfig{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "binance_csv"}},
 		Engine:        config.EngineConfig{Type: "data_logger"},

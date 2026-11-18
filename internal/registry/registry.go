@@ -31,6 +31,9 @@ var (
 	Exporters = &registry[proto.Exporter]{
 		factories: make(map[string]Factory[proto.Exporter]),
 	}
+	Universes = &registry[proto.ResolvedUniverse]{
+		factories: make(map[string]Factory[proto.ResolvedUniverse]),
+	}
 )
 
 type Runnable interface {

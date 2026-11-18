@@ -75,9 +75,9 @@ func TestInstantiateSpecs(t *testing.T) {
 
 	cfg := &config.Config{
 		Subscriptions: []config.SubscriptionConfig{{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "p"}},
-		Universes: []proto.Universe{
-			{Name: "btc", Rules: []proto.UniverseRule{{Symbol: []string{"BTC*"}}}},
-			{Name: "typo", Rules: []proto.UniverseRule{{References: []string{"BTCUSDT:1h:ghost"}}}},
+		Universes: []config.UniverseConfig{
+			rulesUniverse("btc", map[string]any{"symbol": []string{"BTC*"}}),
+			rulesUniverse("typo", map[string]any{"references": []string{"BTCUSDT:1h:ghost"}}),
 		},
 		Features: []config.FeatureConfig{
 			{Type: "rsi", Universe: "btc", Variants: []map[string]any{{"period": 14}, {"period": 21}}},
@@ -112,9 +112,15 @@ func TestInstantiateSpecs(t *testing.T) {
 	}
 }
 
+// rulesUniverse is a rules universe entry, as Load decodes it.
+func rulesUniverse(name string, rules ...map[string]any) config.UniverseConfig {
+	return config.UniverseConfig{Name: name, Type: "rules", Opts: map[string]any{"rules": rules}}
+}
+
 /*
-TestInstantiateUniverses covers universe resolution: an unmatched name and a used universe selecting no
-stream are errors, each kept out of the map; an unused or disabled-only empty universe resolves.
+TestInstantiateUniverses covers building universes: an unregistered type, shape errors, an unmatched
+name and a used universe selecting no stream are errors, each prefixed with its universe, a joined error
+per part, and kept out of the map; an unused or disabled-only empty universe is built.
 */
 func TestInstantiateUniverses(t *testing.T) {
 	btc := proto.Subscription{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "btc_1h"}
@@ -123,13 +129,15 @@ func TestInstantiateUniverses(t *testing.T) {
 		streams:   proto.NewStreams([]proto.Subscription{btc, eth}),
 		universes: make(map[string]proto.ResolvedUniverse),
 	}
-	sol := []proto.UniverseRule{{Symbol: []string{"SOL*"}}}
-	universes := []proto.Universe{
-		{Name: "btc", Rules: []proto.UniverseRule{{Symbol: []string{"BTC*"}}}},
-		{Name: "typo", Rules: []proto.UniverseRule{{References: []string{"BTCUSDT:1h:binance"}}}},
-		{Name: "empty", Rules: sol},
-		{Name: "unused", Rules: sol},
-		{Name: "disabled_only", Rules: sol},
+	sol := map[string]any{"symbol": []string{"SOL*"}}
+	universes := []config.UniverseConfig{
+		rulesUniverse("btc", map[string]any{"symbol": []string{"BTC*"}}),
+		{Name: "ghost", Type: "ghost_type"},
+		rulesUniverse("shape", map[string]any{"symbol": []string{}}, map[string]any{"references": []string{"x"}, "pairs": "*"}),
+		rulesUniverse("typo", map[string]any{"references": []string{"BTCUSDT:1h:binance"}}),
+		rulesUniverse("empty", sol),
+		rulesUniverse("unused", sol),
+		rulesUniverse("disabled_only", sol),
 	}
 	features := []config.FeatureConfig{
 		{Type: "rsi", Universe: "btc"},
@@ -146,6 +154,9 @@ func TestInstantiateUniverses(t *testing.T) {
 		}
 	}
 	want := []string{
+		`universe "ghost": type "ghost_type" not registered`,
+		`universe "shape": rules[0].symbol: empty list`,
+		`universe "shape": rules[1]: references and pairs are exclusive`,
 		`universe "typo": rules[0].references[0]: no stream has ID "BTCUSDT:1h:binance"`,
 		`universe "empty": selects no streams`,
 	}
@@ -168,7 +179,7 @@ not checked for duplicates but a later valid copy of it is; any of them leaves n
 or universes.
 */
 func TestInstantiateSubscriptions(t *testing.T) {
-	btcUniverse := []proto.Universe{{Name: "btc", Rules: []proto.UniverseRule{{Symbol: []string{"BTC*"}}}}}
+	btcUniverse := []config.UniverseConfig{rulesUniverse("btc", map[string]any{"symbol": []string{"BTC*"}})}
 
 	t.Run("built", func(t *testing.T) {
 		cfg := &config.Config{

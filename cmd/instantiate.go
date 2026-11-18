@@ -36,9 +36,9 @@ func instantiate(cfg *config.Config, log *logger.Logger) (*components, []error) 
 		features:   make([]proto.Feature, 0),
 	}
 
-	// 0. Subscriptions, then the stream table and the universes resolved over it; feature specs use
-	// only those that resolve. A subscription failing to build leaves neither: they would only
-	// restate its error.
+	// 0. Subscriptions, then the stream table and the universes built from the registry over it;
+	// feature specs use only those built. A subscription failing to build leaves neither: they would
+	// only restate its error.
 	errs = append(errs, c.addSubscriptions(cfg.Subscriptions)...)
 	if c.subscriptions != nil {
 		c.streams = proto.NewStreams(c.subscriptions)
@@ -119,29 +119,36 @@ func (c *components) addSubscriptions(cfg []config.SubscriptionConfig) []error {
 }
 
 /*
-addUniverse resolves cfg over the stream table and keeps it in c.universes when it resolves
-without error. A universe an enabled feature of fcfg names that selects no stream is an error. Errors
-are prefixed universe "name": Load has validated the name.
+addUniverse builds cfg from reg.Universes over the stream table and keeps it in c.universes when it
+builds without error. A universe an enabled feature of fcfg names that selects no stream is an error.
+Errors are prefixed universe "name", a joined one per part: Load has validated the name.
 */
-func (c *components) addUniverse(cfg proto.Universe, fcfg []config.FeatureConfig) []error {
-	var errs []error
-
-	ru, rerrs := cfg.Resolve(c.streams)
-	for _, err := range rerrs {
-		errs = append(errs, fmt.Errorf("universe %q: %w", cfg.Name, err))
+func (c *components) addUniverse(cfg config.UniverseConfig, fcfg []config.FeatureConfig) []error {
+	if !reg.Universes.Has(cfg.Type) {
+		return []error{fmt.Errorf("universe %q: type %q not registered", cfg.Name, cfg.Type)}
 	}
-	if len(errs) > 0 {
+
+	opts := make(map[string]any, len(cfg.Opts)+1)
+	maps.Copy(opts, cfg.Opts)
+	opts["_streams"] = c.streams
+
+	u, err := reg.Universes.Create(cfg.Type, opts)
+	if err != nil {
+		var errs []error
+		for _, e := range parts(err) {
+			errs = append(errs, fmt.Errorf("universe %q: %w", cfg.Name, e))
+		}
 		return errs
 	}
 
 	// an unmatched name already explains an empty universe
 	for _, f := range fcfg {
-		if !f.Disabled && f.Universe == cfg.Name && len(ru.Streams) == 0 {
+		if !f.Disabled && f.Universe == cfg.Name && len(u.Streams) == 0 {
 			return []error{fmt.Errorf("universe %q: selects no streams", cfg.Name)}
 		}
 	}
 
-	c.universes[cfg.Name] = ru
+	c.universes[cfg.Name] = u
 	return nil
 }
 

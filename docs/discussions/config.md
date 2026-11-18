@@ -72,10 +72,11 @@ engine as an injected `_subscription` dependency.
 `--validate-only` constructs every enabled component and exits before `Run`. It needs no separate
 validation machinery because `main.go` already builds everything before running anything, and no
 factory performs I/O. Errors are accumulated rather than fatal, so one pass reports every
-independent problem: `Load` collects its validation errors, universes' shape included, and `build`
-collects construction errors, subscriptions and universe resolution over the stream table among
-them. `Load`'s errors stop the run, so `build`'s surface on the next one. A subscription failing to
-build holds back the stream table, the universes and the engine, which would only restate it. Feature expansion, in the engine's factory, works
+independent problem: `Load` collects its validation errors, and `build` collects construction
+errors, subscriptions and every universe error among them: shape, options and resolution over the
+stream table. `Load`'s errors stop the run, so `build`'s surface on the next one. A subscription
+failing to build holds back the stream table, the universes and the engine, which would only restate
+it. Feature expansion, in the engine's factory, works
 the same way in stages: the first check stage with errors stops it ([[features]] § Feature layer).
 
 ## Decisions
@@ -134,20 +135,21 @@ Executed implementation plans:
 - [`docs/plans/protocol-types.md`](../plans/protocol-types.md) — universes and a subscription's own
   checks moved into protocol; config keeps the checks that span entries. Executed 2026-11-17.
 - [`docs/plans/config-instances.md`](../plans/config-instances.md) — step 1: subscriptions decoded
-  into `SubscriptionConfig` and built by the composition root with `proto.NewSubscription`.
+  into `SubscriptionConfig` and built by the composition root with `proto.NewSubscription`; step 2:
+  universes as `reg.Universes` components, the `rules` type in `internal/domains/universe`.
 
 As implemented:
 
 | Piece | Location |
 |---|---|
 | `Decode`, `DecodeOptions`, `Dep`, `OptDep`, `Duration`, `Validator` | `internal/config/decode.go` |
-| File shape (`SubscriptionConfig` among it), strict `Load`, `EngineConfig.Opts()` | `internal/config/config.go` |
-| `Universe`, `UniverseRule`, `UniversePairs`, `Universe.Validate`, `Universe.Resolve` | `internal/protocol/universe.go` |
-| Universe names and feature → universe references, `universePath` | `internal/config/config.go` |
+| File shape (`SubscriptionConfig` and `UniverseConfig` among it), strict `Load`, `EngineConfig.Opts()` | `internal/config/config.go` |
+| The `rules` universe type: `RulesConfig`, `Rule`, `Pairs`, their `Validate` and `resolve`, `newRules` | `internal/domains/universe/rules.go` |
+| Universe names, a universe's type present, feature → universe references, `universePath` | `internal/config/config.go` |
 | `NewSubscription`; `Subscription.Validate`: required fields, a known timeframe, derived windows named by the subscription's ID | `internal/protocol/subscription.go` |
 | Provider names, the path prefixes | `internal/config/config.go` |
 | Building each subscription, duplicate subscriptions, `addSubscriptions` | `cmd/instantiate.go` |
-| Resolving each universe over the stream table, `addUniverse` | `cmd/instantiate.go` |
+| Building each universe from `reg.Universes` over the stream table, `addUniverse`; `parts` | `cmd/instantiate.go`, `cmd/main.go` |
 | `Timeframe.UnmarshalJSON` | `internal/protocol/provider.go` |
 | `TickerType`, `TickerConfig`, `newTicker` | `internal/engine/ticker.go` |
 | Per-component config structs | beside each factory |
@@ -196,28 +198,28 @@ Resolved by this work: silent ticker fallback, triplicated engine parsers, untyp
   `docs/plans/features-layer-v2/stage-2-universes.md`; consumed by `data_logger_v2`'s factory,
   whose `features.Expand` places each feature on its universe
   (`docs/plans/features-layer-v2/stage-5-expansion.md`):
-  - **`universes` block, and `universe` per feature** — named stream and pair sets built from
-    self-contained rules (references, explicit pairs, `*`) with filters on symbol, timeframe,
-    provider and kind. See [features § Universes](features.md#universes); example config in
+  - **`universes` block, and `universe` per feature** — named components of a universe type; the
+    `rules` type builds stream and pair sets from self-contained rules (references, explicit pairs,
+    `*`) with filters on symbol, timeframe, provider and kind. See [features § Universes](features.md#universes); example config in
     [features § Solution — Universes](features.md#universes-1).
-  - **Universe resolution is protocol's** — `Universe.Resolve`, a pure function of rules over the
-    stream table (`proto.Streams`). `Load` checks universes' shape with `Universe.Validate`, and
-    their names and references itself; the composition root builds the table once in
-    `instantiate`, resolves each universe over it (`addUniverse`), keeping only those that resolve
-    without error, and injects the table as `_streams`. A used universe selecting no stream is an
-    error there. Resolution errors are prefixed `universe "name":`, `Load`'s shape errors
-    `universes[i] (name):`. Moved from config by `docs/plans/protocol-types.md` step 1
-    ([[protocol]]). See [features § Feature layer](features.md#feature-layer).
+  - **Universes are components** — `Load` checks their names, each type's presence and feature
+    references (`universes[i] (name):`); the composition root builds the table once in
+    `instantiate` and each universe from `reg.Universes` over it (`addUniverse`, injecting
+    `_streams`), keeping only those built without error. The `rules` factory decodes its options
+    strictly, checks their shape and resolves them, a pure function of rules over the stream table.
+    A used universe selecting no stream is an error there. Every error there is prefixed
+    `universe "name":`. `docs/plans/config-instances.md` step 2 ([[protocol]]). See
+    [features § Feature layer](features.md#feature-layer).
   - **Rules name streams by their stream IDs**, derived ones included, so a name matches at most one
     stream and subscriptions need no new rule. Lookup is the only check on a name. See
     [features § Universes](features.md#universes).
   - **`validate()` collects every error**; `Load` returns them joined and `main` logs one per line,
     as it does `build`'s.
 - **Config instances** — [`docs/plans/config-instances.md`](../plans/config-instances.md):
-  subscriptions built by the composition root with `proto.NewSubscription`, implemented (step 1).
-  Planned: universes as `reg.Universes` components, the `rules` type in `internal/domains/universe`;
-  `ResolvedUniverse` → `proto.Universe`, holding its stream table, built by `NewUniverse`. See
-  § Decisions and [[protocol]] § Decisions.
+  subscriptions built by the composition root with `proto.NewSubscription`, and universes as
+  `reg.Universes` components, implemented (steps 1 and 2). Planned: `ResolvedUniverse` →
+  `proto.Universe`, holding its stream table, built by `NewUniverse`. See § Decisions and
+  [[protocol]] § Decisions.
 - **Composition is never in config**, agreed in [[features]] and planned in
   `docs/plans/features-layer-v2/main.md`. Dependencies come from each configured variant's `Deps`,
   which validation reads without binding; a dependency type with no configured variant is an error.

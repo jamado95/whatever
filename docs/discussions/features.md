@@ -167,8 +167,9 @@ Agreed 2026-10-30. Refines [[pipeline-runtime]] § Features phase, replacing its
   (`proto.Streams`), built once by the composition root and injected into the data layer and the
   feature layer: a stream's index in it is its index in the data rings, the feature buffers and
   resolved universes ([[data-layer-v2]] § Subscriptions and the grid).
-- **Universe resolution belongs to protocol** — `Universe.Resolve`, a pure function of rules over
-  the stream table, independent of the feature engine. See § Reversed on 2026-11-15.
+- **Universe selection is a component's** — a universe type registered in `reg.Universes`, `rules`
+  in `internal/domains/universe`, a pure function of its options over the stream table, independent
+  of the feature engine. See § Reversed on 2026-11-18.
 - **Views are part of the protocol layer**, in `internal/protocol/frame`. Generic, concrete rings
   (`frame.Ring[T]`, one per entry, reads stepped by `Period × Window`) in a `frame.Buffer[T]`, read
   through a `frame.View[T]` pinned at a frame: a read-only snapshot for consumers, with direct calls.
@@ -337,6 +338,14 @@ Superseded by § Feature layer and § Feature buffer above; kept for context.
 | Universes in config: `config.Universe`, `Resolve`, `Resolved` | Universes in protocol: `proto.Universe`, `Universe.Resolve`, `ResolvedUniverse` | The engine consumes resolved universes, which are decoded from the file like subscriptions; `cmd` and `config` reach the core only through protocol ([[protocol]]) |
 | `features.View` and `ViewOf` in `internal/engine/features`, reading the graph | `feature.FeaturesView` and `ViewOf` in `internal/protocol/feature`, pinning the engine's buffers | Domains read results without importing the engine ([[protocol]]) |
 
+### Reversed on 2026-11-18
+
+Superseded by § Feature layer above; kept for context.
+
+| Was | Now | Why |
+|---|---|---|
+| Universes in protocol: `proto.Universe`, its rules, `Universe.Resolve` | The `rules` universe type in `internal/domains/universe`, built from `reg.Universes` by the composition root | The rule language is a config format crossing no layer; only the resolved set reaches the engine, and another selection is a new factory ([[protocol]]) |
+
 ## Solution
 
 Executed stages of `docs/plans/features-layer-v2/main.md`, iteration 4 of
@@ -363,7 +372,7 @@ variants and resolved universes).
 | Contract | `Feature`, `Bind[T]`, binder and `Input` handles | — | `internal/protocol/feature` |
 | Feature types | Pure maths; a factory returning a `Feature`, registered under the base ID | — | `internal/domains/featuresv2` until the originals in `internal/domains/features` retire |
 | Stream table | One entry per direct subscription and derived window; the index space of every layer | Composition root | `internal/protocol` |
-| Registry, config and universes | Type → factory; variants decoded strictly; `universes` block, `universe` per feature; universe resolution | Config parse, composition root | `internal/registry`, `internal/config`, `internal/protocol` (universes) |
+| Registry, config and universes | Type → factory; variants decoded strictly; `universes` block, `universe` per feature; universes built by their type | Config parse, composition root | `internal/registry`, `internal/config`, `internal/domains/universe` (universe types) |
 | Expansion | Variants × dependency variants × coordinates; validation; composed IDs; each variant's value type recovered; every node bound; the `Graph` | Engine construction | `internal/engine/features` (pure function) |
 | Feature engine | Allocate the rings (`frame.Buffer[T]` per composed ID) and one candle copy per stream, due-pattern schedules; `Step(view)` | `Run`, then each frame | `internal/engine/features` |
 | Frame primitives | Generic rings and buffers, pinned `View[T]` | — | `internal/protocol/frame` |
@@ -433,18 +442,19 @@ corr_100-returns_1   frame.Buffer[float64]      [AB] [AC]         pair table; (A
 
 ### Universes
 
-Settled syntax (`stage-2-universes.md`): validated by `Load`, resolved by the composition root,
-consumed from stage 5:
+Settled syntax (`stage-2-universes.md`): built by the composition root from the `rules` type
+(`docs/plans/config-instances.md`), consumed from stage 5:
 
 ```json
 "universes": [
-  { "name": "usdt", "rules": [ { "symbol": ["*USDT"] } ] },
-  { "name": "btc_lead",
+  { "name": "usdt", "type": "rules", "rules": [ { "symbol": ["*USDT"] } ] },
+  { "name": "btc_lead", "type": "rules",
     "rules": [
       { "references": ["BTCUSDT:1h:binance"], "timeframe": ["1h"], "provider": ["binance"] },
       { "pairs": [["ETHUSDT:1h:binance", "SOLUSDT:1h:binance"]] }
     ] },
-  { "name": "majors_1h", "rules": [ { "pairs": "*", "symbol": ["*USDT"], "timeframe": ["1h"] } ] }
+  { "name": "majors_1h", "type": "rules",
+    "rules": [ { "pairs": "*", "symbol": ["*USDT"], "timeframe": ["1h"] } ] }
 ],
 "features": [
   { "type": "rsi", "universe": "usdt", "variants": [{ "period": 14 }, { "period": 21 }] },
@@ -545,9 +555,9 @@ bound up with the strategy input contract ([[strategy-layer]]).
   `docs/plans/features-layer-v2/stage-5-expansion.md`.
 - Universes moved into protocol: `proto.Universe`, `Universe.Resolve` and `ResolvedUniverse`;
   config keeps the block's cross-entry checks — `docs/plans/protocol-types.md` step 1.
-- Planned: universes become components — the `rules` type in `internal/domains/universe`,
-  registered in `reg.Universes` — and `ResolvedUniverse` becomes `proto.Universe`, holding its stream
-  table; `Expand` rejects a universe over another table — `docs/plans/config-instances.md`
+- Universes are components: the `rules` type in `internal/domains/universe`, registered in
+  `reg.Universes` — `docs/plans/config-instances.md` step 2. Planned: `ResolvedUniverse` becomes
+  `proto.Universe`, holding its stream table; `Expand` rejects a universe over another table
   ([[protocol]] § Decisions).
 - Registered and working: `sma`, `ema`, `rsi`, `vwap`, `engulfing_candle`.
 - `swing_highlow` is broken behind a `wip` build tag. It duplicates swing-detection logic that also

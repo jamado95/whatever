@@ -159,3 +159,16 @@ func TestNewSubscription(t *testing.T) {
 	}
 	wantErrs(t, errs, "missing required 'provider' field")
 }
+
+// wantErrs fails unless errs are exactly one per want, in order, each containing it.
+func wantErrs(t *testing.T, errs []error, want ...string) {
+	t.Helper()
+	if len(errs) != len(want) {
+		t.Fatalf("got %d errors %v, want %d %q", len(errs), errs, len(want), want)
+	}
+	for i, err := range errs {
+		if !strings.Contains(err.Error(), want[i]) {
+			t.Errorf("error %d = %q, want it to contain %q", i, err, want[i])
+		}
+	}
+}

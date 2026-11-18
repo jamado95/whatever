@@ -16,6 +16,8 @@ Core Architecture
   - internal/domains/featuresv2: the feature types on the feature contract (`sma`, `ema`, `rsi`,
     `vwap`, `engulfing_candle`), registered in `FeatureTypes`; renamed into `internal/domains/features`
     when the originals retire
+  - internal/domains/universe: universe types, registered in `Universes`; `rules` selects streams
+    and pairs by filters, references and pairings
 - internal/engine: orchestration (backtesting, logging, full runtime)
   - internal/engine/data: data layer v2 module — `DataPipeline` is the data layer's pipeline over
     the stream table the composition root injects: FrameBuffer (a `frame.Buffer[proto.Candle]`),
@@ -31,9 +33,8 @@ Core Architecture
 - internal/flow: data-flow primitives — pipe (generic combinators, fanout), align (cross-stream synchronizers), timing (tickers)
 - internal/protocol: the types layers exchange, each with its own invariants: domain interfaces,
   the stream table (`Streams`: one entry per direct subscription and derived window, built once by
-  the composition root; a stream's index in it is its index in every layer), and universes
-  (`Universe`: named stream and pair sets, resolved over the stream table into a
-  `ResolvedUniverse`)
+  the composition root; a stream's index in it is its index in every layer), and resolved universes
+  (`ResolvedUniverse`: a set of streams and pairs over the stream table, built by a universe type)
   - internal/protocol/frame: generic rings and buffers, and the read-only views pinned at a frame
     that layers hand each other and consumers
   - internal/protocol/feature: the feature contract — `Feature` (what a factory configures: `ID`,
@@ -44,7 +45,8 @@ Core Architecture
     results through, valid until the next `Step`. Holds no buffer of its own: results live in the
     feature engine, whose buffers a `FeaturesView` pins
 - internal/registry: registers all internal component factories; `FeatureTypes` holds the feature
-  contract's factories by base ID, beside `Features`, `FeatureChain`'s
+  contract's factories by base ID, beside `Features`, `FeatureChain`'s; `Universes` holds the
+  universe types
 
 Design Rules
 - Domains contain business logic only

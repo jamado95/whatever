@@ -18,7 +18,7 @@ A complete `data_logger_v2` config: BTCUSDT 5m with a rolling 1h derived from it
     { "symbol": "BTCUSDT", "timeframe": "1d", "provider": "btc_1d" }
   ],
   "universes": [
-    { "name": "intraday", "rules": [{ "timeframe": ["5m", "1h"] }] }
+    { "name": "intraday", "type": "rules", "rules": [{ "timeframe": ["5m", "1h"] }] }
   ],
   "features": [
     { "type": "rsi", "universe": "intraday", "variants": [{ "period": 14 }] },
@@ -42,7 +42,7 @@ The config is strict:
 
 - Unknown keys and invalid values are errors, never ignored.
 - Errors name their path. File errors are reported together first; once they are fixed, construction
-  errors are (subscriptions and unmatched stream names among them). A subscription error holds back
+  errors are (subscriptions and every universe error among them). A subscription error holds back
   the universes and the engine until it is fixed.
 - Blocks with `"disabled": true` are skipped and not checked.
 
@@ -115,8 +115,10 @@ twice, in one entry or across entries, is still an error.
 `data_logger_v2` places its features on them when it is built, so `make validate` checks the
 placement; the features themselves do not run on the feature engine yet.
 
-A universe is a `name` and a list of `rules`. Its streams and pairs are the union of what its rules
-select. Names are unique; a universe needs at least one rule; an unused universe is valid.
+A universe is a `name`, a `type` and the type's options. Names are unique and `type` is required.
+`rules`, the one type, takes a list of `rules`; its streams and pairs are the union of what its rules
+select. A rules universe needs at least one rule; an unused universe is valid. Universes are built
+with the other components, so their errors are reported with construction errors.
 
 **Filters** choose streams. A list is OR, fields are AND, an absent field does not constrain, and
 an empty list or value is an error.
@@ -195,7 +197,7 @@ One rule each:
 A universe of three rules:
 
 ```json
-{ "name": "majors", "rules": [
+{ "name": "majors", "type": "rules", "rules": [
   { "pairs": "*", "symbol": ["*USDT"], "timeframe": ["1h"], "kind": ["direct"] },
   { "pairs": [["SOLUSDT:1h:sol_1h", "BTCUSDT:1h:btc_1h"]] },
   { "symbol": ["ETHBTC"] }
@@ -208,7 +210,7 @@ and a rule without a pairing adds streams only.
 Bound to features:
 
 ```json
-"universes": [{ "name": "usdt", "rules": [{ "symbol": ["*USDT"] }] }],
+"universes": [{ "name": "usdt", "type": "rules", "rules": [{ "symbol": ["*USDT"] }] }],
 "features": [
   { "type": "rsi", "universe": "usdt", "variants": [{ "period": 14 }] },
   { "type": "ema", "variants": [{ "period": 20 }] }
@@ -241,19 +243,22 @@ Any other key is the strategy's own option. No strategy is registered in the def
 
 | Mistake | Error |
 |---|---|
-| A misspelt key | `failed to parse config: json: unknown field "refrences"` |
+| A misspelt key | `failed to parse config: json: unknown field "subscribtions"` |
+| A misspelt universe option | `universe "btc": json: unknown field "refrences"` |
 | An invalid timeframe | `failed to parse config: invalid timeframe "1hr", want one of [1m 5m 15m 1h 1d]` |
-| An invalid `kind` | `failed to parse config: invalid stream kind "window", want one of [direct derived]` |
-| `pairs` neither `"*"` nor a list | `failed to parse config: pairs must be "*" or a list of pairs, got "all"` |
+| An invalid `kind` | `universe "btc": invalid stream kind "window", want one of [direct derived]` |
+| `pairs` neither `"*"` nor a list | `universe "btc": pairs must be "*" or a list of pairs, got "all"` |
 | A subscription without a provider | `subscriptions[1]: missing required 'provider' field` |
 | The same subscription twice | `subscriptions[2]: duplicate subscription "BTCUSDT:1d:btc_1d"` |
 | A derived window not coarser | `subscriptions[1]: derive "1h" of BTCUSDT:1d:btc_1d must be coarser than "1d"` |
 | Two providers with one name | `providers[1]: duplicate provider name "btc_5m"` |
 | A provider named `derived_…` | `providers[1]: name "derived_1d" must not start with "derived_"` |
 | A feature naming an unknown universe | `features[0] (rsi): unknown universe "usdt"` |
-| An empty list in a rule | `universes[0] (btc): rules[0].symbol: empty list` |
-| `references` and `pairs` in one rule | `universes[0] (btc): rules[1]: references and pairs are exclusive` |
-| A filter on explicit pairs | `universes[0] (btc): rules[1]: explicit pairs take no filter` |
+| A universe without a type | `universes[0] (btc): missing required 'type' field` |
+| An unknown universe type | `universe "btc": type "rulez" not registered` |
+| An empty list in a rule | `universe "btc": rules[0].symbol: empty list` |
+| `references` and `pairs` in one rule | `universe "btc": rules[1]: references and pairs are exclusive` |
+| A filter on explicit pairs | `universe "btc": rules[1]: explicit pairs take no filter` |
 | A name that is no stream's ID | `universe "btc": rules[1].references[0]: no stream has ID "BTCUSDT:1h:btc_5m"` |
 | A used universe selecting nothing | `universe "btc": selects no streams` |
 | A subscription naming an unknown provider | `subscriptions[1] (BTCUSDT:1d:ghost) references provider "ghost", which was not instantiated (disabled or missing)` |

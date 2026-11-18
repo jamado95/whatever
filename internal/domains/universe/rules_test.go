@@ -1,4 +1,4 @@
-package proto
+package universe
 
 import (
 	"cmp"
@@ -7,6 +7,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	proto "whatever/internal/protocol"
+	reg "whatever/internal/registry"
 )
 
 // The streams of testStreams, by ID.
@@ -21,35 +24,55 @@ const (
 )
 
 // testStreams is a table on two providers, binance and kraken, with a derived 1h window on each.
-func testStreams() *Streams {
-	derive1h := NewTimeframeDerivationSet(Timeframe1h)
-	return NewStreams([]Subscription{
-		{Symbol: "BTCUSDT", Timeframe: Timeframe5m, Provider: "binance", Derive: derive1h},
-		{Symbol: "BTCUSDT", Timeframe: Timeframe1h, Provider: "kraken"},
-		{Symbol: "ETHUSDT", Timeframe: Timeframe1h, Provider: "binance"},
-		{Symbol: "ETHUSDT", Timeframe: Timeframe5m, Provider: "kraken", Derive: derive1h},
-		{Symbol: "ETHBTC", Timeframe: Timeframe1h, Provider: "kraken"},
+func testStreams() *proto.Streams {
+	derive1h := proto.NewTimeframeDerivationSet(proto.Timeframe1h)
+	return proto.NewStreams([]proto.Subscription{
+		{Symbol: "BTCUSDT", Timeframe: proto.Timeframe5m, Provider: "binance", Derive: derive1h},
+		{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "kraken"},
+		{Symbol: "ETHUSDT", Timeframe: proto.Timeframe1h, Provider: "binance"},
+		{Symbol: "ETHUSDT", Timeframe: proto.Timeframe5m, Provider: "kraken", Derive: derive1h},
+		{Symbol: "ETHBTC", Timeframe: proto.Timeframe1h, Provider: "kraken"},
 	})
 }
 
-// universe decodes each rule strictly, as Load does.
-func universe(t *testing.T, rules ...string) Universe {
+func mustIndex(t *testing.T, st *proto.Streams, id string) int {
 	t.Helper()
-	u := Universe{Name: "test"}
-	for _, js := range rules {
-		var r UniverseRule
-		dec := json.NewDecoder(strings.NewReader(js))
+	i, ok := st.Index(id)
+	if !ok {
+		t.Fatalf("Index(%q) not found", id)
+	}
+	return i
+}
+
+// rules decodes each rule strictly, as the factory does.
+func rules(t *testing.T, js ...string) RulesConfig {
+	t.Helper()
+	var c RulesConfig
+	for _, j := range js {
+		var r Rule
+		dec := json.NewDecoder(strings.NewReader(j))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&r); err != nil {
-			t.Fatalf("decode rule %s: %v", js, err)
+			t.Fatalf("decode rule %s: %v", j, err)
 		}
-		u.Rules = append(u.Rules, r)
+		c.Rules = append(c.Rules, r)
 	}
-	return u
+	return c
+}
+
+// errList returns a joined error's parts, err alone, or none for nil.
+func errList(err error) []error {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		return joined.Unwrap()
+	}
+	if err != nil {
+		return []error{err}
+	}
+	return nil
 }
 
 // render lists r by stream ID, for failure messages.
-func render(st *Streams, r ResolvedUniverse) string {
+func render(st *proto.Streams, r proto.ResolvedUniverse) string {
 	streams := make([]string, len(r.Streams))
 	for i, s := range r.Streams {
 		streams[i] = st.All[s].Sub.ID()
@@ -69,16 +92,16 @@ type resolveCase struct {
 }
 
 // runResolve resolves each case over st and wants exactly its streams and pairs, sorted.
-func runResolve(t *testing.T, st *Streams, cases []resolveCase) {
+func runResolve(t *testing.T, st *proto.Streams, cases []resolveCase) {
 	t.Helper()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, errs := universe(t, tc.rules...).Resolve(st)
+			got, errs := rules(t, tc.rules...).resolve(st)
 			if len(errs) > 0 {
-				t.Fatalf("Resolve: %v", errs)
+				t.Fatalf("resolve: %v", errs)
 			}
 
-			var want ResolvedUniverse
+			var want proto.ResolvedUniverse
 			for _, id := range tc.streams {
 				want.Streams = append(want.Streams, mustIndex(t, st, id))
 			}
@@ -155,10 +178,10 @@ func TestResolveNamed(t *testing.T) {
 	})
 
 	t.Run("a name that is no stream's ID", func(t *testing.T) {
-		u := universe(t,
+		c := rules(t,
 			`{"references": ["BTCUSDT:1h:kraken", "BTCUSDT:1h:binance", "BTCUSDT"]}`,
 			`{"pairs": [["BTCUSDT:1h:kraken", "SOLUSDT:1h:kraken"]]}`)
-		got, errs := u.Resolve(testStreams())
+		got, errs := c.resolve(testStreams())
 		wantErrs(t, errs,
 			`rules[0].references[1]: no stream has ID "BTCUSDT:1h:binance"`,
 			`rules[0].references[2]: no stream has ID "BTCUSDT"`,
@@ -226,7 +249,7 @@ func TestResolveUnion(t *testing.T) {
 	})
 }
 
-func TestUniverseValidate(t *testing.T) {
+func TestRulesValidate(t *testing.T) {
 	cases := []struct {
 		name  string
 		rules []string
@@ -282,25 +305,25 @@ func TestUniverseValidate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			wantErrs(t, universe(t, tc.rules...).Validate(), tc.want...)
+			wantErrs(t, errList(rules(t, tc.rules...).Validate()), tc.want...)
 		})
 	}
 }
 
-func TestUniversePairsUnmarshal(t *testing.T) {
-	var all UniversePairs
+func TestPairsUnmarshal(t *testing.T) {
+	var all Pairs
 	if err := json.Unmarshal([]byte(`"*"`), &all); err != nil || !all.All || all.List != nil {
 		t.Errorf(`"*" = %+v, %v; want All`, all, err)
 	}
 
-	var list UniversePairs
+	var list Pairs
 	err := json.Unmarshal([]byte(`[["a", "b"], ["c"]]`), &list)
 	if err != nil || list.All || !slices.EqualFunc(list.List, [][]string{{"a", "b"}, {"c"}}, slices.Equal) {
 		t.Errorf("a list = %+v, %v; want it as written", list, err)
 	}
 
 	for _, js := range []string{`"all"`, `3`, `[["a", 1]]`} {
-		var p UniversePairs
+		var p Pairs
 		if err := json.Unmarshal([]byte(js), &p); err == nil {
 			t.Errorf("%s decoded as %+v, want an error", js, p)
 		}
@@ -319,14 +342,14 @@ var readme = map[string]string{
 }
 
 // readmeStreams is the table of the guide's five example subscriptions.
-func readmeStreams() *Streams {
-	derive1h := NewTimeframeDerivationSet(Timeframe1h)
-	return NewStreams([]Subscription{
-		{Symbol: "BTCUSDT", Timeframe: Timeframe5m, Provider: "btc_5m", Derive: derive1h},
-		{Symbol: "BTCUSDT", Timeframe: Timeframe1h, Provider: "btc_1h"},
-		{Symbol: "ETHUSDT", Timeframe: Timeframe5m, Provider: "eth_5m", Derive: derive1h},
-		{Symbol: "SOLUSDT", Timeframe: Timeframe1h, Provider: "sol_1h"},
-		{Symbol: "ETHBTC", Timeframe: Timeframe1h, Provider: "ethbtc_1h"},
+func readmeStreams() *proto.Streams {
+	derive1h := proto.NewTimeframeDerivationSet(proto.Timeframe1h)
+	return proto.NewStreams([]proto.Subscription{
+		{Symbol: "BTCUSDT", Timeframe: proto.Timeframe5m, Provider: "btc_5m", Derive: derive1h},
+		{Symbol: "BTCUSDT", Timeframe: proto.Timeframe1h, Provider: "btc_1h"},
+		{Symbol: "ETHUSDT", Timeframe: proto.Timeframe5m, Provider: "eth_5m", Derive: derive1h},
+		{Symbol: "SOLUSDT", Timeframe: proto.Timeframe1h, Provider: "sol_1h"},
+		{Symbol: "ETHBTC", Timeframe: proto.Timeframe1h, Provider: "ethbtc_1h"},
 	})
 }
 
@@ -383,12 +406,67 @@ func TestResolveExamples(t *testing.T) {
 	}
 	for _, ex := range errExamples {
 		t.Run(ex.rule, func(t *testing.T) {
-			u := universe(t, ex.rule)
-			errs := u.Validate()
+			c := rules(t, ex.rule)
+			errs := errList(c.Validate())
 			if len(errs) == 0 {
-				_, errs = u.Resolve(st)
+				_, errs = c.resolve(st)
 			}
 			wantErrs(t, errs, ex.want)
+		})
+	}
+}
+
+/*
+TestRulesFactory covers building through reg.Universes: a valid universe resolves over the injected
+table; an unknown option, joined shape errors and joined unmatched names are each its stage's errors;
+a missing table is an error.
+*/
+func TestRulesFactory(t *testing.T) {
+	st := testStreams()
+	create := func(t *testing.T, js string, withStreams bool) (proto.ResolvedUniverse, error) {
+		t.Helper()
+		var opts map[string]any
+		if err := json.Unmarshal([]byte(js), &opts); err != nil {
+			t.Fatalf("options %s: %v", js, err)
+		}
+		if withStreams {
+			opts["_streams"] = st
+		}
+		return reg.Universes.Create(RulesID, opts)
+	}
+
+	t.Run("resolves over _streams", func(t *testing.T) {
+		u, err := create(t, `{"rules": [{"symbol": ["ETHBTC"]}]}`, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []int{mustIndex(t, st, ethbtc)}; !slices.Equal(u.Streams, want) {
+			t.Errorf("streams %v, want %v", u.Streams, want)
+		}
+	})
+
+	cases := []struct {
+		name        string
+		opts        string
+		withStreams bool
+		want        []string
+	}{
+		{"an unknown option", `{"rules": [{"refrences": ["BTCUSDT:1h:kraken"]}]}`, true,
+			[]string{`json: unknown field "refrences"`}},
+		{"shape errors, joined", `{"rules": [{"symbol": []}, {"references": ["x"], "pairs": "*"}]}`, true,
+			[]string{"rules[0].symbol: empty list", "rules[1]: references and pairs are exclusive"}},
+		{"unmatched names, joined", `{"rules": [{"references": ["BTCUSDT", "SOLUSDT:1h:kraken"]}]}`, true,
+			[]string{`rules[0].references[0]: no stream has ID "BTCUSDT"`,
+				`rules[0].references[1]: no stream has ID "SOLUSDT:1h:kraken"`}},
+		{"no stream table", `{"rules": [{}]}`, false, []string{`missing dependency "_streams"`}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := create(t, tc.opts, tc.withStreams)
+			if err == nil {
+				t.Fatal("Create succeeded, want errors")
+			}
+			wantErrs(t, errList(err), tc.want...)
 		})
 	}
 }

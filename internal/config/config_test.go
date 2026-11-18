@@ -184,42 +184,53 @@ func universeConfig(universes, features string) string {
 
 func TestLoadUniverses(t *testing.T) {
 	body := universeConfig(`[
-      { "name": "usdt", "rules": [{ "symbol": ["*USDT"], "kind": ["direct"] }] },
-      { "name": "lead", "rules": [
-        { "references": ["BTCUSDT:1h:binance_csv"], "timeframe": ["1h"] },
-        { "pairs": [["BTCUSDT:1h:binance_csv", "ETHUSDT:1h:binance_csv"]] }
-      ] },
-      { "name": "all_pairs", "rules": [{ "pairs": "*" }] }
+      { "name": "usdt", "type": "rules", "rules": [{ "symbol": ["*USDT"], "kind": ["direct"] }] },
+      { "name": "all_pairs", "type": "rules", "rules": [{ "pairs": "*" }] }
     ]`, `[{ "type": "rsi", "universe": "usdt" }]`)
 	cfg, err := Load(writeConfig(t, body))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if len(cfg.Universes) != 3 {
-		t.Fatalf("got %d universes, want 3", len(cfg.Universes))
+	if len(cfg.Universes) != 2 {
+		t.Fatalf("got %d universes, want 2", len(cfg.Universes))
 	}
-	usdt, lead, all := cfg.Universes[0], cfg.Universes[1], cfg.Universes[2]
-	if usdt.Name != "usdt" || usdt.Rules[0].Symbol[0] != "*USDT" || usdt.Rules[0].Kind[0] != proto.StreamDirect {
-		t.Errorf("usdt = %+v, want a *USDT direct filter", usdt)
-	}
-	if lead.Rules[0].References[0] != "BTCUSDT:1h:binance_csv" || lead.Rules[1].Pairs == nil || lead.Rules[1].Pairs.All ||
-		len(lead.Rules[1].Pairs.List) != 1 {
-		t.Errorf("lead = %+v, want a references rule and one explicit pair", lead)
-	}
-	if !all.Rules[0].Pairs.All {
-		t.Errorf("all_pairs = %+v, want \"*\"", all)
+	for i, name := range []string{"usdt", "all_pairs"} {
+		u := cfg.Universes[i]
+		if u.Name != name || u.Type != "rules" {
+			t.Errorf("universes[%d] = %s %s, want %s rules", i, u.Name, u.Type, name)
+		}
+		if _, ok := u.Opts["rules"]; !ok {
+			t.Errorf("%s: 'rules' should remain in Opts for the factory", name)
+		}
+		for _, key := range []string{"name", "type"} {
+			if _, ok := u.Opts[key]; ok {
+				t.Errorf("%s: '%s' should be a reserved key, not left in Opts", name, key)
+			}
+		}
 	}
 	if cfg.Features[0].Universe != "usdt" {
 		t.Errorf("feature universe = %q, want usdt", cfg.Features[0].Universe)
 	}
 }
 
-func TestUniverseUnknownFieldRejected(t *testing.T) {
-	body := universeConfig(`[{ "name": "u", "rules": [{ "refrences": ["BTCUSDT:1h:binance_csv"] }] }]`, `[]`)
+// A universe's options are its type's: Load leaves a misspelt rule key to the factory.
+func TestUniverseOptionsLeftToFactory(t *testing.T) {
+	body := universeConfig(`[{ "name": "u", "type": "rules", "rules": [{ "refrences": ["BTCUSDT:1h:binance_csv"] }] }]`, `[]`)
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, ok := cfg.Universes[0].Opts["rules"]; !ok {
+		t.Error("'rules' should remain in Opts for the factory")
+	}
+}
+
+func TestUniverseNameNotString(t *testing.T) {
+	body := universeConfig(`[{ "name": 3, "type": "rules", "rules": [{}] }]`, `[]`)
 	_, err := Load(writeConfig(t, body))
-	if err == nil || !strings.Contains(err.Error(), `unknown field "refrences"`) {
-		t.Fatalf("expected refrences to be rejected as an unknown field, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "universe 'name' must be a string") {
+		t.Fatalf("expected a non-string name to fail the parse, got: %v", err)
 	}
 }
 
@@ -231,20 +242,17 @@ func TestUniverseErrors(t *testing.T) {
 		want      []string
 	}{
 		{"empty and duplicate names",
-			`[{ "rules": [{}] }, { "name": "u", "rules": [{}] }, { "name": "u", "rules": [{}] }]`, `[]`,
+			`[{ "type": "rules" }, { "name": "u", "type": "rules" }, { "name": "u", "type": "rules" }]`, `[]`,
 			[]string{"universes[0]: missing required 'name' field", `universes[2]: duplicate universe name "u"`}},
+		{"a missing type", `[{ "name": "u", "rules": [{}] }, { "type": "", "rules": [{}] }]`, `[]`,
+			[]string{
+				"universes[0] (u): missing required 'type' field",
+				"universes[1]: missing required 'name' field",
+				"universes[1]: missing required 'type' field",
+			}},
 		{"an unknown universe on an enabled feature",
 			`[]`, `[{ "type": "rsi", "universe": "usdt" }, { "type": "ema", "universe": "usdt", "disabled": true }]`,
 			[]string{`features[0] (rsi): unknown universe "usdt"`}},
-		{"rule shape errors prefixed with their universe",
-			`[{ "name": "u", "rules": [{ "symbol": [] }, { "references": [""], "pairs": "*" }] }, { "name": "v", "rules": [] }]`,
-			`[]`,
-			[]string{
-				"universes[0] (u): rules[0].symbol: empty list",
-				"universes[0] (u): rules[1]: references and pairs are exclusive",
-				"universes[0] (u): rules[1].references: empty value",
-				"universes[1] (v): rules: at least one rule is required",
-			}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -280,6 +288,6 @@ func TestValidateCollectsErrors(t *testing.T) {
 	wantErrs(t, err.(interface{ Unwrap() []error }).Unwrap(),
 		"features[0]: missing required 'type' field",
 		`providers[1]: duplicate provider name "p"`,
-		"universes[0] (u): rules[0].kind: empty list",
+		"universes[0] (u): missing required 'type' field",
 		"engine: missing required 'type' field")
 }
