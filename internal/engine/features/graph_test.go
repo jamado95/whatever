@@ -36,7 +36,7 @@ func TestGraphNoRings(t *testing.T) {
 		t.Errorf("a node is bound on a stream the ID does not run on")
 	}
 
-	e := New(g)
+	e := New(g, quietLog())
 	buf := streamCandles(st, 3)
 	for col := int64(0); col < 3; col++ {
 		e.pin(at(buf, col))
@@ -79,7 +79,7 @@ func TestGraphDepths(t *testing.T) {
 		}
 	}
 
-	New(g)
+	New(g, quietLog())
 	for s, h := range g.history {
 		if cap(h) != want[s] || (want[s] == 0) != (h == nil) {
 			t.Errorf("stream %d: copy of capacity %d (nil %t), want %d", s, cap(h), h == nil, want[s])
@@ -111,7 +111,7 @@ func TestGraphShapes(t *testing.T) {
 			t.Errorf("shapes = %+v, want %+v", lastCol.shapes, want)
 		}
 
-		New(g)
+		New(g, quietLog())
 		if n := lastCol.buf.Ring(eth5m).Len(); n != 0 {
 			t.Errorf("ring where the ID does not run has %d slots", n)
 		}

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"slices"
 
+	"whatever/internal/logger"
 	proto "whatever/internal/protocol"
 	"whatever/internal/protocol/feature"
 	"whatever/internal/protocol/frame"
@@ -21,11 +22,15 @@ type Engine struct {
 }
 
 /*
-New allocates every column's buffer and each read stream's candle copy, indexes the columns' buffers
-for consumers, and builds the schedules: the nodes' periods, and for each due pattern the nodes due
-there, in serial order.
+New warns on log when the feature buffers would exceed memoryLimit, then allocates every column's
+buffer and each read stream's candle copy, indexes the columns' buffers for consumers, and builds the
+schedules: the nodes' periods, and for each due pattern the nodes due there, in serial order.
 */
-func New(g *Graph) *Engine {
+func New(g *Graph, log *logger.Logger) *Engine {
+	if msg, ok := memoryWarning(g); ok {
+		log.Warn(msg)
+	}
+
 	for _, c := range g.all {
 		c.alloc()
 	}

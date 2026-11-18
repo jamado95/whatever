@@ -261,7 +261,7 @@ func TestStepBruteForce(t *testing.T) {
 	for seed := uint64(1); seed <= 8; seed++ {
 		buf := randomLegs(st, cols, rand.New(rand.NewPCG(seed, seed)))
 		got, want := mustGraph(t, st, instances), mustGraph(t, st, instances)
-		e, b := New(got), New(want)
+		e, b := New(got, quietLog()), New(want, quietLog())
 
 		for col := int64(0); col < cols; col++ {
 			v := at(buf, col)

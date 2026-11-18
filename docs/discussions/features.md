@@ -356,7 +356,8 @@ universes), `stage-3-contract-store.md` (`frame` in the protocol layer, the cont
 the feature graph, engine and view), `stage-4-ported-features.md` (the five feature types ported, read
 from one candle copy per stream, and checked against the originals), `stage-5-expansion.md` (specs
 expanded into the graph by `Expand` in `data_logger_v2`'s factory, from the composition root's
-variants and resolved universes).
+variants and resolved universes), `stage-6-engine.md` (the serial engine: `New` builds one schedule
+per due pattern, `Step` runs a frame).
 
 ### Node shape
 
@@ -561,6 +562,10 @@ bound up with the strategy input contract ([[strategy-layer]]).
   `reg.Universes`, returning a `proto.Universe{Streams, Index, Pairs}` the composition root
   validates; `Expand` rejects a universe over another table — `docs/plans/config-instances.md` ([[protocol]]
   § Decisions).
+- Serial engine implemented: `features.New(graph, log)` allocates the rings and candle copies and
+  builds one schedule per due pattern, warning above 1 GiB; `Step` runs a frame in serial order,
+  firing a node only when its leg is `Fresh` and each dependency fired with a value. Nothing calls it
+  outside tests until stage 7 — `docs/plans/features-layer-v2/stage-6-engine.md`.
 - Registered and working: `sma`, `ema`, `rsi`, `vwap`, `engulfing_candle`.
 - `swing_highlow` is broken behind a `wip` build tag. It duplicates swing-detection logic that also
   exists (also broken) inside `buy_the_dip` — see [[strategy-layer]]. Consolidating swing detection

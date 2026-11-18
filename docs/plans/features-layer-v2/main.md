@@ -104,7 +104,7 @@ Tiered. Stage docs live beside this one, produced iteratively:
 - `stage-3-contract-store.md` — *implemented.*
 - `stage-4-ported-features.md` — *implemented.*
 - `stage-5-expansion.md` — *implemented.*
-- `stage-6-engine.md` — *planned.*
+- `stage-6-engine.md` — *implemented.*
 - `stage-7-data-logger-v2.md` — *to plan.*
 
 Ordering: 1 and 2 are independent; 3 depends on 1; 4 on 3; 5 on 2 and 3; 6 on 1, 3 and 5; 7 on 4
@@ -225,7 +225,7 @@ data_logger_v2 Run:     features.New(graph, log) ─▶ loop: data.Next ─▶ p
   option reported once per registry.
 - Plan: `stage-5-expansion.md`.
 
-### Stage 6 — serial engine
+### Stage 6 — serial engine ✅ implemented
 
 - **Goal:** the feature engine runs a frame.
 - **Touches:** `internal/engine/features` — the graph keeps its nodes, each linked to its

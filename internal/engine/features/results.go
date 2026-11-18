@@ -2,6 +2,7 @@ package features
 
 import (
 	"fmt"
+	"unsafe"
 
 	proto "whatever/internal/protocol"
 	"whatever/internal/protocol/feature"
@@ -13,6 +14,7 @@ type column interface {
 	cell() any                               // &view, the *frame.View[T] dependents bind to
 	bind(b *feature.Binder, ring int) error  // the feature at b's coordinate, its node writing ring
 	alloc()                                  // the buffer, one ring per shape; New calls it once
+	bytes() int64                            // the buffer's size, from its shapes; allocates nothing
 	buffer() any                             // the *frame.Buffer[T] consumers' views pin; nil until alloc
 	pin(v frame.View[proto.Candle])          // view at v's frame; every read follows it
 	fire(ring int, col int64) bool           // the node; writes Fresh and returns true, or Gap
@@ -64,6 +66,14 @@ func (r *results[T]) bind(b *feature.Binder, ring int) error {
 func (r *results[T]) alloc() { r.buf = frame.NewBuffer[T](r.shapes) }
 
 func (r *results[T]) buffer() any { return r.buf }
+
+func (r *results[T]) bytes() int64 {
+	var slots int64
+	for _, sh := range r.shapes {
+		slots += sh.Slots
+	}
+	return slots * int64(unsafe.Sizeof(frame.Slot[T]{}))
+}
 
 func (r *results[T]) pin(v frame.View[proto.Candle]) { r.view = frame.Pin(v, r.buf) }
 

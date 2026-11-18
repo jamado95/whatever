@@ -97,7 +97,7 @@ func newPorted(t *testing.T, st *proto.Streams, variants []variant) *ported {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.chain, p.e = chain, New(g)
+	p.chain, p.e = chain, New(g, quietLog())
 	p.history = make([]proto.Candle, 0, chain.Lookback())
 	return p
 }

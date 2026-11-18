@@ -332,8 +332,10 @@ Readiness alone accounts for ~34 min of a 1000-stream backtest run.
 ## WIP
 
 - Built through [[data-layer-v2]] (`docs/plans/data-layer-v2`, iteration 1 complete): the replay
-  data layer, the engine-side pacer and the `data_logger_v2` engine. The live path, the step loop
-  and features in the `FrameBuffer` are not started.
+  data layer, the engine-side pacer and the `data_logger_v2` engine. The live path and the step loop
+  are not started.
+- Features phase: the feature engine runs a frame serially (`docs/plans/features-layer-v2` stage 6,
+  [[features]]); `data_logger_v2` runs it from stage 7.
 - Unit costs above come from micro-benchmarks run outside the repository; no benchmark is checked in.
 
 ## Resources

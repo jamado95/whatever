@@ -28,8 +28,9 @@ Core Architecture
   - internal/engine/features: the feature engine — `Expand`, turning the composition root's specs
     (one per configured variant) and resolved universes into the feature graph; a typed result ring
     per composed ID and coordinate, one candle copy per stream that nodes read through
-    `Input.Last`, handing consumers each frame's `feature.FeaturesView`, as built per
-    `docs/plans/features-layer-v2`
+    `Input.Last`; `New`, allocating them, building one schedule per due pattern and warning above
+    1 GiB; `Step`, running a frame serially and handing consumers its `feature.FeaturesView`, as
+    built per `docs/plans/features-layer-v2`
 - internal/flow: data-flow primitives — pipe (generic combinators, fanout), align (cross-stream synchronizers), timing (tickers)
 - internal/protocol: the types layers exchange, each with its own invariants: domain interfaces,
   the stream table (`Streams`: one entry per direct subscription and derived window, built once by

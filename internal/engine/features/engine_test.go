@@ -24,7 +24,7 @@ func newRun(t *testing.T, cols int64, instances []instance) *run {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &run{st: st, g: g, e: New(g), buf: streamCandles(st, cols)}
+	return &run{st: st, g: g, e: New(g, quietLog()), buf: streamCandles(st, cols)}
 }
 
 // pin pins the engine at col.
